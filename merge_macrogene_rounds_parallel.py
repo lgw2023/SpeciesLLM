@@ -46,6 +46,26 @@ except ImportError:
 
 
 FILE_PATTERN = re.compile(r"^macrogene_(\d+)\.parquet$")
+AUTO_SKIP_BATCH_SUFFIX = (
+    "Stage2_SpeciesLLMData",
+    "1st_pretrain_data_preprocessed_step4",
+)
+AUTO_SKIP_SPECIES_NAMES = frozenset({"Homo_sapiens", "Mus_musculus"})
+TEST_MODE_FILES_PER_SPECIES = 3
+
+
+def path_endswith_parts(path: Path, suffix_parts: Tuple[str, ...]) -> bool:
+    if len(path.parts) < len(suffix_parts):
+        return False
+    return path.parts[-len(suffix_parts):] == suffix_parts
+
+
+def is_auto_skip_batch_dir(batch_dir: Path) -> bool:
+    return path_endswith_parts(batch_dir, AUTO_SKIP_BATCH_SUFFIX)
+
+
+def should_auto_skip_species(batch_dir: Path, species_name: str) -> bool:
+    return is_auto_skip_batch_dir(batch_dir) and species_name in AUTO_SKIP_SPECIES_NAMES
 
 
 def parse_args() -> argparse.Namespace:
@@ -105,6 +125,15 @@ def parse_args() -> argparse.Namespace:
         help="Only show what would be done, without actually copying/moving files.",
     )
     parser.add_argument(
+        "--test-mode",
+        action="store_true",
+        help=(
+            "Use test mode: collect only the first 3 macrogene files from each "
+            "species directory after sorting by original index. Species with "
+            "fewer than 3 files use all available files."
+        ),
+    )
+    parser.add_argument(
         "--manifest-name",
         default="merge_manifest.csv",
         help="Filename of the output manifest CSV. Default: merge_manifest.csv",
@@ -137,6 +166,7 @@ def collect_species_files(
     batch_dirs: List[Path],
     batch_names: List[str],
     strict: bool = False,
+    test_mode: bool = False,
 ) -> Dict[str, List[Tuple[int, str, int, Path]]]:
     """
     Returns:
@@ -147,12 +177,22 @@ def collect_species_files(
 
     for batch_order, (batch_dir, batch_name) in enumerate(zip(batch_dirs, batch_names)):
         print(f"[INFO] Scanning batch: {batch_name} -> {batch_dir}")
+        auto_skip_enabled = is_auto_skip_batch_dir(batch_dir)
+        auto_skipped_species = set()
 
         for species_dir in sorted(batch_dir.iterdir()):
             if not species_dir.is_dir():
                 continue
 
             species_name = species_dir.name
+            if should_auto_skip_species(batch_dir, species_name):
+                auto_skipped_species.add(species_name)
+                print(
+                    f"[INFO] Auto-skip success: skipped excluded species "
+                    f"{species_name} in {batch_dir}"
+                )
+                continue
+
             matched_files: List[Tuple[int, Path]] = []
             unmatched_files: List[Path] = []
 
@@ -177,10 +217,32 @@ def collect_species_files(
                     print(msg)
 
             matched_files.sort(key=lambda x: x[0])
+            if test_mode:
+                original_count = len(matched_files)
+                matched_files = matched_files[:TEST_MODE_FILES_PER_SPECIES]
+                print(
+                    f"[TEST] {species_dir}: using {len(matched_files)} of "
+                    f"{original_count} matching files."
+                )
 
             for original_idx, fpath in matched_files:
                 species_to_records[species_name].append(
                     (batch_order, batch_name, original_idx, fpath)
+                )
+
+        if auto_skip_enabled:
+            expected_species = set(AUTO_SKIP_SPECIES_NAMES)
+            missing_species = expected_species - auto_skipped_species
+            if missing_species:
+                print(
+                    f"[WARN] Auto-skip verification: {batch_dir} did not contain "
+                    f"these configured species directories: {', '.join(sorted(missing_species))}"
+                )
+            else:
+                print(
+                    f"[INFO] Auto-skip verification: all configured species were "
+                    f"skipped successfully in {batch_dir}: "
+                    f"{', '.join(sorted(auto_skipped_species))}"
                 )
 
     return species_to_records
@@ -403,7 +465,14 @@ def execute_transfer_plan(
     print(f"[DONE] Manifest saved to: {manifest_path}")
 
 
-def print_summary(tasks: List[Dict], manifest_path: Path, mode: str, workers: int, dry_run: bool) -> None:
+def print_summary(
+    tasks: List[Dict],
+    manifest_path: Path,
+    mode: str,
+    workers: int,
+    dry_run: bool,
+    test_mode: bool,
+) -> None:
     species_count = len(set(t["species"] for t in tasks))
     total_tasks = len(tasks)
     skipped = sum(1 for t in tasks if t["skip"])
@@ -415,6 +484,9 @@ def print_summary(tasks: List[Dict], manifest_path: Path, mode: str, workers: in
     print(f"[INFO] Mode              : {mode}")
     print(f"[INFO] Workers           : {workers}")
     print(f"[INFO] Dry run           : {dry_run}")
+    print(f"[INFO] Test mode         : {test_mode}")
+    if test_mode:
+        print(f"[INFO] Test files/species : {TEST_MODE_FILES_PER_SPECIES}")
     print(f"[INFO] Manifest path     : {manifest_path}")
     print("[INFO] ----------------------------------------")
 
@@ -432,6 +504,7 @@ def main() -> None:
         batch_dirs=batch_dirs,
         batch_names=batch_names,
         strict=args.strict,
+        test_mode=args.test_mode,
     )
 
     if not species_to_records:
@@ -455,6 +528,7 @@ def main() -> None:
         mode=args.mode,
         workers=args.workers,
         dry_run=args.dry_run,
+        test_mode=args.test_mode,
     )
 
     execute_transfer_plan(
