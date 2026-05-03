@@ -47,6 +47,10 @@ from dask import delayed
 dask.config.set({"dataframe.convert-string": False})
 torch._dynamo.config.suppress_errors = True
 
+PROJECT_ROOT = Path(__file__).resolve().parent
+DEFAULT_OUTPUT_DIR = "training_output"
+
+
 def str2bool(v):
     if isinstance(v, bool):
         return v
@@ -111,6 +115,25 @@ def apply_config_json(args):
 
 def value_or_default(value, default):
     return value if value is not None else default
+
+
+def resolve_output_dir(out_path):
+    path = Path(out_path).expanduser()
+    if not path.is_absolute():
+        path = PROJECT_ROOT / path
+    path.mkdir(parents=True, exist_ok=True)
+    return str(path.resolve())
+
+
+def is_remote_output_path(path):
+    return path.startswith("s3://") or path.startswith("obs://")
+
+
+def remote_output_name(out_path):
+    path = Path(out_path.rstrip("/"))
+    if path.is_absolute():
+        return path.name
+    return out_path.rstrip("/")
 
 
 class DistributedFileSampler:
@@ -615,6 +638,8 @@ def train_loop(args, model, ddp, rank, optimizer, train_data_filelist, train_sam
     save_log_to_s3(args, out_dir, NODE_RANK, rank)
 
 def save_log_to_s3(args, out_dir, NODE_RANK, rank):
+    if not args.s3_remote_dir_path or not is_remote_output_path(args.s3_remote_dir_path):
+        return
     try:
         mox.file.mk_dir(args.s3_remote_dir_path)
         mox.file.copy(os.path.join(out_dir,
@@ -719,9 +744,12 @@ def main(args):
     out_dir = out_dir.format(hidden_size=config.hidden_size, num_hidden_layers=config.num_hidden_layers,
                              num_attention_heads=config.num_attention_heads, hidden_dropout_prob=config.hidden_dropout_prob,
                              learning_rate=learning_rate, min_lr=min_lr, weight_decay=weight_decay, warmup_ratio=warmup_ratio)
-    args.s3_remote_dir_path = os.path.join("/".join(args.s3_remote_dir_path.split("/")[:-1]), out_dir + "_" + args.s3_remote_dir_path.split("/")[-1])
-    out_dir = os.path.abspath(out_dir)
-    os.makedirs(out_dir, exist_ok=True)
+    if args.s3_remote_dir_path and is_remote_output_path(args.s3_remote_dir_path):
+        args.s3_remote_dir_path = os.path.join(
+            "/".join(args.s3_remote_dir_path.split("/")[:-1]),
+            remote_output_name(out_dir) + "_" + args.s3_remote_dir_path.split("/")[-1],
+        )
+    out_dir = resolve_output_dir(out_dir)
     if not os.path.exists(out_dir):
         raise FileNotFoundError(f"Output directory {out_dir} does not exist!")
         sys.exit(1)
@@ -784,7 +812,7 @@ def argumentparser():
                         default=None)
     parser.add_argument("--out_path",
                         type=str,
-                        default="hs_{hidden_size}_nh_{num_hidden_layers}_na_{num_attention_heads}_hdp_{hidden_dropout_prob}_lr_{learning_rate}_mlr_{min_lr}_wd_{weight_decay}_wr_{warmup_ratio}")
+                        default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--batch_size",
                         type=int,
                         default=64)

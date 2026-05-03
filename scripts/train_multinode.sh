@@ -97,7 +97,7 @@ ASCEND_TOOLKIT_HOME="${ASCEND_TOOLKIT_HOME:-/usr/local/Ascend/ascend-toolkit/lat
 ASCEND_HOME_PATH="${ASCEND_HOME_PATH:-$ASCEND_TOOLKIT_HOME}"
 
 # ---------- training parameters ----------
-DEFAULT_OUT_PATH='hs_{hidden_size}_nh_{num_hidden_layers}_na_{num_attention_heads}_hdp_{hidden_dropout_prob}_lr_{learning_rate}_mlr_{min_lr}_wd_{weight_decay}_wr_{warmup_ratio}'
+DEFAULT_OUT_PATH='training_output'
 
 TRAIN_DATASET="${TRAIN_DATASET:-full}"
 case "$TRAIN_DATASET" in

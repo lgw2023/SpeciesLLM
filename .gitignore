@@ -59,6 +59,7 @@ papers/
 
 # Training logs
 training_log/
+training_output/
 
 # Logs and outputs
 *.log

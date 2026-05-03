@@ -17,7 +17,7 @@ exec torchrun \
   --num_of_used_data=0 \
   --emb_path=./macrogene_embeddings \
   --seq_len=862 \
-  --out_path=hs_{hidden_size}_nh_{num_hidden_layers}_na_{num_attention_heads}_hdp_{hidden_dropout_prob}_lr_{learning_rate}_mlr_{min_lr}_wd_{weight_decay}_wr_{warmup_ratio} \
+  --out_path=training_output \
   --batch_size=32 \
   --epoch=10 \
   --gradient_accumulation_steps=8 \

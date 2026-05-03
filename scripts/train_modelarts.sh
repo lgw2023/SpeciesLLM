@@ -34,7 +34,7 @@ usage() {
 s3_remote_dir_path="s3://bucket-3028/public/SpeciesLLM-Training/"
 data_path=./all_flatten_data
 emb_path=./macrogene_embeddings_1stage
-out_path="hs_{hidden_size}_nh_{num_hidden_layers}_na_{num_attention_heads}_hdp_{hidden_dropout_prob}_lr_{learning_rate}_mlr_{min_lr}_wd_{weight_decay}_wr_{warmup_ratio}"
+out_path="training_output"
 seq_len=862
 batch_size=64
 backend='hccl'

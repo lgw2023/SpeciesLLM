@@ -27,7 +27,7 @@ INPUT_3SC="${INPUT_3SC:-${STAGE2_ROOT}/3scbasecount_pretrain_data_preprocessed_s
 MERGED_TEST_DIR="${MERGED_TEST_DIR:-${STAGE2_ROOT}/all_shuffled_test_500m}"
 FLAT_TEST_DIR="${FLAT_TEST_DIR:-${STAGE2_ROOT}/all_flatten_data_test_500m}"
 COMMAND_DIR="${COMMAND_DIR:-${STAGE2_ROOT}/stage2_500m_test_commands}"
-TRAIN_OUTPUT_ROOT="${TRAIN_OUTPUT_ROOT:-${STAGE2_ROOT}/stage2_500m_train_outputs}"
+TRAIN_OUTPUT_ROOT="${TRAIN_OUTPUT_ROOT:-training_output}"
 
 NNODES="${NNODES:-3}"
 NPROC_PER_NODE="${NPROC_PER_NODE:-8}"
@@ -71,10 +71,8 @@ TRAIN_DATASET="${TRAIN_DATASET:-test}"
 DATA_PATH="${DATA_PATH:-$FLAT_TEST_DIR}"
 # 限制训练使用前 N 个 parquet 文件；0 表示使用 DATA_PATH 下所有 parquet 文件。
 NUM_OF_USED_DATA="${NUM_OF_USED_DATA:-0}"
-# 训练输出目录模板。train_MNodes_torchrun_mfu_preindexparquet.py 会用模型结构和超参数填充花括号字段。
-if [[ -z "${OUT_PATH+x}" ]]; then
-  OUT_PATH="${TRAIN_OUTPUT_ROOT}/stage2_500m_smoke_hs_{hidden_size}_nh_{num_hidden_layers}_na_{num_attention_heads}_hdp_{hidden_dropout_prob}_lr_{learning_rate}_mlr_{min_lr}_wd_{weight_decay}_wr_{warmup_ratio}"
-fi
+# 训练输出目录；相对路径由训练入口解析到项目根目录下。
+OUT_PATH="${OUT_PATH:-$TRAIN_OUTPUT_ROOT}"
 
 # smoke test 默认用很小的 per-rank batch 和 1 个 epoch，只验证分布式数据分发、前后向、保存权重和日志。
 BATCH_SIZE="${BATCH_SIZE:-1}"
