@@ -43,7 +43,16 @@ scbasecount_demo/scbasecount_processed/
 scbasecount_demo/scbasecount_processed_02/
 scbasecount_demo/scbasecount_processed_03_v2/
 scbasecount_demo/scbasecount_raw/
-scbasecount_demo/data/
+
+# Version small scbasecount demo metadata, but keep oversized local artifacts out.
+!scbasecount_demo/data/**/*.csv
+!scbasecount_demo/data/**/*.json
+!scbasecount_demo/data/**/*.md
+!scbasecount_demo/data/**/*.parquet
+!scbasecount_demo/data/**/*.py
+!scbasecount_demo/data/**/*.sh
+scbasecount_demo/data/LOOKUP_categories_unified/soma_joinid.parquet
+scbasecount_demo/data/**/.DS_Store
 
 # Papers and references (large PDF collections)
 papers/
