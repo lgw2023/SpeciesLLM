@@ -16,6 +16,29 @@ Assume each real node has:
 - 8 Huawei Ascend NPU devices.
 - 64 GB device memory per NPU.
 
+Server data layout:
+
+- Stage 2 SpeciesLLM data is stored under
+  `/data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData`.
+- The server-side preprocessed input directories are:
+  - `1st_pretrain_data_preprocessed_step4`
+  - `2nd_pretrain_data_preprocessed_step4`
+  - `3scbasecount_pretrain_data_preprocessed_step4`
+- These input directories may be symlinks to other locations. Since the pipeline
+  only needs to read them, treat the symlink detail as an implementation detail.
+- Place outputs from data integration, shuffling, and flattening under
+  `/data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData` unless a task explicitly
+  specifies another server output path.
+
+Model pretraining variants:
+
+- Follow `presentation/模型预训练设置.md` when reasoning about the intended
+  pretraining configuration.
+- Plan for three SpeciesLLM parameter-scale variants:
+  - `~100M`: hidden size `640`, `12` layers, `10` attention heads.
+  - `~500M`: hidden size `1280`, `24` layers, `20` attention heads.
+  - `~1B`: hidden size `1280`, `36` layers, `30` attention heads.
+
 When working in this repository:
 
 - Prefer static code inspection, lightweight unit tests, mocks, fixtures, and small

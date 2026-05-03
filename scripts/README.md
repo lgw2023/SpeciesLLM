@@ -40,6 +40,37 @@ The final training-ready dataset defaults to:
 Stage2_SpeciesLLMData/all_flatten_data_test
 ```
 
+## Stage 2 500M three-node smoke test
+
+```bash
+bash scripts/test_stage2_500m_multinode.sh all
+```
+
+This server-oriented script uses
+`merge_macrogene_rounds_parallel.py --test-mode`, flattens the small merged
+sample, validates parquet schema / label ranges / macrogene embedding shapes,
+writes a 24-rank file distribution plan, and generates 500M three-node training
+commands under `Stage2_SpeciesLLMData/stage2_500m_test_commands`.
+
+Model structure and label parameters are read strictly from
+`Stage2_macrogene_embeddings/args_2nd_run.json`; if a required JSON field is
+missing, the script exits instead of falling back to shell defaults.
+
+Typical server invocation:
+
+```bash
+STAGE2_ROOT=/data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData \
+WORKDIR=/path/to/SpeciesLLM \
+HOSTS=host0,host1,host2 MASTER_ADDR=host0 \
+bash scripts/test_stage2_500m_multinode.sh all
+```
+
+After the distributed job finishes:
+
+```bash
+bash scripts/test_stage2_500m_multinode.sh check-training
+```
+
 ## Train
 
 Multi-node launcher:
