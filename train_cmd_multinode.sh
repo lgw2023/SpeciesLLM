@@ -5,8 +5,7 @@ set -euo pipefail
 # SpeciesLLM multi-node torchrun launcher for bare-metal servers.
 #
 # Run on the master node:
-#   HOSTS="192.168.0.168,192.168.0.145,192.168.0.105,192.168.0.137" \
-#   MASTER_ADDR=192.168.0.168 WORKDIR=/data1/liguowei/SpeciesLLM \
+#   SSH_PASSWORD='your-password' WORKDIR=/data1/liguowei/SpeciesLLM \
 #   bash train_cmd_multinode.sh
 #
 # Worker mode is normally started by the launcher through ssh:
@@ -18,19 +17,55 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 SELF_NAME="$(basename "${BASH_SOURCE[0]}")"
+ENV_FILE="${ENV_FILE:-$SCRIPT_DIR/.env}"
+
+load_env_defaults() {
+  local env_file="$1"
+  [[ -f "$env_file" ]] || return 0
+
+  local line key value
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
+
+    [[ -z "$line" || "$line" == \#* ]] && continue
+    [[ "$line" == export[[:space:]]* ]] && line="${line#export }"
+    [[ "$line" == *=* ]] || continue
+
+    key="${line%%=*}"
+    value="${line#*=}"
+    key="${key%"${key##*[![:space:]]}"}"
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+
+    [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+    [[ -z "${!key+x}" ]] || continue
+
+    if [[ "$value" == \"*\" && "$value" == *\" && ${#value} -ge 2 ]]; then
+      value="${value:1:${#value}-2}"
+    elif [[ "$value" == \'*\' && "$value" == *\' && ${#value} -ge 2 ]]; then
+      value="${value:1:${#value}-2}"
+    fi
+
+    export "$key=$value"
+  done < "$env_file"
+}
+
+load_env_defaults "$ENV_FILE"
 
 # ---------- cluster configuration ----------
-NNODES="${NNODES:-4}"
+NNODES="${NNODES:-3}"
 NPROC_PER_NODE="${NPROC_PER_NODE:-8}"
 
-MASTER_ADDR="${MASTER_ADDR:-192.168.0.168}"
+MASTER_ADDR="${MASTER_ADDR:-7.150.12.45}"
 MASTER_PORT="${MASTER_PORT:-12345}"
 
 # Comma-separated hosts. Order is the torchrun node_rank order.
-HOSTS_CSV="${HOSTS:-192.168.0.168,192.168.0.145,192.168.0.105,192.168.0.137}"
+HOSTS_CSV="${HOSTS:-7.150.12.45,7.150.15.14,7.150.14.170}"
 
 SSH_USER="${SSH_USER:-root}"
-SSH_KEY="${SSH_KEY-/root/KeyPair-1309.pem}"
+SSH_KEY="${SSH_KEY-}"
+SSH_PASSWORD="${SSH_PASSWORD:-}"
 SSH_EXTRA_OPTS="${SSH_EXTRA_OPTS:-}"
 
 # Project directory on every server. It must contain the training entry, data,
@@ -135,7 +170,7 @@ Usage:
 
 Important environment variables:
   NNODES, NPROC_PER_NODE, HOSTS, MASTER_ADDR, MASTER_PORT
-  WORKDIR, SSH_USER, SSH_KEY, SSH_EXTRA_OPTS, SYNC_SELF, DRY_RUN
+  WORKDIR, SSH_USER, SSH_KEY, SSH_PASSWORD, SSH_EXTRA_OPTS, SYNC_SELF, DRY_RUN
   DATA_PATH/data_path, EMB_PATH/emb_path, SEQ_LEN/seq_len, BATCH_SIZE/batch_size
 USAGE
 }
@@ -162,9 +197,48 @@ build_ssh_opts() {
   if [[ -n "$SSH_KEY" ]]; then
     SSH_OPTS+=("-i" "$SSH_KEY")
   fi
+  if [[ -n "$SSH_PASSWORD" && "$DRY_RUN" != "1" ]]; then
+    require_cmd sshpass
+  fi
   if [[ -n "$SSH_EXTRA_OPTS" ]]; then
     read -r -a SSH_EXTRA_OPTS_ARR <<< "$SSH_EXTRA_OPTS"
     SSH_OPTS+=("${SSH_EXTRA_OPTS_ARR[@]}")
+  fi
+}
+
+ssh_display_cmd() {
+  if [[ -n "$SSH_PASSWORD" ]]; then
+    printf "SSHPASS=*** sshpass -e ssh"
+  else
+    printf "ssh"
+  fi
+}
+
+scp_display_cmd() {
+  if [[ -n "$SSH_PASSWORD" ]]; then
+    printf "SSHPASS=*** sshpass -e scp"
+  else
+    printf "scp"
+  fi
+}
+
+ssh_run() {
+  local target="$1"
+  shift
+  if [[ -n "$SSH_PASSWORD" ]]; then
+    SSHPASS="$SSH_PASSWORD" sshpass -e ssh ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} "$target" "$@"
+  else
+    ssh ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} "$target" "$@"
+  fi
+}
+
+scp_run() {
+  local source_path="$1"
+  local target_path="$2"
+  if [[ -n "$SSH_PASSWORD" ]]; then
+    SSHPASS="$SSH_PASSWORD" sshpass -e scp ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} "$source_path" "$target_path"
+  else
+    scp ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} "$source_path" "$target_path"
   fi
 }
 
@@ -354,16 +428,16 @@ run_launcher() {
     mkdir_cmd="mkdir -p $(shell_quote "$remote_log_dir")"
 
     if [[ "$DRY_RUN" == "1" ]]; then
-      echo "ssh ${SSH_OPTS[*]-} ${SSH_USER}@${host} ${mkdir_cmd}"
+      echo "$(ssh_display_cmd) ${SSH_OPTS[*]-} ${SSH_USER}@${host} ${mkdir_cmd}"
       if [[ "$SYNC_SELF" == "1" ]]; then
-        echo "scp ${SSH_OPTS[*]-} ${self_abs} ${SSH_USER}@${host}:${remote_self}"
+        echo "$(scp_display_cmd) ${SSH_OPTS[*]-} ${self_abs} ${SSH_USER}@${host}:${remote_self}"
       fi
       continue
     fi
 
-    ssh ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} "${SSH_USER}@${host}" "$mkdir_cmd"
+    ssh_run "${SSH_USER}@${host}" "$mkdir_cmd"
     if [[ "$SYNC_SELF" == "1" ]]; then
-      scp ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} "$self_abs" "${SSH_USER}@${host}:${remote_self}" >/dev/null
+      scp_run "$self_abs" "${SSH_USER}@${host}:${remote_self}" >/dev/null
     fi
   done
 
@@ -374,9 +448,9 @@ run_launcher() {
     remote_cmd="cd $(shell_quote "$WORKDIR") && nohup env $(remote_env_assignments "$rank") bash $(shell_quote "$remote_self") --worker > $(shell_quote "$log_file") 2>&1 &"
 
     if [[ "$DRY_RUN" == "1" ]]; then
-      echo "ssh ${SSH_OPTS[*]-} ${SSH_USER}@${host} ${remote_cmd}"
+      echo "$(ssh_display_cmd) ${SSH_OPTS[*]-} ${SSH_USER}@${host} ${remote_cmd}"
     else
-      ssh ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} "${SSH_USER}@${host}" "$remote_cmd" &
+      ssh_run "${SSH_USER}@${host}" "$remote_cmd" &
     fi
 
     log "sent start command: rank=${rank}, host=${host}, log=${log_file}"
