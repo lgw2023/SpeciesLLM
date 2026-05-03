@@ -113,7 +113,12 @@ case "$TRAIN_DATASET" in
     ;;
 esac
 
-DATA_ROOT="${DATA_ROOT:-./Stage2_SpeciesLLMData}"
+SERVER_STAGE2_ROOT_DEFAULT="/data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData"
+if [[ -d "$SERVER_STAGE2_ROOT_DEFAULT" ]]; then
+  DATA_ROOT="${DATA_ROOT:-$SERVER_STAGE2_ROOT_DEFAULT}"
+else
+  DATA_ROOT="${DATA_ROOT:-./Stage2_SpeciesLLMData}"
+fi
 EMB_ROOT="${EMB_ROOT:-.}"
 DEFAULT_DATA_PATH="${DATA_ROOT}/${DEFAULT_DATA_SUBDIR}"
 DEFAULT_EMB_PATH="${EMB_ROOT}/Stage2_macrogene_embeddings"
@@ -121,7 +126,7 @@ DEFAULT_EMB_PATH="${EMB_ROOT}/Stage2_macrogene_embeddings"
 data_path="${data_path:-${DATA_PATH:-$DEFAULT_DATA_PATH}}"
 num_of_used_data="${num_of_used_data:-${NUM_OF_USED_DATA:-0}}"
 emb_path="${emb_path:-${EMB_PATH:-$DEFAULT_EMB_PATH}}"
-seq_len="${seq_len:-${SEQ_LEN:-640}}"
+config_json="${config_json:-${MODEL_CONFIG_JSON:-${emb_path}/args_2nd_run.json}}"
 out_path="${out_path:-${OUT_PATH:-$DEFAULT_OUT_PATH}}"
 batch_size="${batch_size:-${BATCH_SIZE:-32}}"
 epoch="${epoch:-${EPOCH:-10}}"
@@ -142,37 +147,6 @@ device="${device:-${DEVICE:-npu}}"
 device_type="${device_type:-${DEVICE_TYPE:-npu}}"
 s3_remote_dir_path="${s3_remote_dir_path:-${S3_REMOTE_DIR_PATH:-}}"
 
-hidden_size="${hidden_size:-${HIDDEN_SIZE:-1280}}"
-num_hidden_layers="${num_hidden_layers:-${NUM_HIDDEN_LAYERS:-24}}"
-num_attention_heads="${num_attention_heads:-${NUM_ATTENTION_HEADS:-20}}"
-intermediate_size="${intermediate_size:-${INTERMEDIATE_SIZE:-5120}}"
-hidden_act="${hidden_act:-${HIDDEN_ACT:-gelu}}"
-hidden_dropout_prob="${hidden_dropout_prob:-${HIDDEN_DROPOUT_PROB:-0.1}}"
-cell_hidden_size="${cell_hidden_size:-${CELL_HIDDEN_SIZE:-128}}"
-attention_probs_dropout_prob="${attention_probs_dropout_prob:-${ATTENTION_PROBS_DROPOUT_PROB:-0.1}}"
-type_vocab_size="${type_vocab_size:-${TYPE_VOCAB_SIZE:-2}}"
-initializer_range="${initializer_range:-${INITIALIZER_RANGE:-0.02}}"
-layer_norm_eps="${layer_norm_eps:-${LAYER_NORM_EPS:-1e-12}}"
-_attn_implementation="${_attn_implementation:-${ATTN_IMPLEMENTATION:-eager}}"
-
-use_batch_labels="${use_batch_labels:-${USE_BATCH_LABELS:-false}}"
-num_batch_labels="${num_batch_labels:-${NUM_BATCH_LABELS:-62223}}"
-use_species_labels="${use_species_labels:-${USE_SPECIES_LABELS:-true}}"
-num_species_labels="${num_species_labels:-${NUM_SPECIES_LABELS:-29}}"
-use_tissue_labels="${use_tissue_labels:-${USE_TISSUE_LABELS:-true}}"
-num_tissue_labels="${num_tissue_labels:-${NUM_TISSUE_LABELS:-336}}"
-use_seqmethod_labels="${use_seqmethod_labels:-${USE_SEQMETHOD_LABELS:-true}}"
-num_seqmethod_labels="${num_seqmethod_labels:-${NUM_SEQMETHOD_LABELS:-30}}"
-use_disease_labels="${use_disease_labels:-${USE_DISEASE_LABELS:-true}}"
-num_disease_labels="${num_disease_labels:-${NUM_DISEASE_LABELS:-1921}}"
-use_age_labels="${use_age_labels:-${USE_AGE_LABELS:-true}}"
-num_age_labels="${num_age_labels:-${NUM_AGE_LABELS:-5}}"
-use_sex_labels="${use_sex_labels:-${USE_SEX_LABELS:-true}}"
-num_sex_labels="${num_sex_labels:-${NUM_SEX_LABELS:-3}}"
-cell_emb_style="${cell_emb_style:-${CELL_EMB_STYLE:-cls}}"
-chunk_size_feed_forward="${chunk_size_feed_forward:-${CHUNK_SIZE_FEED_FORWARD:-0}}"
-explicit_zero_prob="${explicit_zero_prob:-${EXPLICIT_ZERO_PROB:-true}}"
-
 WORKER_MODE=0
 if [[ "${1:-}" == "--worker" ]]; then
   WORKER_MODE=1
@@ -181,6 +155,11 @@ fi
 
 if [[ "$#" -gt 0 ]]; then
   echo "[WARN] Extra arguments are ignored: $*"
+fi
+
+if [[ ! -f "$config_json" ]]; then
+  echo "Missing fixed model config JSON: $config_json"
+  exit 1
 fi
 
 log() {
@@ -202,7 +181,7 @@ Important environment variables:
   WORKDIR, SSH_USER, SSH_KEY, SSH_PASSWORD, SSH_EXTRA_OPTS, SYNC_SELF, DRY_RUN
   TRAIN_DATASET=full|test
   DATA_ROOT, EMB_ROOT, DATA_PATH/data_path, EMB_PATH/emb_path
-  SEQ_LEN/seq_len, BATCH_SIZE/batch_size
+  MODEL_CONFIG_JSON/config_json, BATCH_SIZE/batch_size
 USAGE
 }
 
@@ -402,7 +381,7 @@ build_train_args() {
     "--data_path=${data_path}"
     "--num_of_used_data=${num_of_used_data}"
     "--emb_path=${emb_path}"
-    "--seq_len=${seq_len}"
+    "--config_json=${config_json}"
     "--out_path=${out_path}"
     "--batch_size=${batch_size}"
     "--epoch=${epoch}"
@@ -421,35 +400,6 @@ build_train_args() {
     "--backend=${backend}"
     "--device=${device}"
     "--device_type=${device_type}"
-    "--hidden_size=${hidden_size}"
-    "--num_hidden_layers=${num_hidden_layers}"
-    "--num_attention_heads=${num_attention_heads}"
-    "--intermediate_size=${intermediate_size}"
-    "--hidden_act=${hidden_act}"
-    "--hidden_dropout_prob=${hidden_dropout_prob}"
-    "--cell_hidden_size=${cell_hidden_size}"
-    "--attention_probs_dropout_prob=${attention_probs_dropout_prob}"
-    "--type_vocab_size=${type_vocab_size}"
-    "--initializer_range=${initializer_range}"
-    "--layer_norm_eps=${layer_norm_eps}"
-    "--_attn_implementation=${_attn_implementation}"
-    "--use_batch_labels=${use_batch_labels}"
-    "--num_batch_labels=${num_batch_labels}"
-    "--use_species_labels=${use_species_labels}"
-    "--num_species_labels=${num_species_labels}"
-    "--use_tissue_labels=${use_tissue_labels}"
-    "--num_tissue_labels=${num_tissue_labels}"
-    "--use_seqmethod_labels=${use_seqmethod_labels}"
-    "--num_seqmethod_labels=${num_seqmethod_labels}"
-    "--use_disease_labels=${use_disease_labels}"
-    "--num_disease_labels=${num_disease_labels}"
-    "--use_age_labels=${use_age_labels}"
-    "--num_age_labels=${num_age_labels}"
-    "--use_sex_labels=${use_sex_labels}"
-    "--num_sex_labels=${num_sex_labels}"
-    "--cell_emb_style=${cell_emb_style}"
-    "--chunk_size_feed_forward=${chunk_size_feed_forward}"
-    "--explicit_zero_prob=${explicit_zero_prob}"
   )
 
   if [[ -n "$s3_remote_dir_path" ]]; then
@@ -511,17 +461,10 @@ remote_env_assignments() {
     NNODES NPROC_PER_NODE MASTER_ADDR MASTER_PORT WORKDIR TRAIN_ENTRY LOG_SUBDIR
     DRY_RUN ASCEND_RT_VISIBLE_DEVICES_VALUE HCCL_CONNECT_TIMEOUT HCCL_EXEC_TIMEOUT
     HCCL_WHITELIST_DISABLE ASCEND_TOOLKIT_HOME ASCEND_HOME_PATH
-    data_path num_of_used_data emb_path seq_len out_path batch_size epoch
+    data_path num_of_used_data emb_path config_json out_path batch_size epoch
     gradient_accumulation_steps learning_rate min_lr decay_lr warmup_iters
     warmup_ratio weight_decay save_data_interval beta1 beta2 grad_clip compile
-    backend device device_type s3_remote_dir_path hidden_size num_hidden_layers
-    num_attention_heads intermediate_size hidden_act hidden_dropout_prob
-    cell_hidden_size attention_probs_dropout_prob type_vocab_size initializer_range
-    layer_norm_eps _attn_implementation use_batch_labels num_batch_labels
-    use_species_labels num_species_labels use_tissue_labels num_tissue_labels
-    use_seqmethod_labels num_seqmethod_labels use_disease_labels num_disease_labels
-    use_age_labels num_age_labels use_sex_labels num_sex_labels cell_emb_style
-    chunk_size_feed_forward explicit_zero_prob
+    backend device device_type s3_remote_dir_path
   )
 
   printf "NODE_RANK=%s " "$(shell_quote "$rank")"
@@ -549,6 +492,7 @@ run_launcher() {
   log "NNODES=${NNODES}, NPROC_PER_NODE=${NPROC_PER_NODE}, MASTER=${MASTER_ADDR}:${MASTER_PORT}"
   log "WORKDIR=${WORKDIR}, remote_script=${remote_self}"
   log "TRAIN_DATASET=${TRAIN_DATASET}, data_path=${data_path}, emb_path=${emb_path}"
+  log "config_json=${config_json}"
   log "SYNC_SELF=${SYNC_SELF}, DRY_RUN=${DRY_RUN}"
 
   local rank host

@@ -11,6 +11,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd -P)"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
+STAGE2_CHECKS_PY="${STAGE2_CHECKS_PY:-${SCRIPT_DIR}/stage2_training_checks.py}"
 
 SERVER_STAGE2_ROOT_DEFAULT="/data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData"
 if [[ -d "$SERVER_STAGE2_ROOT_DEFAULT" ]]; then
@@ -143,87 +144,10 @@ die() {
 
 load_model_config_from_json() {
   [[ -f "$MODEL_CONFIG_JSON" ]] || die "Missing fixed model config JSON: $MODEL_CONFIG_JSON"
+  [[ -f "$STAGE2_CHECKS_PY" ]] || die "Missing Stage 2 training helper: $STAGE2_CHECKS_PY"
 
   local assignments
-  assignments="$("$PYTHON_BIN" - "$MODEL_CONFIG_JSON" <<'PY'
-import json
-import shlex
-import sys
-from pathlib import Path
-
-config_path = Path(sys.argv[1])
-config = json.loads(config_path.read_text(encoding="utf-8"))
-
-
-def emit(name, value):
-    if value is None:
-        return
-    if isinstance(value, bool):
-        value = "true" if value else "false"
-    else:
-        value = str(value)
-    print(f"{name}={shlex.quote(value)}")
-
-
-def pick_seq_len():
-    missing = [
-        key for key in ("vocab_size", "max_position_embeddings")
-        if key not in config or config[key] is None
-    ]
-    if missing:
-        raise SystemExit(
-            f"{config_path}: missing required sequence fields: {', '.join(missing)}"
-        )
-    vocab_seq_len = int(config["vocab_size"]) - 1
-    position_seq_len = int(config["max_position_embeddings"]) - 1
-    if vocab_seq_len != position_seq_len:
-        raise SystemExit(
-            f"{config_path}: vocab_size-1 ({vocab_seq_len}) != "
-            f"max_position_embeddings-1 ({position_seq_len})"
-        )
-    return position_seq_len
-
-
-emit("SEQ_LEN", pick_seq_len())
-
-field_map = {
-    "HIDDEN_SIZE": "hidden_size",
-    "NUM_HIDDEN_LAYERS": "num_hidden_layers",
-    "NUM_ATTENTION_HEADS": "num_attention_heads",
-    "INTERMEDIATE_SIZE": "intermediate_size",
-    "HIDDEN_ACT": "hidden_act",
-    "HIDDEN_DROPOUT_PROB": "hidden_dropout_prob",
-    "CELL_HIDDEN_SIZE": "cell_hidden_size",
-    "ATTENTION_PROBS_DROPOUT_PROB": "attention_probs_dropout_prob",
-    "TYPE_VOCAB_SIZE": "type_vocab_size",
-    "INITIALIZER_RANGE": "initializer_range",
-    "LAYER_NORM_EPS": "layer_norm_eps",
-    "ATTN_IMPLEMENTATION": "_attn_implementation",
-    "USE_BATCH_LABELS": "use_batch_labels",
-    "NUM_BATCH_LABELS": "num_batch_labels",
-    "USE_SPECIES_LABELS": "use_species_labels",
-    "NUM_SPECIES_LABELS": "num_species_labels",
-    "USE_TISSUE_LABELS": "use_tissue_labels",
-    "NUM_TISSUE_LABELS": "num_tissue_labels",
-    "USE_SEQMETHOD_LABELS": "use_seqmethod_labels",
-    "NUM_SEQMETHOD_LABELS": "num_seqmethod_labels",
-    "USE_DISEASE_LABELS": "use_disease_labels",
-    "NUM_DISEASE_LABELS": "num_disease_labels",
-    "USE_AGE_LABELS": "use_age_labels",
-    "NUM_AGE_LABELS": "num_age_labels",
-    "USE_SEX_LABELS": "use_sex_labels",
-    "NUM_SEX_LABELS": "num_sex_labels",
-    "CELL_EMB_STYLE": "cell_emb_style",
-    "CHUNK_SIZE_FEED_FORWARD": "chunk_size_feed_forward",
-    "EXPLICIT_ZERO_PROB": "explicit_zero_prob",
-}
-
-for env_name, json_key in field_map.items():
-    if json_key not in config or config[json_key] is None:
-        raise SystemExit(f"{config_path}: missing required field: {json_key}")
-    emit(env_name, config[json_key])
-PY
-)"
+  assignments="$("$PYTHON_BIN" "$STAGE2_CHECKS_PY" emit-config-env --config-json "$MODEL_CONFIG_JSON")"
   eval "$assignments"
   log "loaded fixed model config: $MODEL_CONFIG_JSON"
   log "config-derived seq_len=$SEQ_LEN hidden_size=$HIDDEN_SIZE layers=$NUM_HIDDEN_LAYERS heads=$NUM_ATTENTION_HEADS"
@@ -287,81 +211,11 @@ preflight() {
   log "merged test dir: $MERGED_TEST_DIR"
   log "flat test dir: $FLAT_TEST_DIR"
   log "500M config: hidden_size=$HIDDEN_SIZE layers=$NUM_HIDDEN_LAYERS heads=$NUM_ATTENTION_HEADS intermediate_size=$INTERMEDIATE_SIZE"
-  "$PYTHON_BIN" - "$SEQ_LEN" "$SOURCE_PREFLIGHT_FILES_PER_BATCH" "$SOURCE_PREFLIGHT_MAX_SCAN" "${BATCH_DIRS[@]}" <<'PY'
-import sys
-from pathlib import Path
-
-import pyarrow.parquet as pq
-
-seq_len = int(sys.argv[1])
-sample_per_batch = int(sys.argv[2])
-max_scan = int(sys.argv[3])
-batch_dirs = [Path(p) for p in sys.argv[4:]]
-required = {
-    "X", "soma_joinid", "dataset_id", "assay", "cell_type",
-    "development_stage", "disease", "tissue", "sex", "tech_sample",
-    "species", "idx",
-}
-
-errors = []
-for batch_dir in batch_dirs:
-    if not batch_dir.exists():
-        errors.append(f"missing input directory: {batch_dir}")
-        continue
-    files = sorted(batch_dir.glob("*/macrogene_*.parquet"))
-    print(f"[INFO] {batch_dir}: matched macrogene parquet files={len(files)}")
-    if not files:
-        errors.append(f"no macrogene parquet files under {batch_dir}")
-        continue
-
-    checked = 0
-    scanned = 0
-    empty = 0
-    bad = []
-    for path in files:
-        scanned += 1
-        if scanned > max_scan and checked == 0:
-            break
-        if path.stat().st_size == 0:
-            empty += 1
-            continue
-        try:
-            parquet = pq.ParquetFile(path)
-            schema_names = set(parquet.schema_arrow.names)
-            missing = sorted(required - schema_names)
-            if missing:
-                bad.append(f"{path}: missing columns {missing}")
-                continue
-            if parquet.metadata.num_rows <= 0:
-                bad.append(f"{path}: no rows")
-                continue
-            table = parquet.read_row_group(0, columns=["X"]).slice(0, 1)
-            first_x = table.column("X")[0].as_py()
-            if len(first_x) != seq_len:
-                bad.append(f"{path}: X length {len(first_x)} != seq_len {seq_len}")
-                continue
-        except Exception as exc:
-            bad.append(f"{path}: {type(exc).__name__}: {exc}")
-            continue
-        checked += 1
-        if checked >= sample_per_batch:
-            break
-
-    print(f"[INFO] {batch_dir}: checked valid files={checked}, empty placeholders seen={empty}")
-    if checked == 0:
-        hint = " This is expected on a workstation with placeholder data; run this step on the data server."
-        errors.append(f"no valid non-empty parquet files found in sampled scan for {batch_dir}.{hint}")
-    if bad:
-        errors.extend(bad[:5])
-
-if errors:
-    print("[ERROR] source preflight failed:")
-    for item in errors:
-        print(f"  - {item}")
-    sys.exit(1)
-
-print("[OK] source preflight passed")
-PY
+  "$PYTHON_BIN" "$STAGE2_CHECKS_PY" preflight \
+    --seq-len "$SEQ_LEN" \
+    --files-per-batch "$SOURCE_PREFLIGHT_FILES_PER_BATCH" \
+    --max-scan "$SOURCE_PREFLIGHT_MAX_SCAN" \
+    "${BATCH_DIRS[@]}"
 }
 
 generate_flat() {
@@ -431,220 +285,33 @@ generate_flat() {
 
 validate_data() {
   mkdir -p "$COMMAND_DIR"
-  export FLAT_TEST_DIR COMMAND_DIR EMB_PATH SEQ_LEN WORLD_SIZE NNODES NPROC_PER_NODE
-  export MAX_VALIDATE_ROWS_PER_FILE MAX_VALIDATE_FILES REQUIRE_EMBEDDINGS
-  export NUM_BATCH_LABELS NUM_SPECIES_LABELS NUM_TISSUE_LABELS NUM_SEQMETHOD_LABELS
-  export NUM_DISEASE_LABELS NUM_AGE_LABELS NUM_SEX_LABELS
-  "$PYTHON_BIN" <<'PY'
-import csv
-import json
-import math
-import os
-import sys
-from collections import Counter
-from pathlib import Path
-
-import numpy as np
-import pandas as pd
-import pyarrow.parquet as pq
-
-flat_dir = Path(os.environ["FLAT_TEST_DIR"])
-command_dir = Path(os.environ["COMMAND_DIR"])
-emb_path = Path(os.environ["EMB_PATH"])
-seq_len = int(os.environ["SEQ_LEN"])
-world_size = int(os.environ["WORLD_SIZE"])
-nnodes = int(os.environ["NNODES"])
-nproc_per_node = int(os.environ["NPROC_PER_NODE"])
-sample_rows = int(os.environ["MAX_VALIDATE_ROWS_PER_FILE"])
-max_files = int(os.environ["MAX_VALIDATE_FILES"])
-require_embeddings = os.environ["REQUIRE_EMBEDDINGS"] == "1"
-
-required_cols = [
-    "X", "soma_joinid", "dataset_id", "assay", "cell_type",
-    "development_stage", "disease", "tissue", "sex", "tech_sample",
-    "species", "idx",
-]
-label_limits = {
-    "assay": int(os.environ["NUM_SEQMETHOD_LABELS"]),
-    "tech_sample": int(os.environ["NUM_BATCH_LABELS"]),
-    "species": int(os.environ["NUM_SPECIES_LABELS"]),
-    "tissue": int(os.environ["NUM_TISSUE_LABELS"]),
-    "disease": int(os.environ["NUM_DISEASE_LABELS"]),
-    "development_stage": int(os.environ["NUM_AGE_LABELS"]),
-    "sex": int(os.environ["NUM_SEX_LABELS"]),
-}
-
-errors = []
-warnings = []
-files = sorted(flat_dir.glob("all_flatten_part_*.parquet"))
-if not files:
-    errors.append(f"no all_flatten_part_*.parquet files found in {flat_dir}")
-
-file_rows = []
-species_counter = Counter()
-validate_files = files if max_files == 0 else files[:max_files]
-
-for path in files:
-    try:
-        parquet = pq.ParquetFile(path)
-        file_rows.append(parquet.metadata.num_rows)
-    except Exception as exc:
-        errors.append(f"{path}: cannot read parquet metadata: {type(exc).__name__}: {exc}")
-        file_rows.append(0)
-
-for path in validate_files:
-    try:
-        parquet = pq.ParquetFile(path)
-        names = parquet.schema_arrow.names
-        missing = [col for col in required_cols if col not in names]
-        if missing:
-            errors.append(f"{path}: missing columns {missing}; found {names}")
-            continue
-
-        table = parquet.read(columns=required_cols)
-        if sample_rows > 0 and table.num_rows > sample_rows:
-            table = table.slice(0, sample_rows)
-        df = table.to_pandas()
-        if df.empty:
-            errors.append(f"{path}: validation sample is empty")
-            continue
-
-        for idx, x in enumerate(df["X"]):
-            arr = np.asarray(x, dtype=np.float64)
-            if arr.shape != (seq_len,):
-                errors.append(f"{path}: row {idx} X shape {arr.shape} != ({seq_len},)")
-                break
-            if not np.isfinite(arr).all():
-                errors.append(f"{path}: row {idx} X contains non-finite values")
-                break
-
-        for col, limit in label_limits.items():
-            vals = pd.to_numeric(df[col], errors="raise")
-            if vals.isnull().any():
-                errors.append(f"{path}: {col} has null values")
-            bad = vals[(vals < 0) | (vals >= limit)]
-            if len(bad) > 0:
-                errors.append(
-                    f"{path}: {col} values outside [0, {limit}): "
-                    f"min={int(vals.min())}, max={int(vals.max())}"
-                )
-    except Exception as exc:
-        errors.append(f"{path}: validation failed: {type(exc).__name__}: {exc}")
-
-for path in files:
-    try:
-        table = pq.read_table(path, columns=["species"])
-        species_counter.update(int(x) for x in table.column("species").to_pylist())
-    except Exception as exc:
-        warnings.append(f"{path}: could not read species distribution: {exc}")
-
-manifest_path = flat_dir / "shuffle_manifest.csv"
-if manifest_path.exists():
-    with manifest_path.open(newline="", encoding="utf-8") as fh:
-        rows = list(csv.DictReader(fh))
-    manifest_total = sum(int(row["num_rows"]) for row in rows)
-    metadata_total = sum(file_rows)
-    manifest_files = {row["output_file"] for row in rows}
-    actual_files = {path.name for path in files}
-    if manifest_total != metadata_total:
-        errors.append(f"manifest row total {manifest_total} != parquet metadata rows {metadata_total}")
-    missing_manifest_files = actual_files - manifest_files
-    if missing_manifest_files:
-        errors.append(f"manifest missing output files: {sorted(missing_manifest_files)[:5]}")
-else:
-    warnings.append(f"missing shuffle manifest: {manifest_path}")
-
-if files and len(files) < world_size:
-    errors.append(
-        f"flat file count {len(files)} < world_size {world_size}; "
-        "DistributedFileSampler(drop_last=True) would give empty/invalid rank shards"
-    )
-
-if files:
-    if len(files) % world_size != 0:
-        dropped = len(files) - math.ceil((len(files) - world_size) / world_size) * world_size
-        warnings.append(
-            f"flat file count {len(files)} is not divisible by world_size {world_size}; "
-            f"current drop_last=True sampler will drop {dropped} shuffled file(s) per epoch"
-        )
-
-    if len(files) % world_size == 0:
-        samples_per_rank = math.ceil(len(files) / world_size)
-    else:
-        samples_per_rank = math.ceil((len(files) - world_size) / world_size)
-    total_size = samples_per_rank * world_size
-    if samples_per_rank <= 0:
-        errors.append(f"samples_per_rank computed as {samples_per_rank}; need more flat files")
-    else:
-        indices = list(range(len(files)))[:total_size]
-        plan_path = command_dir / "distributed_file_plan_epoch0.csv"
-        with plan_path.open("w", newline="", encoding="utf-8") as fh:
-            writer = csv.DictWriter(
-                fh,
-                fieldnames=[
-                    "node_rank", "local_rank", "global_rank", "num_files",
-                    "num_rows", "files",
-                ],
-            )
-            writer.writeheader()
-            for rank in range(world_size):
-                rank_indices = indices[rank:total_size:world_size]
-                rank_files = [files[i] for i in rank_indices]
-                writer.writerow({
-                    "node_rank": rank // nproc_per_node,
-                    "local_rank": rank % nproc_per_node,
-                    "global_rank": rank,
-                    "num_files": len(rank_files),
-                    "num_rows": sum(file_rows[i] for i in rank_indices),
-                    "files": ";".join(path.name for path in rank_files),
-                })
-        print(f"[INFO] wrote distributed file plan: {plan_path}")
-
-embedding_files = [
-    "2nd_run_macrogene_features_sum_esm2.npy",
-    "2nd_run_macrogene_features_sum_gene_desc.npy",
-    "2nd_run_macrogene_features_sum_dnaseq.npy",
-]
-if emb_path.exists():
-    for name in embedding_files:
-        path = emb_path / name
-        if not path.exists():
-            errors.append(f"missing embedding file: {path}")
-            continue
-        arr = np.load(path, mmap_mode="r")
-        if arr.ndim != 2:
-            errors.append(f"{path}: expected 2D embedding array, got shape={arr.shape}")
-        if arr.shape[0] != seq_len:
-            errors.append(f"{path}: first dimension {arr.shape[0]} != seq_len {seq_len}")
-        print(f"[INFO] embedding {name}: shape={arr.shape}, dtype={arr.dtype}")
-elif require_embeddings:
-    errors.append(f"embedding directory does not exist: {emb_path}")
-else:
-    warnings.append(f"embedding directory does not exist: {emb_path}")
-
-summary = {
-    "flat_dir": str(flat_dir),
-    "num_files": len(files),
-    "total_rows": int(sum(file_rows)),
-    "world_size": world_size,
-    "seq_len": seq_len,
-    "species_distribution": dict(sorted(species_counter.items())),
-}
-print(json.dumps(summary, indent=2, sort_keys=True))
-
-if warnings:
-    print("[WARN] validation warnings:")
-    for item in warnings:
-        print(f"  - {item}")
-
-if errors:
-    print("[ERROR] validation failed:")
-    for item in errors:
-        print(f"  - {item}")
-    sys.exit(1)
-
-print("[OK] flat data validation passed")
-PY
+  local -a validate_cmd=(
+    "$PYTHON_BIN"
+    "$STAGE2_CHECKS_PY"
+    validate-data
+    --flat-dir
+    "$FLAT_TEST_DIR"
+    --command-dir
+    "$COMMAND_DIR"
+    --emb-path
+    "$EMB_PATH"
+    --config-json
+    "$MODEL_CONFIG_JSON"
+    --world-size
+    "$WORLD_SIZE"
+    --nnodes
+    "$NNODES"
+    --nproc-per-node
+    "$NPROC_PER_NODE"
+    --max-validate-rows-per-file
+    "$MAX_VALIDATE_ROWS_PER_FILE"
+    --max-validate-files
+    "$MAX_VALIDATE_FILES"
+  )
+  if [[ "$REQUIRE_EMBEDDINGS" == "1" ]]; then
+    validate_cmd+=(--require-embeddings)
+  fi
+  "${validate_cmd[@]}"
 }
 
 train_args() {
@@ -652,7 +319,7 @@ train_args() {
     "--data_path=${DATA_PATH}"
     "--num_of_used_data=${NUM_OF_USED_DATA}"
     "--emb_path=${EMB_PATH}"
-    "--seq_len=${SEQ_LEN}"
+    "--config_json=${MODEL_CONFIG_JSON}"
     "--out_path=${OUT_PATH}"
     "--batch_size=${BATCH_SIZE}"
     "--epoch=${EPOCH}"
@@ -671,35 +338,6 @@ train_args() {
     "--backend=${BACKEND}"
     "--device=${DEVICE}"
     "--device_type=${DEVICE_TYPE}"
-    "--hidden_size=${HIDDEN_SIZE}"
-    "--num_hidden_layers=${NUM_HIDDEN_LAYERS}"
-    "--num_attention_heads=${NUM_ATTENTION_HEADS}"
-    "--intermediate_size=${INTERMEDIATE_SIZE}"
-    "--hidden_act=${HIDDEN_ACT}"
-    "--hidden_dropout_prob=${HIDDEN_DROPOUT_PROB}"
-    "--cell_hidden_size=${CELL_HIDDEN_SIZE}"
-    "--attention_probs_dropout_prob=${ATTENTION_PROBS_DROPOUT_PROB}"
-    "--type_vocab_size=${TYPE_VOCAB_SIZE}"
-    "--initializer_range=${INITIALIZER_RANGE}"
-    "--layer_norm_eps=${LAYER_NORM_EPS}"
-    "--_attn_implementation=${ATTN_IMPLEMENTATION}"
-    "--use_batch_labels=${USE_BATCH_LABELS}"
-    "--num_batch_labels=${NUM_BATCH_LABELS}"
-    "--use_species_labels=${USE_SPECIES_LABELS}"
-    "--num_species_labels=${NUM_SPECIES_LABELS}"
-    "--use_tissue_labels=${USE_TISSUE_LABELS}"
-    "--num_tissue_labels=${NUM_TISSUE_LABELS}"
-    "--use_seqmethod_labels=${USE_SEQMETHOD_LABELS}"
-    "--num_seqmethod_labels=${NUM_SEQMETHOD_LABELS}"
-    "--use_disease_labels=${USE_DISEASE_LABELS}"
-    "--num_disease_labels=${NUM_DISEASE_LABELS}"
-    "--use_age_labels=${USE_AGE_LABELS}"
-    "--num_age_labels=${NUM_AGE_LABELS}"
-    "--use_sex_labels=${USE_SEX_LABELS}"
-    "--num_sex_labels=${NUM_SEX_LABELS}"
-    "--cell_emb_style=${CELL_EMB_STYLE}"
-    "--chunk_size_feed_forward=${CHUNK_SIZE_FEED_FORWARD}"
-    "--explicit_zero_prob=${EXPLICIT_ZERO_PROB}"
   )
   if [[ -n "$S3_REMOTE_DIR_PATH" ]]; then
     TRAIN_ARGS+=("--s3_remote_dir_path=${S3_REMOTE_DIR_PATH}")
@@ -765,7 +403,7 @@ write_launcher_script() {
     print_export NUM_OF_USED_DATA "$NUM_OF_USED_DATA"
     print_export EMB_ROOT "$EMB_ROOT"
     print_export EMB_PATH "$EMB_PATH"
-    print_export SEQ_LEN "$SEQ_LEN"
+    print_export MODEL_CONFIG_JSON "$MODEL_CONFIG_JSON"
     print_export OUT_PATH "$OUT_PATH"
     print_export BATCH_SIZE "$BATCH_SIZE"
     print_export EPOCH "$EPOCH"
@@ -785,35 +423,6 @@ write_launcher_script() {
     print_export DEVICE "$DEVICE"
     print_export DEVICE_TYPE "$DEVICE_TYPE"
     print_export S3_REMOTE_DIR_PATH "$S3_REMOTE_DIR_PATH"
-    print_export HIDDEN_SIZE "$HIDDEN_SIZE"
-    print_export NUM_HIDDEN_LAYERS "$NUM_HIDDEN_LAYERS"
-    print_export NUM_ATTENTION_HEADS "$NUM_ATTENTION_HEADS"
-    print_export INTERMEDIATE_SIZE "$INTERMEDIATE_SIZE"
-    print_export HIDDEN_ACT "$HIDDEN_ACT"
-    print_export HIDDEN_DROPOUT_PROB "$HIDDEN_DROPOUT_PROB"
-    print_export CELL_HIDDEN_SIZE "$CELL_HIDDEN_SIZE"
-    print_export ATTENTION_PROBS_DROPOUT_PROB "$ATTENTION_PROBS_DROPOUT_PROB"
-    print_export TYPE_VOCAB_SIZE "$TYPE_VOCAB_SIZE"
-    print_export INITIALIZER_RANGE "$INITIALIZER_RANGE"
-    print_export LAYER_NORM_EPS "$LAYER_NORM_EPS"
-    print_export ATTN_IMPLEMENTATION "$ATTN_IMPLEMENTATION"
-    print_export USE_BATCH_LABELS "$USE_BATCH_LABELS"
-    print_export NUM_BATCH_LABELS "$NUM_BATCH_LABELS"
-    print_export USE_SPECIES_LABELS "$USE_SPECIES_LABELS"
-    print_export NUM_SPECIES_LABELS "$NUM_SPECIES_LABELS"
-    print_export USE_TISSUE_LABELS "$USE_TISSUE_LABELS"
-    print_export NUM_TISSUE_LABELS "$NUM_TISSUE_LABELS"
-    print_export USE_SEQMETHOD_LABELS "$USE_SEQMETHOD_LABELS"
-    print_export NUM_SEQMETHOD_LABELS "$NUM_SEQMETHOD_LABELS"
-    print_export USE_DISEASE_LABELS "$USE_DISEASE_LABELS"
-    print_export NUM_DISEASE_LABELS "$NUM_DISEASE_LABELS"
-    print_export USE_AGE_LABELS "$USE_AGE_LABELS"
-    print_export NUM_AGE_LABELS "$NUM_AGE_LABELS"
-    print_export USE_SEX_LABELS "$USE_SEX_LABELS"
-    print_export NUM_SEX_LABELS "$NUM_SEX_LABELS"
-    print_export CELL_EMB_STYLE "$CELL_EMB_STYLE"
-    print_export CHUNK_SIZE_FEED_FORWARD "$CHUNK_SIZE_FEED_FORWARD"
-    print_export EXPLICIT_ZERO_PROB "$EXPLICIT_ZERO_PROB"
     print_export ASCEND_RT_VISIBLE_DEVICES_VALUE "$ASCEND_RT_VISIBLE_DEVICES_VALUE"
     print_export HCCL_CONNECT_TIMEOUT "$HCCL_CONNECT_TIMEOUT"
     print_export HCCL_EXEC_TIMEOUT "$HCCL_EXEC_TIMEOUT"
@@ -883,153 +492,24 @@ launch_training() {
 }
 
 resolve_train_out_dir() {
-  export OUT_PATH WORKDIR HIDDEN_SIZE NUM_HIDDEN_LAYERS NUM_ATTENTION_HEADS
-  export HIDDEN_DROPOUT_PROB LEARNING_RATE MIN_LR WEIGHT_DECAY WARMUP_RATIO
-  "$PYTHON_BIN" <<'PY'
-import os
-from pathlib import Path
-
-out_path = os.environ["OUT_PATH"].format(
-    hidden_size=int(os.environ["HIDDEN_SIZE"]),
-    num_hidden_layers=int(os.environ["NUM_HIDDEN_LAYERS"]),
-    num_attention_heads=int(os.environ["NUM_ATTENTION_HEADS"]),
-    hidden_dropout_prob=float(os.environ["HIDDEN_DROPOUT_PROB"]),
-    learning_rate=float(os.environ["LEARNING_RATE"]),
-    min_lr=float(os.environ["MIN_LR"]),
-    weight_decay=float(os.environ["WEIGHT_DECAY"]),
-    warmup_ratio=float(os.environ["WARMUP_RATIO"]),
-)
-path = Path(out_path)
-if not path.is_absolute():
-    path = Path(os.environ["WORKDIR"]) / path
-print(path.resolve())
-PY
+  "$PYTHON_BIN" "$STAGE2_CHECKS_PY" resolve-out-dir \
+    --out-path "$OUT_PATH" \
+    --workdir "$WORKDIR" \
+    --config-json "$MODEL_CONFIG_JSON" \
+    --learning-rate "$LEARNING_RATE" \
+    --min-lr "$MIN_LR" \
+    --weight-decay "$WEIGHT_DECAY" \
+    --warmup-ratio "$WARMUP_RATIO"
 }
 
 check_training() {
   local out_dir="${TRAIN_OUT_DIR:-$(resolve_train_out_dir)}"
   local node_log_dir="${NODE_LOG_DIR:-${WORKDIR}/${LOG_SUBDIR}}"
-  export TRAIN_OUT_DIR="$out_dir" NODE_LOG_DIR="$node_log_dir" WORLD_SIZE NNODES NPROC_PER_NODE EPOCH
-  "$PYTHON_BIN" <<'PY'
-import ast
-import csv
-import os
-import re
-import sys
-from collections import Counter, defaultdict
-from pathlib import Path
-
-out_dir = Path(os.environ["TRAIN_OUT_DIR"])
-node_log_dir = Path(os.environ["NODE_LOG_DIR"])
-world_size = int(os.environ["WORLD_SIZE"])
-epoch_count = int(os.environ["EPOCH"])
-
-errors = []
-warnings = []
-
-if not out_dir.exists():
-    errors.append(f"training output directory does not exist: {out_dir}")
-else:
-    rank_logs = sorted(out_dir.glob("log.*.txt"))
-    loss_logs = sorted(out_dir.glob("loss_to_log.*.txt"))
-    all_pt_files = sorted(out_dir.glob("SC-node-*-rank-*-epoch-*-step-*-loss-*.pt"))
-    weights = [p for p in all_pt_files if not p.name.endswith(".optimizer.pt")]
-    optimizer_weights = sorted(out_dir.glob("SC-node-*-rank-*-epoch-*-step-*-loss-*.optimizer.pt"))
-
-    print(f"[INFO] output dir: {out_dir}")
-    print(f"[INFO] rank logs={len(rank_logs)}, loss logs={len(loss_logs)}, weights={len(weights)}, optimizer states={len(optimizer_weights)}")
-
-    if len(rank_logs) < world_size:
-        errors.append(f"expected at least {world_size} rank logs, found {len(rank_logs)}")
-    if len(loss_logs) < world_size:
-        errors.append(f"expected at least {world_size} loss logs, found {len(loss_logs)}")
-
-    final_epoch = epoch_count + 1
-    final_pattern = re.compile(rf"SC-node-\d+-rank-\d+-epoch-{final_epoch:02d}-step-0-loss-0\.000000\.pt$")
-    final_weights = [p for p in weights if final_pattern.search(p.name)]
-    if len(final_weights) < world_size:
-        errors.append(f"expected at least {world_size} final model weights for epoch {final_epoch:02d}, found {len(final_weights)}")
-
-    bad_pattern = re.compile(r"(Traceback|RuntimeError|ValueError|out of memory|\bnan\b)", re.IGNORECASE)
-    data_pattern = re.compile(r"Node:\s*([^,]+),\s*Rank:\s*([^,]+),\s*Epoch:\s*(\d+),\s*Data:\s*(\[.*\])")
-    data_by_epoch = defaultdict(list)
-    ranks_with_loss = set()
-
-    for log_path in rank_logs:
-        text = log_path.read_text(encoding="utf-8", errors="replace")
-        bad = bad_pattern.search(text)
-        if bad:
-            errors.append(f"{log_path}: found failure marker {bad.group(1)!r}")
-        if "loss:" in text:
-            ranks_with_loss.add(log_path.name)
-        for match in data_pattern.finditer(text):
-            node = match.group(1).strip()
-            rank = match.group(2).strip()
-            epoch = int(match.group(3))
-            try:
-                files = ast.literal_eval(match.group(4))
-            except Exception:
-                files = []
-                warnings.append(f"{log_path}: could not parse Data list for epoch {epoch}")
-            data_by_epoch[epoch].append((node, rank, files, log_path.name))
-
-    if len(ranks_with_loss) < world_size:
-        errors.append(f"expected loss lines in {world_size} rank logs, found {len(ranks_with_loss)}")
-
-    for epoch in range(epoch_count):
-        records = data_by_epoch.get(epoch, [])
-        if len(records) < world_size:
-            errors.append(f"epoch {epoch}: expected data assignment records for {world_size} ranks, found {len(records)}")
-            continue
-        all_files = []
-        empty_ranks = []
-        for node, rank, files, log_name in records:
-            if not files:
-                empty_ranks.append(log_name)
-            all_files.extend(files)
-        if empty_ranks:
-            errors.append(f"epoch {epoch}: ranks with empty data assignments: {empty_ranks[:5]}")
-        duplicates = [name for name, count in Counter(all_files).items() if count > 1]
-        if duplicates:
-            errors.append(f"epoch {epoch}: duplicate file assignment across ranks: {duplicates[:10]}")
-        print(f"[INFO] epoch {epoch}: assigned files={len(all_files)}, unique files={len(set(all_files))}")
-
-    for loss_path in loss_logs:
-        try:
-            with loss_path.open(newline="", encoding="utf-8") as fh:
-                rows = list(csv.DictReader(fh))
-            if not rows:
-                errors.append(f"{loss_path}: empty loss csv")
-        except Exception as exc:
-            errors.append(f"{loss_path}: cannot parse loss csv: {exc}")
-
-if node_log_dir.exists():
-    node_logs = sorted(node_log_dir.glob("node_rank*.log"))
-    print(f"[INFO] node launcher logs={len(node_logs)} in {node_log_dir}")
-    bad_pattern = re.compile(r"(Traceback|RuntimeError|ValueError|out of memory|\bnan\b)", re.IGNORECASE)
-    for path in node_logs:
-        text = path.read_text(encoding="utf-8", errors="replace")
-        bad = bad_pattern.search(text)
-        if bad:
-            errors.append(f"{path}: found failure marker {bad.group(1)!r}")
-        if "Complete pretraining!" not in text:
-            warnings.append(f"{path}: missing 'Complete pretraining!' marker; job may still be running")
-else:
-    warnings.append(f"node log directory does not exist: {node_log_dir}")
-
-if warnings:
-    print("[WARN] training check warnings:")
-    for item in warnings:
-        print(f"  - {item}")
-
-if errors:
-    print("[ERROR] training check failed:")
-    for item in errors:
-        print(f"  - {item}")
-    sys.exit(1)
-
-print("[OK] training artifacts and logs passed checks")
-PY
+  "$PYTHON_BIN" "$STAGE2_CHECKS_PY" check-training \
+    --train-out-dir "$out_dir" \
+    --node-log-dir "$node_log_dir" \
+    --world-size "$WORLD_SIZE" \
+    --epoch "$EPOCH"
 }
 
 main() {

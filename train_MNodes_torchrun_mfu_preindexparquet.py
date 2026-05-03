@@ -16,6 +16,7 @@ import moxing as mox
 from copy import deepcopy
 from dataclasses import dataclass
 from contextlib import nullcontext
+from pathlib import Path
 
 import torch
 import torch._dynamo
@@ -35,6 +36,11 @@ from nanoBERT.utils import ParquetDataset, LazyParquetDataset, PreindexedParquet
 from nanoBERT.utils import masked_mse_loss, masked_relative_error, criterion_neg_log_bernoulli
 from nanoBERT.model.nanoBERTmodel_cellmeta2_plusEncode_adbc import BERTConfig, BERTForPreTraining
 
+try:
+    from scripts.stage2_training_config import load_model_config
+except ModuleNotFoundError:
+    from stage2_training_config import load_model_config
+
 import dask
 import dask.dataframe as dd
 from dask import delayed
@@ -50,6 +56,61 @@ def str2bool(v):
         return False
     else:
         raise argparse.ArgumentTypeError('Boolean value expected.')
+
+
+CONFIG_ARG_FIELD_MAP = {
+    "hidden_size": "hidden_size",
+    "num_hidden_layers": "num_hidden_layers",
+    "num_attention_heads": "num_attention_heads",
+    "intermediate_size": "intermediate_size",
+    "hidden_act": "hidden_act",
+    "hidden_dropout_prob": "hidden_dropout_prob",
+    "cell_hidden_size": "cell_hidden_size",
+    "attention_probs_dropout_prob": "attention_probs_dropout_prob",
+    "type_vocab_size": "type_vocab_size",
+    "initializer_range": "initializer_range",
+    "layer_norm_eps": "layer_norm_eps",
+    "_attn_implementation": "_attn_implementation",
+    "use_batch_labels": "use_batch_labels",
+    "num_batch_labels": "num_batch_labels",
+    "use_species_labels": "use_species_labels",
+    "num_species_labels": "num_species_labels",
+    "use_tissue_labels": "use_tissue_labels",
+    "num_tissue_labels": "num_tissue_labels",
+    "use_seqmethod_labels": "use_seqmethod_labels",
+    "num_seqmethod_labels": "num_seqmethod_labels",
+    "use_disease_labels": "use_disease_labels",
+    "num_disease_labels": "num_disease_labels",
+    "use_age_labels": "use_age_labels",
+    "num_age_labels": "num_age_labels",
+    "use_sex_labels": "use_sex_labels",
+    "num_sex_labels": "num_sex_labels",
+    "cell_emb_style": "cell_emb_style",
+    "chunk_size_feed_forward": "chunk_size_feed_forward",
+    "explicit_zero_prob": "explicit_zero_prob",
+}
+
+
+def apply_config_json(args):
+    if not args.config_json:
+        if args.seq_len is None:
+            raise ValueError("--seq_len is required unless --config_json is provided")
+        return
+
+    config = load_model_config(Path(args.config_json))
+    config_seq_len = int(config["seq_len"])
+    if args.seq_len is not None and int(args.seq_len) != config_seq_len:
+        raise ValueError(
+            f"--seq_len ({args.seq_len}) does not match {args.config_json} seq_len ({config_seq_len})"
+        )
+    args.seq_len = config_seq_len
+
+    for arg_name, json_key in CONFIG_ARG_FIELD_MAP.items():
+        setattr(args, arg_name, config[json_key])
+
+
+def value_or_default(value, default):
+    return value if value is not None else default
 
 
 class DistributedFileSampler:
@@ -207,35 +268,35 @@ def build_bertconfig(vocab, seq_len, args):
     # load config
     config = BERTConfig(vocab_size=seq_len + 1,
                         vocab=vocab,
-                        hidden_size=args.hidden_size if args.hidden_size else 1280,
-                        num_hidden_layers=args.num_hidden_layers if args.num_hidden_layers else 24,
-                        num_attention_heads=args.num_attention_heads if args.num_attention_heads else 20,
-                        intermediate_size=args.intermediate_size if args.intermediate_size else 5120,
-                        hidden_act=args.hidden_act if args.hidden_act else "gelu",
-                        hidden_dropout_prob=args.hidden_dropout_prob if args.hidden_dropout_prob else 0.1,
-                        cell_hidden_size=args.cell_hidden_size if args.cell_hidden_size else 128,
-                        attention_probs_dropout_prob=args.attention_probs_dropout_prob if args.attention_probs_dropout_prob else 0.1,
+                        hidden_size=value_or_default(args.hidden_size, 1280),
+                        num_hidden_layers=value_or_default(args.num_hidden_layers, 24),
+                        num_attention_heads=value_or_default(args.num_attention_heads, 20),
+                        intermediate_size=value_or_default(args.intermediate_size, 5120),
+                        hidden_act=value_or_default(args.hidden_act, "gelu"),
+                        hidden_dropout_prob=value_or_default(args.hidden_dropout_prob, 0.1),
+                        cell_hidden_size=value_or_default(args.cell_hidden_size, 128),
+                        attention_probs_dropout_prob=value_or_default(args.attention_probs_dropout_prob, 0.1),
                         max_position_embeddings=args.seq_len + 1,
-                        type_vocab_size=args.type_vocab_size if args.type_vocab_size else 2,
-                        initializer_range=args.initializer_range if args.initializer_range else 0.02,
-                        layer_norm_eps=args.layer_norm_eps if args.layer_norm_eps else 1e-12,
-                        _attn_implementation=args._attn_implementation if args._attn_implementation else "sdpa",
+                        type_vocab_size=value_or_default(args.type_vocab_size, 2),
+                        initializer_range=value_or_default(args.initializer_range, 0.02),
+                        layer_norm_eps=value_or_default(args.layer_norm_eps, 1e-12),
+                        _attn_implementation=value_or_default(args._attn_implementation, "sdpa"),
                         use_batch_labels=str2bool(args.use_batch_labels) if args.use_batch_labels is not None else False,
-                        num_batch_labels=args.num_batch_labels if args.num_batch_labels else 12028,
+                        num_batch_labels=value_or_default(args.num_batch_labels, 12028),
                         use_species_labels=str2bool(args.use_species_labels) if args.use_species_labels is not None else True,
-                        num_species_labels=args.num_species_labels if args.num_species_labels else 11,
+                        num_species_labels=value_or_default(args.num_species_labels, 11),
                         use_tissue_labels=str2bool(args.use_tissue_labels) if args.use_tissue_labels is not None else True,
-                        num_tissue_labels=args.num_tissue_labels if args.num_tissue_labels else 154,
+                        num_tissue_labels=value_or_default(args.num_tissue_labels, 154),
                         use_seqmethod_labels=str2bool(args.use_seqmethod_labels) if args.use_seqmethod_labels is not None else True,
-                        num_seqmethod_labels=args.num_seqmethod_labels if args.num_seqmethod_labels else 28,
+                        num_seqmethod_labels=value_or_default(args.num_seqmethod_labels, 28),
                         use_disease_labels=str2bool(args.use_disease_labels) if args.use_disease_labels is not None else True,
-                        num_disease_labels=args.num_disease_labels if args.num_disease_labels else 143,
+                        num_disease_labels=value_or_default(args.num_disease_labels, 143),
                         use_age_labels=str2bool(args.use_age_labels) if args.use_age_labels is not None else True,
-                        num_age_labels=args.num_age_labels if args.num_age_labels else 5,
+                        num_age_labels=value_or_default(args.num_age_labels, 5),
                         use_sex_labels=str2bool(args.use_sex_labels) if args.use_sex_labels is not None else True,
-                        num_sex_labels=args.num_sex_labels if args.num_sex_labels else 3,
-                        cell_emb_style=args.cell_emb_style if args.cell_emb_style else "cls",
-                        chunk_size_feed_forward=args.chunk_size_feed_forward if args.chunk_size_feed_forward is not None else 0,
+                        num_sex_labels=value_or_default(args.num_sex_labels, 3),
+                        cell_emb_style=value_or_default(args.cell_emb_style, "cls"),
+                        chunk_size_feed_forward=value_or_default(args.chunk_size_feed_forward, 0),
                         explicit_zero_prob=str2bool(args.explicit_zero_prob) if args.explicit_zero_prob is not None else True,
                         )
 
@@ -714,9 +775,13 @@ def argumentparser():
     parser.add_argument("--emb_path",
                         type=str,
                         required=True)
+    parser.add_argument("--config_json",
+                        type=str,
+                        default=None,
+                        help="Strict model config JSON. Overrides seq_len, model structure, and label settings.")
     parser.add_argument("--seq_len",
                         type=int,
-                        required=True)
+                        default=None)
     parser.add_argument("--out_path",
                         type=str,
                         default="hs_{hidden_size}_nh_{num_hidden_layers}_na_{num_attention_heads}_hdp_{hidden_dropout_prob}_lr_{learning_rate}_mlr_{min_lr}_wd_{weight_decay}_wr_{warmup_ratio}")
@@ -783,94 +848,98 @@ def argumentparser():
                         default="")
     parser.add_argument('--hidden_size',
         type=int,
-        default=1280)
+        default=None)
     parser.add_argument('--num_hidden_layers',
         type=int,
-        default=24)
+        default=None)
     parser.add_argument('--num_attention_heads',
         type=int,
-        default=20)
+        default=None)
     parser.add_argument('--intermediate_size',
         type=int,
-        default=5120)
+        default=None)
     parser.add_argument('--hidden_act',
         type=str,
-        default="gelu")
+        default=None)
     parser.add_argument('--hidden_dropout_prob',
         type=float,
-        default=0.1)
+        default=None)
     parser.add_argument('--cell_hidden_size',
         type=int,
-        default=128)
+        default=None)
     parser.add_argument('--attention_probs_dropout_prob',
         type=float,
-        default=0.1)
+        default=None)
     parser.add_argument('--type_vocab_size',
         type=int,
-        default=2)
+        default=None)
     parser.add_argument('--initializer_range',
         type=float,
-        default=0.02)
+        default=None)
     parser.add_argument('--layer_norm_eps',
         type=float,
-        default=1e-12)
+        default=None)
     parser.add_argument('--_attn_implementation',
         type=str,
-        default="sdpa")
+        default=None)
     parser.add_argument('--use_batch_labels',
         type=str,
-        default="False")
+        default=None)
     parser.add_argument('--num_batch_labels',
         type=int,
-        default=12028)
+        default=None)
     parser.add_argument('--use_species_labels',
         type=str,
-        default="True")
+        default=None)
     parser.add_argument('--num_species_labels',
         type=int,
-        default=11)
+        default=None)
     parser.add_argument('--use_tissue_labels',
         type=str,
-        default="True")
+        default=None)
     parser.add_argument('--num_tissue_labels',
         type=int,
-        default=154)
+        default=None)
     parser.add_argument('--use_seqmethod_labels',
         type=str,
-        default="True")
+        default=None)
     parser.add_argument('--num_seqmethod_labels',
         type=int,
-        default=28)
+        default=None)
     parser.add_argument('--use_disease_labels',
         type=str,
-        default="True")
+        default=None)
     parser.add_argument('--num_disease_labels',
         type=int,
-        default=143)
+        default=None)
     parser.add_argument('--use_age_labels',
         type=str,
-        default="True")
+        default=None)
     parser.add_argument('--num_age_labels',
         type=int,
-        default=5)
+        default=None)
     parser.add_argument('--use_sex_labels',
         type=str,
-        default="True")
+        default=None)
     parser.add_argument('--num_sex_labels',
         type=int,
-        default=3)
+        default=None)
     parser.add_argument('--cell_emb_style',
         type=str,
-        default="cls")
+        default=None)
     parser.add_argument('--chunk_size_feed_forward',
         type=int,
-        default=0)
+        default=None)
     parser.add_argument('--explicit_zero_prob',
         type=str,
-        default="True")
+        default=None)
 
 
     args = parser.parse_args()
+    try:
+        apply_config_json(args)
+    except ValueError as exc:
+        parser.error(str(exc))
     return args
 
 

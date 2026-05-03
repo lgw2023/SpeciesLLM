@@ -40,6 +40,28 @@ The final training-ready dataset defaults to:
 Stage2_SpeciesLLMData/all_flatten_data_test
 ```
 
+## Stage 2 training checks
+
+Reusable Stage 2 checks live in:
+
+```text
+scripts/stage2_training_config.py
+scripts/stage2_training_checks.py
+```
+
+They provide strict model JSON loading, seq_len derivation, source parquet
+preflight, flattened parquet validation, embedding checks, distributed file-plan
+generation, output path resolution, and post-training log/artifact checks. Both
+the smoke-test wrapper and the multi-node launcher use the same fixed 500M model
+JSON:
+
+```text
+Stage2_macrogene_embeddings/args_2nd_run.json
+```
+
+Missing model structure fields, label switches, label counts, or inconsistent
+`vocab_size` / `max_position_embeddings` fail fast.
+
 ## Stage 2 500M three-node smoke test
 
 ```bash
@@ -55,6 +77,11 @@ commands under `Stage2_SpeciesLLMData/stage2_500m_test_commands`.
 Model structure and label parameters are read strictly from
 `Stage2_macrogene_embeddings/args_2nd_run.json`; if a required JSON field is
 missing, the script exits instead of falling back to shell defaults.
+
+The shell wrapper only orchestrates commands. It calls
+`scripts/stage2_training_checks.py` for reusable checks and passes
+`--config_json` to the training entry instead of expanding model structure or
+label parameters in shell.
 
 Typical server invocation:
 
@@ -78,6 +105,13 @@ Multi-node launcher:
 ```bash
 bash scripts/train_multinode.sh
 ```
+
+The launcher reads model structure and label configuration from
+`MODEL_CONFIG_JSON`, defaulting to `Stage2_macrogene_embeddings/args_2nd_run.json`
+under `EMB_PATH`. It passes that file to
+`train_MNodes_torchrun_mfu_preindexparquet.py --config_json`; shell defaults are
+kept only for cluster paths and training hyperparameters, not model structure or
+label settings.
 
 Run multi-node training on the test dataset:
 
