@@ -35,18 +35,23 @@ bash scripts/train_multinode.sh
 Run multi-node training on the test dataset:
 
 ```bash
-TRAIN_DATASET=test bash scripts/train_multinode.sh
+TRAIN_DATASET=test \
+DATA_ROOT=/data1/.../Stage2_SpeciesLLMData \
+EMB_ROOT=/data2/... \
+bash scripts/train_multinode.sh
 ```
 
-For server runs, copy the root env template and edit it:
+For server runs, copy the root env template and edit only server/cluster
+settings:
 
 ```bash
 cp .env.example .env
 ```
 
-`DATA_ROOT` and `EMB_ROOT` are independent. For example, test data can live
-under `/data1/.../Stage2_SpeciesLLMData` while embeddings live under
-`/data2/.../Stage2_macrogene_embeddings`.
+Do not put data paths or training hyperparameters in `.env`. Pass them in the
+launch command instead. `DATA_ROOT` and `EMB_ROOT` are independent; for example,
+test data can live under `/data1/.../Stage2_SpeciesLLMData` while embeddings
+live under `/data2/.../Stage2_macrogene_embeddings`.
 
 Single-node command:
 
