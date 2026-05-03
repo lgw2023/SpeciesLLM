@@ -54,14 +54,22 @@ load_env_defaults() {
 load_env_defaults "$ENV_FILE"
 
 # ---------- cluster configuration ----------
+# NNODES is recalculated from the final active host list by default. Keep
+# AUTO_NNODES=0 if you want NNODES to remain a strict manual value.
 NNODES="${NNODES:-3}"
+AUTO_NNODES="${AUTO_NNODES:-1}"
 NPROC_PER_NODE="${NPROC_PER_NODE:-8}"
 
 MASTER_ADDR="${MASTER_ADDR:-7.150.12.45}"
 MASTER_PORT="${MASTER_PORT:-12345}"
 
-# Comma-separated hosts. Order is the torchrun node_rank order.
+# Comma-separated base hosts. Order is the torchrun node_rank order.
 HOSTS_CSV="${HOSTS:-7.150.12.45,7.150.15.14,7.150.14.170}"
+# Comma-separated optional hosts. Keep AUTO_OPTIONAL_HOSTS=0 for the normal
+# 3-node run; set AUTO_OPTIONAL_HOSTS=1 to append reachable optional hosts.
+OPTIONAL_HOSTS_CSV="${OPTIONAL_HOSTS:-7.150.8.22}"
+AUTO_OPTIONAL_HOSTS="${AUTO_OPTIONAL_HOSTS:-0}"
+OPTIONAL_HOST_CONNECT_TIMEOUT="${OPTIONAL_HOST_CONNECT_TIMEOUT:-5}"
 
 SSH_USER="${SSH_USER:-root}"
 SSH_KEY="${SSH_KEY-}"
@@ -163,13 +171,14 @@ usage() {
   cat <<USAGE
 Usage:
   # Master-node launcher
-  HOSTS="host0,host1,host2,host3" MASTER_ADDR=host0 WORKDIR=/path/to/SpeciesLLM bash $SELF_NAME
+  HOSTS="host0,host1,host2" OPTIONAL_HOSTS="host3" MASTER_ADDR=host0 WORKDIR=/path/to/SpeciesLLM bash $SELF_NAME
 
   # Worker mode, normally used by the launcher
   NODE_RANK=1 bash $SELF_NAME --worker
 
 Important environment variables:
-  NNODES, NPROC_PER_NODE, HOSTS, MASTER_ADDR, MASTER_PORT
+  NNODES, AUTO_NNODES, NPROC_PER_NODE, HOSTS, OPTIONAL_HOSTS, AUTO_OPTIONAL_HOSTS
+  OPTIONAL_HOST_CONNECT_TIMEOUT, MASTER_ADDR, MASTER_PORT
   WORKDIR, SSH_USER, SSH_KEY, SSH_PASSWORD, SSH_EXTRA_OPTS, SYNC_SELF, DRY_RUN
   DATA_PATH/data_path, EMB_PATH/emb_path, SEQ_LEN/seq_len, BATCH_SIZE/batch_size
 USAGE
@@ -188,8 +197,114 @@ require_cmd() {
 }
 
 split_hosts() {
-  IFS=',' read -r -a HOSTS_ARR <<< "$HOSTS_CSV"
-  echo "${#HOSTS_ARR[@]}"
+  HOSTS_ARR=()
+  local -a raw_hosts
+  local raw_host host
+  IFS=',' read -r -a raw_hosts <<< "$HOSTS_CSV"
+  for raw_host in "${raw_hosts[@]}"; do
+    host="$(trim "$raw_host")"
+    [[ -n "$host" ]] && HOSTS_ARR+=("$host")
+  done
+}
+
+split_optional_hosts() {
+  OPTIONAL_HOSTS_ARR=()
+  local -a raw_hosts
+  local raw_host host
+  IFS=',' read -r -a raw_hosts <<< "$OPTIONAL_HOSTS_CSV"
+  for raw_host in "${raw_hosts[@]}"; do
+    host="$(trim "$raw_host")"
+    [[ -n "$host" ]] && OPTIONAL_HOSTS_ARR+=("$host")
+  done
+}
+
+trim() {
+  local value="$1"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf "%s" "$value"
+}
+
+is_enabled() {
+  local value
+  value="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+  case "$value" in
+    1|true|yes|y|on)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+join_hosts() {
+  local IFS=','
+  printf "%s" "$*"
+}
+
+host_already_selected() {
+  local candidate="$1"
+  local host
+  for host in "${HOSTS_ARR[@]}"; do
+    [[ "$host" == "$candidate" ]] && return 0
+  done
+  return 1
+}
+
+probe_optional_host() {
+  local host="$1"
+  local -a probe_opts=("${SSH_OPTS[@]}")
+  probe_opts+=("-o" "ConnectTimeout=${OPTIONAL_HOST_CONNECT_TIMEOUT}")
+  probe_opts+=("-o" "ConnectionAttempts=1")
+
+  if [[ -n "$SSH_PASSWORD" ]]; then
+    SSHPASS="$SSH_PASSWORD" sshpass -e ssh "${probe_opts[@]}" "${SSH_USER}@${host}" "true" >/dev/null 2>&1
+  else
+    ssh "${probe_opts[@]}" "${SSH_USER}@${host}" "true" >/dev/null 2>&1
+  fi
+}
+
+resolve_launcher_hosts() {
+  local host_count
+  split_hosts
+  host_count="${#HOSTS_ARR[@]}"
+  if [[ "$host_count" -eq 0 ]]; then
+    echo "HOSTS must contain at least one base host."
+    exit 1
+  fi
+
+  if is_enabled "$AUTO_OPTIONAL_HOSTS" && [[ -n "$OPTIONAL_HOSTS_CSV" ]]; then
+    split_optional_hosts
+
+    local host
+    for host in "${OPTIONAL_HOSTS_ARR[@]}"; do
+      if host_already_selected "$host"; then
+        log "optional host already present in HOSTS, keep existing rank: ${host}"
+        continue
+      fi
+
+      if [[ "$DRY_RUN" == "1" ]]; then
+        log "DRY_RUN=1, include optional host without ssh probe: ${host}"
+        HOSTS_ARR+=("$host")
+      elif probe_optional_host "$host"; then
+        log "optional host available, include: ${host}"
+        HOSTS_ARR+=("$host")
+      else
+        log "optional host unavailable, skip: ${host}"
+      fi
+    done
+  fi
+
+  HOSTS_CSV="$(join_hosts "${HOSTS_ARR[@]}")"
+  host_count="${#HOSTS_ARR[@]}"
+
+  if is_enabled "$AUTO_NNODES"; then
+    NNODES="$host_count"
+  elif [[ "$host_count" -ne "$NNODES" ]]; then
+    echo "HOSTS count (${host_count}) must equal NNODES (${NNODES}). HOSTS=${HOSTS_CSV}"
+    exit 1
+  fi
 }
 
 build_ssh_opts() {
@@ -399,15 +514,7 @@ run_launcher() {
   require_cmd ssh
   require_cmd scp
   build_ssh_opts
-
-  local host_count
-  host_count="$(split_hosts)"
-  if [[ "$host_count" -ne "$NNODES" ]]; then
-    echo "HOSTS count (${host_count}) must equal NNODES (${NNODES}). HOSTS=${HOSTS_CSV}"
-    exit 1
-  fi
-
-  IFS=',' read -r -a HOSTS_ARR <<< "$HOSTS_CSV"
+  resolve_launcher_hosts
 
   local self_abs="${SCRIPT_DIR}/${SELF_NAME}"
   local remote_self="${WORKDIR}/${SELF_NAME}"
@@ -415,6 +522,7 @@ run_launcher() {
 
   log "launcher start"
   log "HOSTS(rank order)=${HOSTS_CSV}"
+  log "OPTIONAL_HOSTS=${OPTIONAL_HOSTS_CSV}, AUTO_OPTIONAL_HOSTS=${AUTO_OPTIONAL_HOSTS}, AUTO_NNODES=${AUTO_NNODES}"
   log "NNODES=${NNODES}, NPROC_PER_NODE=${NPROC_PER_NODE}, MASTER=${MASTER_ADDR}:${MASTER_PORT}"
   log "WORKDIR=${WORKDIR}, remote_script=${remote_self}"
   log "SYNC_SELF=${SYNC_SELF}, DRY_RUN=${DRY_RUN}"
