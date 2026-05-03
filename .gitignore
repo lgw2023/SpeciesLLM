@@ -1,0 +1,71 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Data files
+*.npy
+*.parquet
+*.h5ad
+*.csv
+*.zarr/
+*.zarr
+
+# Model weights and checkpoints
+*.pt
+*.pth
+*.ckpt
+*.bin
+*.safetensors
+*.onnx
+
+# Embeddings
+Stage1_macrogene_embeddings/
+Stage2_macrogene_embeddings/
+
+# Processed data directories
+Stage2_SpeciesLLMData/
+scbasecount_demo/scbasecount_processed/
+scbasecount_demo/scbasecount_processed_02/
+scbasecount_demo/scbasecount_processed_03_v2/
+scbasecount_demo/scbasecount_raw/
+scbasecount_demo/data/
+
+# Papers and references (large PDF collections)
+papers/
+
+# Training logs
+training_log/
+
+# Logs and outputs
+*.log
+*.out
+logs/
+out*/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Trae
+.trae/

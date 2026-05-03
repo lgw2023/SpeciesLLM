@@ -1,0 +1,16 @@
+{
+  "groups": {
+    "72e600aef22aee8439ff66300ef7db6babf2ee0d": {
+      "count": 11901,
+      "n_var": 22324,
+      "examples": [
+        "ERX10138181.processed.h5ad",
+        "ERX10138168.processed.h5ad",
+        "ERX10024831.processed.h5ad",
+        "ERX10138180.processed.h5ad",
+        "ERX10138167.processed.h5ad"
+      ]
+    }
+  },
+  "errors": []
+}
