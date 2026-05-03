@@ -1,0 +1,517 @@
+
+====================================================================================================================================
+NNODES=3, NPROC_PER_NODE=8, MASTER_HOST=ma-job-2c1f1141-d78b-4709-9a41-3f9566d2f62d-worker-0.ma-job-2c1f1141-d78b-4709-9a41-3f9566d2f62d,ma-job-2c1f1141-d78b-4709-9a41-3f9566d2f62d-worker-1.ma-job-2c1f1141-d78b-4709-9a41-3f9566d2f62d,ma-job-2c1f1141-d78b-4709-9a41-3f9566d2f62d-worker-2.ma-job-2c1f1141-d78b-4709-9a41-3f9566d2f62d, MASTER_ADDR=ma-job-2c1f1141-d78b-4709-9a41-3f9566d2f62d-worker-0.ma-job-2c1f1141-d78b-4709-9a41-3f9566d2f62d, MASTER_PORT=12345, NODE_RANK=0
+====================================================================================================================================
+====================================================================================================================================
+Output directory: "s3://bucket-3028/public/SpeciesLLM-Training/"/modelarts-job-2c1f1141-d78b-4709-9a41-3f9566d2f62d
+====================================================================================================================================
+====================================================================================================================================
+Executing command: torchrun     --nproc_per_node=8     --nnodes=3     --node_rank=0     --master_addr ma-job-2c1f1141-d78b-4709-9a41-3f9566d2f62d-worker-0.ma-job-2c1f1141-d78b-4709-9a41-3f9566d2f62d     --master_port 12345     train_MNodes_torchrun_mfu_preindexparquet.py --data_path=./all_shuffled_data     --num_of_used_data=0     --emb_path=./macrogene_embeddings     --seq_len=862     --out_path=hs_{hidden_size}_nh_{num_hidden_layers}_na_{num_attention_heads}_hdp_{hidden_dropout_prob}_lr_{learning_rate}_mlr_{min_lr}_wd_{weight_decay}_wr_{warmup_ratio}     --batch_size=32     --epoch=10     --gradient_accumulation_steps=8     --learning_rate=0.00001     --min_lr=0.000001     --decay_lr=true     --warmup_ratio=0.05     --weight_decay=0.1     --save_data_interval=5120000     --beta1=0.9     --beta2=0.95     --grad_clip=1.0     --compile=true     --backend=hccl     --device=npu     --device_type=npu     --s3_remote_dir_path="s3://bucket-3028/public/SpeciesLLM-Training/"/modelarts-job-2c1f1141-d78b-4709-9a41-3f9566d2f62d     --hidden_size=1280     --num_hidden_layers=24     --num_attention_heads=20     --intermediate_size=5120     --hidden_act=gelu     --hidden_dropout_prob=0.1     --cell_hidden_size=128     --attention_probs_dropout_prob=0.1     --type_vocab_size=2     --initializer_range=0.02     --layer_norm_eps=1e-12     --_attn_implementation=sdpa     --use_batch_labels=true     --num_batch_labels=12028     --use_species_labels=true     --num_species_labels=11     --use_tissue_labels=true     --num_tissue_labels=154     --use_seqmethod_labels=true     --num_seqmethod_labels=28     --use_disease_labels=true     --num_disease_labels=143     --use_age_labels=true     --num_age_labels=5     --use_sex_labels=true     --num_sex_labels=3     --cell_emb_style=cls     --chunk_size_feed_forward=0     --explicit_zero_prob=true
+====================================================================================================================================
+====================================================================================================================================
+=== sys.argv ===
+=== sys.argv ===
+
+
+=== sys.argv ===
+['train_MNodes_torchrun_mfu_preindexparquet.py', '--data_path=./all_shuffled_data', '--num_of_used_data=0', '--emb_path=./macrogene_embeddings', '--seq_len=862', '--out_path=hs_{hidden_size}_nh_{num_hidden_layers}_na_{num_attention_heads}_hdp_{hidden_dropout_prob}_lr_{learning_rate}_mlr_{min_lr}_wd_{weight_decay}_wr_{warmup_ratio}', '--batch_size=32', '--epoch=10', '--gradient_accumulation_steps=8', '--learning_rate=0.00001', '--min_lr=0.000001', '--decay_lr=true', '--warmup_ratio=0.05', '--weight_decay=0.1', '--save_data_interval=5120000', '--beta1=0.9', '--beta2=0.95', '--grad_clip=1.0', '--compile=true', '--backend=hccl', '--device=npu', '--device_type=npu', '--s3_remote_dir_path=s3://bucket-3028/public/SpeciesLLM-Training//modelarts-job-2c1f1141-d78b-4709-9a41-3f9566d2f62d', '--hidden_size=1280', '--num_hidden_layers=24', '--num_attention_heads=20', '--intermediate_size=5120', '--hidden_act=gelu', '--hidden_dropout_prob=0.1', '--cell_hidden_size=128', '--attention_probs_dropout_prob=0.1', '--type_vocab_size=2', '--initializer_range=0.02', '--layer_norm_eps=1e-12', '--_attn_implementation=sdpa', '--use_batch_labels=true', '--num_batch_labels=12028', '--use_species_labels=true', '--num_species_labels=11', '--use_tissue_labels=true', '--num_tissue_labels=154', '--use_seqmethod_labels=true', '--num_seqmethod_labels=28', '--use_disease_labels=true', '--num_disease_labels=143', '--use_age_labels=true', '--num_age_labels=5', '--use_sex_labels=true', '--num_sex_labels=3', '--cell_emb_style=cls', '--chunk_size_feed_forward=0', '--explicit_zero_prob=true']['train_MNodes_torchrun_mfu_preindexparquet.py', '--data_path=./all_shuffled_data', '--num_of_used_data=0', '--emb_path=./macrogene_embeddings', '--seq_len=862', '--out_path=hs_{hidden_size}_nh_{num_hidden_layers}_na_{num_attention_heads}_hdp_{hidden_dropout_prob}_lr_{learning_rate}_mlr_{min_lr}_wd_{weight_decay}_wr_{warmup_ratio}', '--batch_size=32', '--epoch=10', '--gradient_accumulation_steps=8', '--learning_rate=0.00001', '--min_lr=0.000001', '--decay_lr=true', '--warmup_ratio=0.05', '--weight_decay=0.1', '--save_data_interval=5120000', '--beta1=0.9', '--beta2=0.95', '--grad_clip=1.0', '--compile=true', '--backend=hccl', '--device=npu', '--device_type=npu', '--s3_remote_dir_path=s3://bucket-3028/public/SpeciesLLM-Training//modelarts-job-2c1f1141-d78b-4709-9a41-3f9566d2f62d', '--hidden_size=1280', '--num_hidden_layers=24', '--num_attention_heads=20', '--intermediate_size=5120', '--hidden_act=gelu', '--hidden_dropout_prob=0.1', '--cell_hidden_size=128', '--attention_probs_dropout_prob=0.1', '--type_vocab_size=2', '--initializer_range=0.02', '--layer_norm_eps=1e-12', '--_attn_implementation=sdpa', '--use_batch_labels=true', '--num_batch_labels=12028', '--use_species_labels=true', '--num_species_labels=11', '--use_tissue_labels=true', '--num_tissue_labels=154', '--use_seqmethod_labels=true', '--num_seqmethod_labels=28', '--use_disease_labels=true', '--num_disease_labels=143', '--use_age_labels=true', '--num_age_labels=5', '--use_sex_labels=true', '--num_sex_labels=3', '--cell_emb_style=cls', '--chunk_size_feed_forward=0', '--explicit_zero_prob=true']
+
+['train_MNodes_torchrun_mfu_preindexparquet.py', '--data_path=./all_shuffled_data', '--num_of_used_data=0', '--emb_path=./macrogene_embeddings', '--seq_len=862', '--out_path=hs_{hidden_size}_nh_{num_hidden_layers}_na_{num_attention_heads}_hdp_{hidden_dropout_prob}_lr_{learning_rate}_mlr_{min_lr}_wd_{weight_decay}_wr_{warmup_ratio}', '--batch_size=32', '--epoch=10', '--gradient_accumulation_steps=8', '--learning_rate=0.00001', '--min_lr=0.000001', '--decay_lr=true', '--warmup_ratio=0.05', '--weight_decay=0.1', '--save_data_interval=5120000', '--beta1=0.9', '--beta2=0.95', '--grad_clip=1.0', '--compile=true', '--backend=hccl', '--device=npu', '--device_type=npu', '--s3_remote_dir_path=s3://bucket-3028/public/SpeciesLLM-Training//modelarts-job-2c1f1141-d78b-4709-9a41-3f9566d2f62d', '--hidden_size=1280', '--num_hidden_layers=24', '--num_attention_heads=20', '--intermediate_size=5120', '--hidden_act=gelu', '--hidden_dropout_prob=0.1', '--cell_hidden_size=128', '--attention_probs_dropout_prob=0.1', '--type_vocab_size=2', '--initializer_range=0.02', '--layer_norm_eps=1e-12', '--_attn_implementation=sdpa', '--use_batch_labels=true', '--num_batch_labels=12028', '--use_species_labels=true', '--num_species_labels=11', '--use_tissue_labels=true', '--num_tissue_labels=154', '--use_seqmethod_labels=true', '--num_seqmethod_labels=28', '--use_disease_labels=true', '--num_disease_labels=143', '--use_age_labels=true', '--num_age_labels=5', '--use_sex_labels=true', '--num_sex_labels=3', '--cell_emb_style=cls', '--chunk_size_feed_forward=0', '--explicit_zero_prob=true']
+
+=== sys.argv ===
+['train_MNodes_torchrun_mfu_preindexparquet.py', '--data_path=./all_shuffled_data', '--num_of_used_data=0', '--emb_path=./macrogene_embeddings', '--seq_len=862', '--out_path=hs_{hidden_size}_nh_{num_hidden_layers}_na_{num_attention_heads}_hdp_{hidden_dropout_prob}_lr_{learning_rate}_mlr_{min_lr}_wd_{weight_decay}_wr_{warmup_ratio}', '--batch_size=32', '--epoch=10', '--gradient_accumulation_steps=8', '--learning_rate=0.00001', '--min_lr=0.000001', '--decay_lr=true', '--warmup_ratio=0.05', '--weight_decay=0.1', '--save_data_interval=5120000', '--beta1=0.9', '--beta2=0.95', '--grad_clip=1.0', '--compile=true', '--backend=hccl', '--device=npu', '--device_type=npu', '--s3_remote_dir_path=s3://bucket-3028/public/SpeciesLLM-Training//modelarts-job-2c1f1141-d78b-4709-9a41-3f9566d2f62d', '--hidden_size=1280', '--num_hidden_layers=24', '--num_attention_heads=20', '--intermediate_size=5120', '--hidden_act=gelu', '--hidden_dropout_prob=0.1', '--cell_hidden_size=128', '--attention_probs_dropout_prob=0.1', '--type_vocab_size=2', '--initializer_range=0.02', '--layer_norm_eps=1e-12', '--_attn_implementation=sdpa', '--use_batch_labels=true', '--num_batch_labels=12028', '--use_species_labels=true', '--num_species_labels=11', '--use_tissue_labels=true', '--num_tissue_labels=154', '--use_seqmethod_labels=true', '--num_seqmethod_labels=28', '--use_disease_labels=true', '--num_disease_labels=143', '--use_age_labels=true', '--num_age_labels=5', '--use_sex_labels=true', '--num_sex_labels=3', '--cell_emb_style=cls', '--chunk_size_feed_forward=0', '--explicit_zero_prob=true']
+
+=== sys.argv ===
+['train_MNodes_torchrun_mfu_preindexparquet.py', '--data_path=./all_shuffled_data', '--num_of_used_data=0', '--emb_path=./macrogene_embeddings', '--seq_len=862', '--out_path=hs_{hidden_size}_nh_{num_hidden_layers}_na_{num_attention_heads}_hdp_{hidden_dropout_prob}_lr_{learning_rate}_mlr_{min_lr}_wd_{weight_decay}_wr_{warmup_ratio}', '--batch_size=32', '--epoch=10', '--gradient_accumulation_steps=8', '--learning_rate=0.00001', '--min_lr=0.000001', '--decay_lr=true', '--warmup_ratio=0.05', '--weight_decay=0.1', '--save_data_interval=5120000', '--beta1=0.9', '--beta2=0.95', '--grad_clip=1.0', '--compile=true', '--backend=hccl', '--device=npu', '--device_type=npu', '--s3_remote_dir_path=s3://bucket-3028/public/SpeciesLLM-Training//modelarts-job-2c1f1141-d78b-4709-9a41-3f9566d2f62d', '--hidden_size=1280', '--num_hidden_layers=24', '--num_attention_heads=20', '--intermediate_size=5120', '--hidden_act=gelu', '--hidden_dropout_prob=0.1', '--cell_hidden_size=128', '--attention_probs_dropout_prob=0.1', '--type_vocab_size=2', '--initializer_range=0.02', '--layer_norm_eps=1e-12', '--_attn_implementation=sdpa', '--use_batch_labels=true', '--num_batch_labels=12028', '--use_species_labels=true', '--num_species_labels=11', '--use_tissue_labels=true', '--num_tissue_labels=154', '--use_seqmethod_labels=true', '--num_seqmethod_labels=28', '--use_disease_labels=true', '--num_disease_labels=143', '--use_age_labels=true', '--num_age_labels=5', '--use_sex_labels=true', '--num_sex_labels=3', '--cell_emb_style=cls', '--chunk_size_feed_forward=0', '--explicit_zero_prob=true']
+
+=== sys.argv ===
+['train_MNodes_torchrun_mfu_preindexparquet.py', '--data_path=./all_shuffled_data', '--num_of_used_data=0', '--emb_path=./macrogene_embeddings', '--seq_len=862', '--out_path=hs_{hidden_size}_nh_{num_hidden_layers}_na_{num_attention_heads}_hdp_{hidden_dropout_prob}_lr_{learning_rate}_mlr_{min_lr}_wd_{weight_decay}_wr_{warmup_ratio}', '--batch_size=32', '--epoch=10', '--gradient_accumulation_steps=8', '--learning_rate=0.00001', '--min_lr=0.000001', '--decay_lr=true', '--warmup_ratio=0.05', '--weight_decay=0.1', '--save_data_interval=5120000', '--beta1=0.9', '--beta2=0.95', '--grad_clip=1.0', '--compile=true', '--backend=hccl', '--device=npu', '--device_type=npu', '--s3_remote_dir_path=s3://bucket-3028/public/SpeciesLLM-Training//modelarts-job-2c1f1141-d78b-4709-9a41-3f9566d2f62d', '--hidden_size=1280', '--num_hidden_layers=24', '--num_attention_heads=20', '--intermediate_size=5120', '--hidden_act=gelu', '--hidden_dropout_prob=0.1', '--cell_hidden_size=128', '--attention_probs_dropout_prob=0.1', '--type_vocab_size=2', '--initializer_range=0.02', '--layer_norm_eps=1e-12', '--_attn_implementation=sdpa', '--use_batch_labels=true', '--num_batch_labels=12028', '--use_species_labels=true', '--num_species_labels=11', '--use_tissue_labels=true', '--num_tissue_labels=154', '--use_seqmethod_labels=true', '--num_seqmethod_labels=28', '--use_disease_labels=true', '--num_disease_labels=143', '--use_age_labels=true', '--num_age_labels=5', '--use_sex_labels=true', '--num_sex_labels=3', '--cell_emb_style=cls', '--chunk_size_feed_forward=0', '--explicit_zero_prob=true']
+
+=== sys.argv ===
+['train_MNodes_torchrun_mfu_preindexparquet.py', '--data_path=./all_shuffled_data', '--num_of_used_data=0', '--emb_path=./macrogene_embeddings', '--seq_len=862', '--out_path=hs_{hidden_size}_nh_{num_hidden_layers}_na_{num_attention_heads}_hdp_{hidden_dropout_prob}_lr_{learning_rate}_mlr_{min_lr}_wd_{weight_decay}_wr_{warmup_ratio}', '--batch_size=32', '--epoch=10', '--gradient_accumulation_steps=8', '--learning_rate=0.00001', '--min_lr=0.000001', '--decay_lr=true', '--warmup_ratio=0.05', '--weight_decay=0.1', '--save_data_interval=5120000', '--beta1=0.9', '--beta2=0.95', '--grad_clip=1.0', '--compile=true', '--backend=hccl', '--device=npu', '--device_type=npu', '--s3_remote_dir_path=s3://bucket-3028/public/SpeciesLLM-Training//modelarts-job-2c1f1141-d78b-4709-9a41-3f9566d2f62d', '--hidden_size=1280', '--num_hidden_layers=24', '--num_attention_heads=20', '--intermediate_size=5120', '--hidden_act=gelu', '--hidden_dropout_prob=0.1', '--cell_hidden_size=128', '--attention_probs_dropout_prob=0.1', '--type_vocab_size=2', '--initializer_range=0.02', '--layer_norm_eps=1e-12', '--_attn_implementation=sdpa', '--use_batch_labels=true', '--num_batch_labels=12028', '--use_species_labels=true', '--num_species_labels=11', '--use_tissue_labels=true', '--num_tissue_labels=154', '--use_seqmethod_labels=true', '--num_seqmethod_labels=28', '--use_disease_labels=true', '--num_disease_labels=143', '--use_age_labels=true', '--num_age_labels=5', '--use_sex_labels=true', '--num_sex_labels=3', '--cell_emb_style=cls', '--chunk_size_feed_forward=0', '--explicit_zero_prob=true']
+
+=== sys.argv ===
+['train_MNodes_torchrun_mfu_preindexparquet.py', '--data_path=./all_shuffled_data', '--num_of_used_data=0', '--emb_path=./macrogene_embeddings', '--seq_len=862', '--out_path=hs_{hidden_size}_nh_{num_hidden_layers}_na_{num_attention_heads}_hdp_{hidden_dropout_prob}_lr_{learning_rate}_mlr_{min_lr}_wd_{weight_decay}_wr_{warmup_ratio}', '--batch_size=32', '--epoch=10', '--gradient_accumulation_steps=8', '--learning_rate=0.00001', '--min_lr=0.000001', '--decay_lr=true', '--warmup_ratio=0.05', '--weight_decay=0.1', '--save_data_interval=5120000', '--beta1=0.9', '--beta2=0.95', '--grad_clip=1.0', '--compile=true', '--backend=hccl', '--device=npu', '--device_type=npu', '--s3_remote_dir_path=s3://bucket-3028/public/SpeciesLLM-Training//modelarts-job-2c1f1141-d78b-4709-9a41-3f9566d2f62d', '--hidden_size=1280', '--num_hidden_layers=24', '--num_attention_heads=20', '--intermediate_size=5120', '--hidden_act=gelu', '--hidden_dropout_prob=0.1', '--cell_hidden_size=128', '--attention_probs_dropout_prob=0.1', '--type_vocab_size=2', '--initializer_range=0.02', '--layer_norm_eps=1e-12', '--_attn_implementation=sdpa', '--use_batch_labels=true', '--num_batch_labels=12028', '--use_species_labels=true', '--num_species_labels=11', '--use_tissue_labels=true', '--num_tissue_labels=154', '--use_seqmethod_labels=true', '--num_seqmethod_labels=28', '--use_disease_labels=true', '--num_disease_labels=143', '--use_age_labels=true', '--num_age_labels=5', '--use_sex_labels=true', '--num_sex_labels=3', '--cell_emb_style=cls', '--chunk_size_feed_forward=0', '--explicit_zero_prob=true']
+
+{
+    "data_path": "./all_shuffled_data",
+    "num_of_used_data": 0,
+    "emb_path": "./macrogene_embeddings",
+    "seq_len": 862,
+    "out_path": "hs_{hidden_size}_nh_{num_hidden_layers}_na_{num_attention_heads}_hdp_{hidden_dropout_prob}_lr_{learning_rate}_mlr_{min_lr}_wd_{weight_decay}_wr_{warmup_ratio}",
+    "batch_size": 32,
+    "epoch": 10,
+    "gradient_accumulation_steps": 8,
+    "learning_rate": 1e-05,
+    "min_lr": 1e-06,
+    "decay_lr": true,
+    "warmup_iters": 2000,
+    "warmup_ratio": 0.05,
+    "weight_decay": 0.1,
+    "save_data_interval": 5120000,
+    "beta1": 0.9,
+    "beta2": 0.95,
+    "grad_clip": 1.0,
+    "compile": true,
+    "backend": "hccl",
+    "device": "npu",
+    "device_type": "npu",
+    "s3_remote_dir_path": "s3://bucket-3028/public/SpeciesLLM-Training//modelarts-job-2c1f1141-d78b-4709-9a41-3f9566d2f62d",
+    "hidden_size": 1280,
+    "num_hidden_layers": 24,
+    "num_attention_heads": 20,
+    "intermediate_size": 5120,
+    "hidden_act": "gelu",
+    "hidden_dropout_prob": 0.1,
+    "cell_hidden_size": 128,
+    "attention_probs_dropout_prob": 0.1,
+    "type_vocab_size": 2,
+    "initializer_range": 0.02,
+    "layer_norm_eps": 1e-12,
+    "_attn_implementation": "sdpa",
+    "use_batch_labels": "true",
+    "num_batch_labels": 12028,
+    "use_species_labels": "true",
+    "num_species_labels": 11,
+    "use_tissue_labels": "true",
+    "num_tissue_labels": 154,
+    "use_seqmethod_labels": "true",
+    "num_seqmethod_labels": 28,
+    "use_disease_labels": "true",
+    "num_disease_labels": 143,
+    "use_age_labels": "true",
+    "num_age_labels": 5,
+    "use_sex_labels": "true",
+    "num_sex_labels": 3,
+    "cell_emb_style": "cls",
+    "chunk_size_feed_forward": 0,
+    "explicit_zero_prob": "true"
+}
+{
+    "data_path": "./all_shuffled_data",
+    "num_of_used_data": 0,
+    "emb_path": "./macrogene_embeddings",
+    "seq_len": 862,
+    "out_path": "hs_{hidden_size}_nh_{num_hidden_layers}_na_{num_attention_heads}_hdp_{hidden_dropout_prob}_lr_{learning_rate}_mlr_{min_lr}_wd_{weight_decay}_wr_{warmup_ratio}",
+    "batch_size": 32,
+    "epoch": 10,
+    "gradient_accumulation_steps": 8,
+    "learning_rate": 1e-05,
+    "min_lr": 1e-06,
+    "decay_lr": true,
+    "warmup_iters": 2000,
+    "warmup_ratio": 0.05,
+    "weight_decay": 0.1,
+    "save_data_interval": 5120000,
+    "beta1": 0.9,
+    "beta2": 0.95,
+    "grad_clip": 1.0,
+    "compile": true,
+    "backend": "hccl",
+    "device": "npu",
+    "device_type": "npu",
+    "s3_remote_dir_path": "s3://bucket-3028/public/SpeciesLLM-Training//modelarts-job-2c1f1141-d78b-4709-9a41-3f9566d2f62d",
+    "hidden_size": 1280,
+    "num_hidden_layers": 24,
+    "num_attention_heads": 20,
+    "intermediate_size": 5120,
+    "hidden_act": "gelu",
+    "hidden_dropout_prob": 0.1,
+    "cell_hidden_size": 128,
+    "attention_probs_dropout_prob": 0.1,
+    "type_vocab_size": 2,
+    "initializer_range": 0.02,
+    "layer_norm_eps": 1e-12,
+    "_attn_implementation": "sdpa",
+    "use_batch_labels": "true",
+    "num_batch_labels": 12028,
+    "use_species_labels": "true",
+    "num_species_labels": 11,
+    "use_tissue_labels": "true",
+    "num_tissue_labels": 154,
+    "use_seqmethod_labels": "true",
+    "num_seqmethod_labels": 28,
+    "use_disease_labels": "true",
+    "num_disease_labels": 143,
+    "use_age_labels": "true",
+    "num_age_labels": 5,
+    "use_sex_labels": "true",
+    "num_sex_labels": 3,
+    "cell_emb_style": "cls",
+    "chunk_size_feed_forward": 0,
+    "explicit_zero_prob": "true"
+}{
+    "data_path": "./all_shuffled_data",
+    "num_of_used_data": 0,
+    "emb_path": "./macrogene_embeddings",
+    "seq_len": 862,
+    "out_path": "hs_{hidden_size}_nh_{num_hidden_layers}_na_{num_attention_heads}_hdp_{hidden_dropout_prob}_lr_{learning_rate}_mlr_{min_lr}_wd_{weight_decay}_wr_{warmup_ratio}",
+    "batch_size": 32,
+    "epoch": 10,
+    "gradient_accumulation_steps": 8,
+    "learning_rate": 1e-05,
+    "min_lr": 1e-06,
+    "decay_lr": true,
+    "warmup_iters": 2000,
+    "warmup_ratio": 0.05,
+    "weight_decay": 0.1,
+    "save_data_interval": 5120000,
+    "beta1": 0.9,
+    "beta2": 0.95,
+    "grad_clip": 1.0,
+    "compile": true,
+    "backend": "hccl",
+    "device": "npu",
+    "device_type": "npu",
+    "s3_remote_dir_path": "s3://bucket-3028/public/SpeciesLLM-Training//modelarts-job-2c1f1141-d78b-4709-9a41-3f9566d2f62d",
+    "hidden_size": 1280,
+    "num_hidden_layers": 24,
+    "num_attention_heads": 20,
+    "intermediate_size": 5120,
+    "hidden_act": "gelu",
+    "hidden_dropout_prob": 0.1,
+    "cell_hidden_size": 128,
+    "attention_probs_dropout_prob": 0.1,
+    "type_vocab_size": 2,
+    "initializer_range": 0.02,
+    "layer_norm_eps": 1e-12,
+    "_attn_implementation": "sdpa",
+    "use_batch_labels": "true",
+    "num_batch_labels": 12028,
+    "use_species_labels": "true",
+    "num_species_labels": 11,
+    "use_tissue_labels": "true",
+    "num_tissue_labels": 154,
+    "use_seqmethod_labels": "true",
+    "num_seqmethod_labels": 28,
+    "use_disease_labels": "true",
+    "num_disease_labels": 143,
+    "use_age_labels": "true",
+    "num_age_labels": 5,
+    "use_sex_labels": "true",
+    "num_sex_labels": 3,
+    "cell_emb_style": "cls",
+    "chunk_size_feed_forward": 0,
+    "explicit_zero_prob": "true"
+}{
+    "data_path": "./all_shuffled_data",
+    "num_of_used_data": 0,
+    "emb_path": "./macrogene_embeddings",
+    "seq_len": 862,
+    "out_path": "hs_{hidden_size}_nh_{num_hidden_layers}_na_{num_attention_heads}_hdp_{hidden_dropout_prob}_lr_{learning_rate}_mlr_{min_lr}_wd_{weight_decay}_wr_{warmup_ratio}",
+    "batch_size": 32,
+    "epoch": 10,
+    "gradient_accumulation_steps": 8,
+    "learning_rate": 1e-05,
+    "min_lr": 1e-06,
+    "decay_lr": true,
+    "warmup_iters": 2000,
+    "warmup_ratio": 0.05,
+    "weight_decay": 0.1,
+    "save_data_interval": 5120000,
+    "beta1": 0.9,
+    "beta2": 0.95,
+    "grad_clip": 1.0,
+    "compile": true,
+    "backend": "hccl",
+    "device": "npu",
+    "device_type": "npu",
+    "s3_remote_dir_path": "s3://bucket-3028/public/SpeciesLLM-Training//modelarts-job-2c1f1141-d78b-4709-9a41-3f9566d2f62d",
+    "hidden_size": 1280,
+    "num_hidden_layers": 24,
+    "num_attention_heads": 20,
+    "intermediate_size": 5120,
+    "hidden_act": "gelu",
+    "hidden_dropout_prob": 0.1,
+    "cell_hidden_size": 128,
+    "attention_probs_dropout_prob": 0.1,
+    "type_vocab_size": 2,
+    "initializer_range": 0.02,
+    "layer_norm_eps": 1e-12,
+    "_attn_implementation": "sdpa",
+    "use_batch_labels": "true",
+    "num_batch_labels": 12028,
+    "use_species_labels": "true",
+    "num_species_labels": 11,
+    "use_tissue_labels": "true",
+    "num_tissue_labels": 154,
+    "use_seqmethod_labels": "true",
+    "num_seqmethod_labels": 28,
+    "use_disease_labels": "true",
+    "num_disease_labels": 143,
+    "use_age_labels": "true",
+    "num_age_labels": 5,
+    "use_sex_labels": "true",
+    "num_sex_labels": 3,
+    "cell_emb_style": "cls",
+    "chunk_size_feed_forward": 0,
+    "explicit_zero_prob": "true"
+}{
+    "data_path": "./all_shuffled_data",
+    "num_of_used_data": 0,
+    "emb_path": "./macrogene_embeddings",
+    "seq_len": 862,
+    "out_path": "hs_{hidden_size}_nh_{num_hidden_layers}_na_{num_attention_heads}_hdp_{hidden_dropout_prob}_lr_{learning_rate}_mlr_{min_lr}_wd_{weight_decay}_wr_{warmup_ratio}",
+    "batch_size": 32,
+    "epoch": 10,
+    "gradient_accumulation_steps": 8,
+    "learning_rate": 1e-05,
+    "min_lr": 1e-06,
+    "decay_lr": true,
+    "warmup_iters": 2000,
+    "warmup_ratio": 0.05,
+    "weight_decay": 0.1,
+    "save_data_interval": 5120000,
+    "beta1": 0.9,
+    "beta2": 0.95,
+    "grad_clip": 1.0,
+    "compile": true,
+    "backend": "hccl",
+    "device": "npu",
+    "device_type": "npu",
+    "s3_remote_dir_path": "s3://bucket-3028/public/SpeciesLLM-Training//modelarts-job-2c1f1141-d78b-4709-9a41-3f9566d2f62d",
+    "hidden_size": 1280,
+    "num_hidden_layers": 24,
+    "num_attention_heads": 20,
+    "intermediate_size": 5120,
+    "hidden_act": "gelu",
+    "hidden_dropout_prob": 0.1,
+    "cell_hidden_size": 128,
+    "attention_probs_dropout_prob": 0.1,
+    "type_vocab_size": 2,
+    "initializer_range": 0.02,
+    "layer_norm_eps": 1e-12,
+    "_attn_implementation": "sdpa",
+    "use_batch_labels": "true",
+    "num_batch_labels": 12028,
+    "use_species_labels": "true",
+    "num_species_labels": 11,
+    "use_tissue_labels": "true",
+    "num_tissue_labels": 154,
+    "use_seqmethod_labels": "true",
+    "num_seqmethod_labels": 28,
+    "use_disease_labels": "true",
+    "num_disease_labels": 143,
+    "use_age_labels": "true",
+    "num_age_labels": 5,
+    "use_sex_labels": "true",
+    "num_sex_labels": 3,
+    "cell_emb_style": "cls",
+    "chunk_size_feed_forward": 0,
+    "explicit_zero_prob": "true"
+}
+
+
+
+{
+    "data_path": "./all_shuffled_data",
+    "num_of_used_data": 0,
+    "emb_path": "./macrogene_embeddings",
+    "seq_len": 862,
+    "out_path": "hs_{hidden_size}_nh_{num_hidden_layers}_na_{num_attention_heads}_hdp_{hidden_dropout_prob}_lr_{learning_rate}_mlr_{min_lr}_wd_{weight_decay}_wr_{warmup_ratio}",
+    "batch_size": 32,
+    "epoch": 10,
+    "gradient_accumulation_steps": 8,
+    "learning_rate": 1e-05,
+    "min_lr": 1e-06,
+    "decay_lr": true,
+    "warmup_iters": 2000,
+    "warmup_ratio": 0.05,
+    "weight_decay": 0.1,
+    "save_data_interval": 5120000,
+    "beta1": 0.9,
+    "beta2": 0.95,
+    "grad_clip": 1.0,
+    "compile": true,
+    "backend": "hccl",
+    "device": "npu",
+    "device_type": "npu",
+    "s3_remote_dir_path": "s3://bucket-3028/public/SpeciesLLM-Training//modelarts-job-2c1f1141-d78b-4709-9a41-3f9566d2f62d",
+    "hidden_size": 1280,
+    "num_hidden_layers": 24,
+    "num_attention_heads": 20,
+    "intermediate_size": 5120,
+    "hidden_act": "gelu",
+    "hidden_dropout_prob": 0.1,
+    "cell_hidden_size": 128,
+    "attention_probs_dropout_prob": 0.1,
+    "type_vocab_size": 2,
+    "initializer_range": 0.02,
+    "layer_norm_eps": 1e-12,
+    "_attn_implementation": "sdpa",
+    "use_batch_labels": "true",
+    "num_batch_labels": 12028,
+    "use_species_labels": "true",
+    "num_species_labels": 11,
+    "use_tissue_labels": "true",
+    "num_tissue_labels": 154,
+    "use_seqmethod_labels": "true",
+    "num_seqmethod_labels": 28,
+    "use_disease_labels": "true",
+    "num_disease_labels": 143,
+    "use_age_labels": "true",
+    "num_age_labels": 5,
+    "use_sex_labels": "true",
+    "num_sex_labels": 3,
+    "cell_emb_style": "cls",
+    "chunk_size_feed_forward": 0,
+    "explicit_zero_prob": "true"
+}{
+    "data_path": "./all_shuffled_data",
+    "num_of_used_data": 0,
+    "emb_path": "./macrogene_embeddings",
+    "seq_len": 862,
+    "out_path": "hs_{hidden_size}_nh_{num_hidden_layers}_na_{num_attention_heads}_hdp_{hidden_dropout_prob}_lr_{learning_rate}_mlr_{min_lr}_wd_{weight_decay}_wr_{warmup_ratio}",
+    "batch_size": 32,
+    "epoch": 10,
+    "gradient_accumulation_steps": 8,
+    "learning_rate": 1e-05,
+    "min_lr": 1e-06,
+    "decay_lr": true,
+    "warmup_iters": 2000,
+    "warmup_ratio": 0.05,
+    "weight_decay": 0.1,
+    "save_data_interval": 5120000,
+    "beta1": 0.9,
+    "beta2": 0.95,
+    "grad_clip": 1.0,
+    "compile": true,
+    "backend": "hccl",
+    "device": "npu",
+    "device_type": "npu",
+    "s3_remote_dir_path": "s3://bucket-3028/public/SpeciesLLM-Training//modelarts-job-2c1f1141-d78b-4709-9a41-3f9566d2f62d",
+    "hidden_size": 1280,
+    "num_hidden_layers": 24,
+    "num_attention_heads": 20,
+    "intermediate_size": 5120,
+    "hidden_act": "gelu",
+    "hidden_dropout_prob": 0.1,
+    "cell_hidden_size": 128,
+    "attention_probs_dropout_prob": 0.1,
+    "type_vocab_size": 2,
+    "initializer_range": 0.02,
+    "layer_norm_eps": 1e-12,
+    "_attn_implementation": "sdpa",
+    "use_batch_labels": "true",
+    "num_batch_labels": 12028,
+    "use_species_labels": "true",
+    "num_species_labels": 11,
+    "use_tissue_labels": "true",
+    "num_tissue_labels": 154,
+    "use_seqmethod_labels": "true",
+    "num_seqmethod_labels": 28,
+    "use_disease_labels": "true",
+    "num_disease_labels": 143,
+    "use_age_labels": "true",
+    "num_age_labels": 5,
+    "use_sex_labels": "true",
+    "num_sex_labels": 3,
+    "cell_emb_style": "cls",
+    "chunk_size_feed_forward": 0,
+    "explicit_zero_prob": "true"
+}
+
+{
+    "data_path": "./all_shuffled_data",
+    "num_of_used_data": 0,
+    "emb_path": "./macrogene_embeddings",
+    "seq_len": 862,
+    "out_path": "hs_{hidden_size}_nh_{num_hidden_layers}_na_{num_attention_heads}_hdp_{hidden_dropout_prob}_lr_{learning_rate}_mlr_{min_lr}_wd_{weight_decay}_wr_{warmup_ratio}",
+    "batch_size": 32,
+    "epoch": 10,
+    "gradient_accumulation_steps": 8,
+    "learning_rate": 1e-05,
+    "min_lr": 1e-06,
+    "decay_lr": true,
+    "warmup_iters": 2000,
+    "warmup_ratio": 0.05,
+    "weight_decay": 0.1,
+    "save_data_interval": 5120000,
+    "beta1": 0.9,
+    "beta2": 0.95,
+    "grad_clip": 1.0,
+    "compile": true,
+    "backend": "hccl",
+    "device": "npu",
+    "device_type": "npu",
+    "s3_remote_dir_path": "s3://bucket-3028/public/SpeciesLLM-Training//modelarts-job-2c1f1141-d78b-4709-9a41-3f9566d2f62d",
+    "hidden_size": 1280,
+    "num_hidden_layers": 24,
+    "num_attention_heads": 20,
+    "intermediate_size": 5120,
+    "hidden_act": "gelu",
+    "hidden_dropout_prob": 0.1,
+    "cell_hidden_size": 128,
+    "attention_probs_dropout_prob": 0.1,
+    "type_vocab_size": 2,
+    "initializer_range": 0.02,
+    "layer_norm_eps": 1e-12,
+    "_attn_implementation": "sdpa",
+    "use_batch_labels": "true",
+    "num_batch_labels": 12028,
+    "use_species_labels": "true",
+    "num_species_labels": 11,
+    "use_tissue_labels": "true",
+    "num_tissue_labels": 154,
+    "use_seqmethod_labels": "true",
+    "num_seqmethod_labels": 28,
+    "use_disease_labels": "true",
+    "num_disease_labels": 143,
+    "use_age_labels": "true",
+    "num_age_labels": 5,
+    "use_sex_labels": "true",
+    "num_sex_labels": 3,
+    "cell_emb_style": "cls",
+    "chunk_size_feed_forward": 0,
+    "explicit_zero_prob": "true"
+}
+
+=== build model ===
+/home/ma-user/modelarts/user-job-dir/SpeciesLLM/hs_1280_nh_24_na_20_hdp_0.1_lr_1e-05_mlr_1e-06_wd_0.1_wr_0.05
+s3://bucket-3028/public/SpeciesLLM-Training/hs_1280_nh_24_na_20_hdp_0.1_lr_1e-05_mlr_1e-06_wd_0.1_wr_0.05_modelarts-job-2c1f1141-d78b-4709-9a41-3f9566d2f62d
+
+=== build model ===
+/home/ma-user/modelarts/user-job-dir/SpeciesLLM/hs_1280_nh_24_na_20_hdp_0.1_lr_1e-05_mlr_1e-06_wd_0.1_wr_0.05
+s3://bucket-3028/public/SpeciesLLM-Training/hs_1280_nh_24_na_20_hdp_0.1_lr_1e-05_mlr_1e-06_wd_0.1_wr_0.05_modelarts-job-2c1f1141-d78b-4709-9a41-3f9566d2f62d
+
+=== build model ===
+/home/ma-user/modelarts/user-job-dir/SpeciesLLM/hs_1280_nh_24_na_20_hdp_0.1_lr_1e-05_mlr_1e-06_wd_0.1_wr_0.05
+s3://bucket-3028/public/SpeciesLLM-Training/hs_1280_nh_24_na_20_hdp_0.1_lr_1e-05_mlr_1e-06_wd_0.1_wr_0.05_modelarts-job-2c1f1141-d78b-4709-9a41-3f9566d2f62d
+
+=== build model ===
+/home/ma-user/modelarts/user-job-dir/SpeciesLLM/hs_1280_nh_24_na_20_hdp_0.1_lr_1e-05_mlr_1e-06_wd_0.1_wr_0.05
+s3://bucket-3028/public/SpeciesLLM-Training/hs_1280_nh_24_na_20_hdp_0.1_lr_1e-05_mlr_1e-06_wd_0.1_wr_0.05_modelarts-job-2c1f1141-d78b-4709-9a41-3f9566d2f62d
+
+=== build model ===
+/home/ma-user/modelarts/user-job-dir/SpeciesLLM/hs_1280_nh_24_na_20_hdp_0.1_lr_1e-05_mlr_1e-06_wd_0.1_wr_0.05
+s3://bucket-3028/public/SpeciesLLM-Training/hs_1280_nh_24_na_20_hdp_0.1_lr_1e-05_mlr_1e-06_wd_0.1_wr_0.05_modelarts-job-2c1f1141-d78b-4709-9a41-3f9566d2f62d
+
+=== build model ===
+/home/ma-user/modelarts/user-job-dir/SpeciesLLM/hs_1280_nh_24_na_20_hdp_0.1_lr_1e-05_mlr_1e-06_wd_0.1_wr_0.05
+s3://bucket-3028/public/SpeciesLLM-Training/hs_1280_nh_24_na_20_hdp_0.1_lr_1e-05_mlr_1e-06_wd_0.1_wr_0.05_modelarts-job-2c1f1141-d78b-4709-9a41-3f9566d2f62d
+ddp: True, rank: 0, local_rank: 0, world_size: 24, master_process: True, device: npu:0, tokens_per_epoch: 5296128
+
+=== build model ===
+/home/ma-user/modelarts/user-job-dir/SpeciesLLM/hs_1280_nh_24_na_20_hdp_0.1_lr_1e-05_mlr_1e-06_wd_0.1_wr_0.05
+s3://bucket-3028/public/SpeciesLLM-Training/hs_1280_nh_24_na_20_hdp_0.1_lr_1e-05_mlr_1e-06_wd_0.1_wr_0.05_modelarts-job-2c1f1141-d78b-4709-9a41-3f9566d2f62d
+
+=== build model ===
+/home/ma-user/modelarts/user-job-dir/SpeciesLLM/hs_1280_nh_24_na_20_hdp_0.1_lr_1e-05_mlr_1e-06_wd_0.1_wr_0.05
+s3://bucket-3028/public/SpeciesLLM-Training/hs_1280_nh_24_na_20_hdp_0.1_lr_1e-05_mlr_1e-06_wd_0.1_wr_0.05_modelarts-job-2c1f1141-d78b-4709-9a41-3f9566d2f62d
+
+ddp: True, rank: 3, local_rank: 3, world_size: 24, master_process: False, device: npu:3, tokens_per_epoch: 5296128
+ddp: True, rank: 6, local_rank: 6, world_size: 24, master_process: False, device: npu:6, tokens_per_epoch: 5296128
+ddp: True, rank: 1, local_rank: 1, world_size: 24, master_process: False, device: npu:1, tokens_per_epoch: 5296128
+ddp: True, rank: 7, local_rank: 7, world_size: 24, master_process: False, device: npu:7, tokens_per_epoch: 5296128
+ddp: True, rank: 2, local_rank: 2, world_size: 24, master_process: False, device: npu:2, tokens_per_epoch: 5296128
+ddp: True, rank: 4, local_rank: 4, world_size: 24, master_process: False, device: npu:4, tokens_per_epoch: 5296128
+ddp: True, rank: 5, local_rank: 5, world_size: 24, master_process: False, device: npu:5, tokens_per_epoch: 5296128
+number of parameters: 495.30M
+number of parameters: 495.30M
+number of parameters: 495.30M
+number of parameters: 495.30M
+number of parameters: 495.30M
+number of parameters: 495.30M
+number of parameters: 495.30M
+number of parameters: 495.30M
+True compiling the model...(take a ~minute)

@@ -1,0 +1,27 @@
+.
+├── ./Arabidopsis_thaliana
+├── ./Bos_taurus
+├── ./Caenorhabditis_elegans
+├── ./Callithrix_jacchus
+├── ./Danio_rerio
+├── ./Drosophila_melanogaster
+├── ./Equus_caballus
+├── ./Gallus_gallus
+├── ./Gorilla_gorilla
+├── ./Heterocephalus_glaber
+├── ./Homo_sapiens
+├── ./Homo_sapiens_check.log
+├── ./Macaca_mulatta
+├── ./Mus_musculus
+├── ./Mus_musculus_check.log
+├── ./Oryctolagus_cuniculus
+├── ./Oryza_sativa
+├── ./Ovis_aries
+├── ./Pan_troglodytes
+├── ./scbasecount_raw.txt
+├── ./Schistosoma_mansoni
+├── ./Solanum_lycopersicum
+├── ./Sus_scrofa
+└── ./Zea_mays
+
+22 directories, 3 files
