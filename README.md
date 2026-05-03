@@ -140,8 +140,12 @@ Extracts cell embeddings (CLS token) and gene embeddings from pre-trained checkp
 ```
 SpeciesLLM/
 ├── train_MNodes_torchrun_mfu_preindexparquet.py   # Main training script
-├── run_train.sh                                    # Simple launch script
-├── train_cmd_singlenode.sh                         # Full-parameter training script
+├── scripts/
+│   ├── generate_test_data.sh                       # Test-data generation command
+│   ├── train_multinode.sh                          # Multi-node training launcher
+│   ├── train_singlenode.sh                         # Single-node training command
+│   ├── train_modelarts.sh                          # ModelArts training wrapper
+│   └── create_env_modelarts.sh                     # ModelArts environment setup
 ├── get_embedding.py                                # Embedding extraction
 ├── shuffle_species.py                              # Data shuffling & chunking
 ├── merge_macrogene_rounds_parallel.py              # Multi-round macrogene data merging

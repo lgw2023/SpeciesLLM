@@ -1,0 +1,63 @@
+# Local Command Scripts
+
+These scripts resolve the project root from their own location before running
+anything, so they can be called from any current working directory while still
+using the project-root Python imports, `.env`, data paths, and embedding paths.
+
+## Generate test data
+
+```bash
+bash scripts/generate_test_data.sh
+```
+
+Useful overrides:
+
+```bash
+DRY_RUN=1 bash scripts/generate_test_data.sh
+SKIP_EXISTING=1 bash scripts/generate_test_data.sh
+OUTPUT_DIR=/path/to/output bash scripts/generate_test_data.sh
+```
+
+The generated dataset defaults to:
+
+```text
+Stage2_SpeciesLLMData/all_shuffled_data_test
+```
+
+## Train
+
+Multi-node launcher:
+
+```bash
+bash scripts/train_multinode.sh
+```
+
+Run multi-node training on the test dataset:
+
+```bash
+TRAIN_DATASET=test bash scripts/train_multinode.sh
+```
+
+Single-node command:
+
+```bash
+bash scripts/train_singlenode.sh
+```
+
+ModelArts command:
+
+```bash
+bash scripts/train_modelarts.sh
+```
+
+ModelArts environment setup:
+
+```bash
+bash scripts/create_env_modelarts.sh
+```
+
+The training entrypoint remains in the project root:
+
+```text
+train_MNodes_torchrun_mfu_preindexparquet.py
+```

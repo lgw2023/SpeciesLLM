@@ -6,18 +6,19 @@ set -euo pipefail
 #
 # Run on the master node:
 #   SSH_PASSWORD='your-password' WORKDIR=/data1/liguowei/SpeciesLLM \
-#   bash train_cmd_multinode.sh
+#   bash scripts/train_multinode.sh
 #
 # Worker mode is normally started by the launcher through ssh:
-#   NODE_RANK=1 bash train_cmd_multinode.sh --worker
+#   NODE_RANK=1 bash scripts/train_multinode.sh --worker
 #
 # All configuration can be overridden with environment variables. The default
-# training hyperparameters mirror train_cmd_singlenode.sh.
+# training hyperparameters mirror scripts/train_singlenode.sh.
 ###############################################################################
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd -P)"
 SELF_NAME="$(basename "${BASH_SOURCE[0]}")"
-ENV_FILE="${ENV_FILE:-$SCRIPT_DIR/.env}"
+ENV_FILE="${ENV_FILE:-$PROJECT_ROOT/.env}"
 
 load_env_defaults() {
   local env_file="$1"
@@ -77,8 +78,8 @@ SSH_PASSWORD="${SSH_PASSWORD:-}"
 SSH_EXTRA_OPTS="${SSH_EXTRA_OPTS:-}"
 
 # Project directory on every server. It must contain the training entry, data,
-# embeddings, and this script after optional SYNC_SELF.
-WORKDIR="${WORKDIR:-$SCRIPT_DIR}"
+# embeddings, and the scripts/ directory after optional SYNC_SELF.
+WORKDIR="${WORKDIR:-$PROJECT_ROOT}"
 TRAIN_ENTRY="${TRAIN_ENTRY:-train_MNodes_torchrun_mfu_preindexparquet.py}"
 
 LOG_SUBDIR="${LOG_SUBDIR:-torchrun_logs}"
@@ -98,7 +99,21 @@ ASCEND_HOME_PATH="${ASCEND_HOME_PATH:-$ASCEND_TOOLKIT_HOME}"
 # ---------- training parameters ----------
 DEFAULT_OUT_PATH='hs_{hidden_size}_nh_{num_hidden_layers}_na_{num_attention_heads}_hdp_{hidden_dropout_prob}_lr_{learning_rate}_mlr_{min_lr}_wd_{weight_decay}_wr_{warmup_ratio}'
 
-data_path="${data_path:-${DATA_PATH:-./Stage2_SpeciesLLMData/all_shuffled_data}}"
+TRAIN_DATASET="${TRAIN_DATASET:-full}"
+case "$TRAIN_DATASET" in
+  full)
+    DEFAULT_DATA_PATH="./Stage2_SpeciesLLMData/all_shuffled_data"
+    ;;
+  test)
+    DEFAULT_DATA_PATH="./Stage2_SpeciesLLMData/all_shuffled_data_test"
+    ;;
+  *)
+    echo "Unsupported TRAIN_DATASET=${TRAIN_DATASET}. Use full or test."
+    exit 1
+    ;;
+esac
+
+data_path="${data_path:-${DATA_PATH:-$DEFAULT_DATA_PATH}}"
 num_of_used_data="${num_of_used_data:-${NUM_OF_USED_DATA:-0}}"
 emb_path="${emb_path:-${EMB_PATH:-./Stage2_macrogene_embeddings}}"
 seq_len="${seq_len:-${SEQ_LEN:-640}}"
@@ -171,7 +186,7 @@ usage() {
   cat <<USAGE
 Usage:
   # Master-node launcher
-  HOSTS="host0,host1,host2" OPTIONAL_HOSTS="host3" MASTER_ADDR=host0 WORKDIR=/path/to/SpeciesLLM bash $SELF_NAME
+  HOSTS="host0,host1,host2" OPTIONAL_HOSTS="host3" MASTER_ADDR=host0 WORKDIR=/path/to/SpeciesLLM bash scripts/$SELF_NAME
 
   # Worker mode, normally used by the launcher
   NODE_RANK=1 bash $SELF_NAME --worker
@@ -180,6 +195,7 @@ Important environment variables:
   NNODES, AUTO_NNODES, NPROC_PER_NODE, HOSTS, OPTIONAL_HOSTS, AUTO_OPTIONAL_HOSTS
   OPTIONAL_HOST_CONNECT_TIMEOUT, MASTER_ADDR, MASTER_PORT
   WORKDIR, SSH_USER, SSH_KEY, SSH_PASSWORD, SSH_EXTRA_OPTS, SYNC_SELF, DRY_RUN
+  TRAIN_DATASET=full|test
   DATA_PATH/data_path, EMB_PATH/emb_path, SEQ_LEN/seq_len, BATCH_SIZE/batch_size
 USAGE
 }
@@ -517,7 +533,8 @@ run_launcher() {
   resolve_launcher_hosts
 
   local self_abs="${SCRIPT_DIR}/${SELF_NAME}"
-  local remote_self="${WORKDIR}/${SELF_NAME}"
+  local remote_scripts_dir="${WORKDIR}/scripts"
+  local remote_self="${remote_scripts_dir}/${SELF_NAME}"
   local remote_log_dir="${WORKDIR}/${LOG_SUBDIR}"
 
   log "launcher start"
@@ -533,7 +550,7 @@ run_launcher() {
     log "prepare node_rank=${rank}, host=${host}"
 
     local mkdir_cmd
-    mkdir_cmd="mkdir -p $(shell_quote "$remote_log_dir")"
+    mkdir_cmd="mkdir -p $(shell_quote "$remote_log_dir") $(shell_quote "$remote_scripts_dir")"
 
     if [[ "$DRY_RUN" == "1" ]]; then
       echo "$(ssh_display_cmd) ${SSH_OPTS[*]-} ${SSH_USER}@${host} ${mkdir_cmd}"
