@@ -102,10 +102,10 @@ DEFAULT_OUT_PATH='hs_{hidden_size}_nh_{num_hidden_layers}_na_{num_attention_head
 TRAIN_DATASET="${TRAIN_DATASET:-full}"
 case "$TRAIN_DATASET" in
   full)
-    DEFAULT_DATA_PATH="./Stage2_SpeciesLLMData/all_shuffled_data"
+    DEFAULT_DATA_SUBDIR="all_shuffled_data"
     ;;
   test)
-    DEFAULT_DATA_PATH="./Stage2_SpeciesLLMData/all_shuffled_data_test"
+    DEFAULT_DATA_SUBDIR="all_shuffled_data_test"
     ;;
   *)
     echo "Unsupported TRAIN_DATASET=${TRAIN_DATASET}. Use full or test."
@@ -113,9 +113,14 @@ case "$TRAIN_DATASET" in
     ;;
 esac
 
+DATA_ROOT="${DATA_ROOT:-./Stage2_SpeciesLLMData}"
+EMB_ROOT="${EMB_ROOT:-.}"
+DEFAULT_DATA_PATH="${DATA_ROOT}/${DEFAULT_DATA_SUBDIR}"
+DEFAULT_EMB_PATH="${EMB_ROOT}/Stage2_macrogene_embeddings"
+
 data_path="${data_path:-${DATA_PATH:-$DEFAULT_DATA_PATH}}"
 num_of_used_data="${num_of_used_data:-${NUM_OF_USED_DATA:-0}}"
-emb_path="${emb_path:-${EMB_PATH:-./Stage2_macrogene_embeddings}}"
+emb_path="${emb_path:-${EMB_PATH:-$DEFAULT_EMB_PATH}}"
 seq_len="${seq_len:-${SEQ_LEN:-640}}"
 out_path="${out_path:-${OUT_PATH:-$DEFAULT_OUT_PATH}}"
 batch_size="${batch_size:-${BATCH_SIZE:-32}}"
@@ -196,7 +201,8 @@ Important environment variables:
   OPTIONAL_HOST_CONNECT_TIMEOUT, MASTER_ADDR, MASTER_PORT
   WORKDIR, SSH_USER, SSH_KEY, SSH_PASSWORD, SSH_EXTRA_OPTS, SYNC_SELF, DRY_RUN
   TRAIN_DATASET=full|test
-  DATA_PATH/data_path, EMB_PATH/emb_path, SEQ_LEN/seq_len, BATCH_SIZE/batch_size
+  DATA_ROOT, EMB_ROOT, DATA_PATH/data_path, EMB_PATH/emb_path
+  SEQ_LEN/seq_len, BATCH_SIZE/batch_size
 USAGE
 }
 
@@ -542,6 +548,7 @@ run_launcher() {
   log "OPTIONAL_HOSTS=${OPTIONAL_HOSTS_CSV}, AUTO_OPTIONAL_HOSTS=${AUTO_OPTIONAL_HOSTS}, AUTO_NNODES=${AUTO_NNODES}"
   log "NNODES=${NNODES}, NPROC_PER_NODE=${NPROC_PER_NODE}, MASTER=${MASTER_ADDR}:${MASTER_PORT}"
   log "WORKDIR=${WORKDIR}, remote_script=${remote_self}"
+  log "TRAIN_DATASET=${TRAIN_DATASET}, data_path=${data_path}, emb_path=${emb_path}"
   log "SYNC_SELF=${SYNC_SELF}, DRY_RUN=${DRY_RUN}"
 
   local rank host
