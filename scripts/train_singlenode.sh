@@ -13,7 +13,7 @@ exec torchrun \
   --master_addr=127.0.0.1 \
   --master_port=12345 \
   train_MNodes_torchrun_mfu_preindexparquet.py \
-  --data_path=./Stage2_SpeciesLLMData/all_shuffled_data \
+  --data_path=./Stage2_SpeciesLLMData/all_flatten_data \
   --num_of_used_data=0 \
   --emb_path=./Stage2_macrogene_embeddings \
   --seq_len=640 \

@@ -13,7 +13,7 @@ exec torchrun \
   --master_addr ma-job-2c1f1141-d78b-4709-9a41-3f9566d2f62d-worker-0.ma-job-2c1f1141-d78b-4709-9a41-3f9566d2f62d \
   --master_port 12345 \
   train_MNodes_torchrun_mfu_preindexparquet.py \
-  --data_path=./all_shuffled_data \
+  --data_path=./all_flatten_data \
   --num_of_used_data=0 \
   --emb_path=./macrogene_embeddings \
   --seq_len=862 \

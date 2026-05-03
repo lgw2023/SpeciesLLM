@@ -94,7 +94,7 @@ torchrun \
   --nproc_per_node=8 \
   --nnodes=1 \
   train_MNodes_torchrun_mfu_preindexparquet.py \
-  --data_path=./Stage2_SpeciesLLMData/all_shuffled_data \
+  --data_path=./Stage2_SpeciesLLMData/all_flatten_data \
   --emb_path=./Stage2_macrogene_embeddings \
   --seq_len=640 \
   --batch_size=32 \
@@ -147,7 +147,8 @@ SpeciesLLM/
 │   ├── train_modelarts.sh                          # ModelArts training wrapper
 │   └── create_env_modelarts.sh                     # ModelArts environment setup
 ├── get_embedding.py                                # Embedding extraction
-├── shuffle_species.py                              # Data shuffling & chunking
+├── shuffle_species.py                              # Legacy data flattening/shuffling
+├── shuffle_macrogene_rounds_parallel.py            # Flatten species folders into training chunks
 ├── merge_macrogene_rounds_parallel.py              # Multi-round macrogene data merging
 ├── nanoBERT/
 │   ├── model/

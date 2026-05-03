@@ -39,8 +39,8 @@ print(f"脚本路径: {script_path}")
 print(f"脚本目录: {script_dir}")
 
 input_path = f'{script_dir}/all_data/'
-output_dir = f'{script_dir}/all_shuffled_data/'
-output_files = "shuffled_part_{num}.parquet"
+output_dir = f'{script_dir}/all_flatten_data/'
+output_files = "all_flatten_part_{num}.parquet"
 rows_per_file = 16384
 print(f"数据路径: {input_path}")
 print(f"输出目录: {output_dir}")

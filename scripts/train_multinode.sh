@@ -102,10 +102,10 @@ DEFAULT_OUT_PATH='hs_{hidden_size}_nh_{num_hidden_layers}_na_{num_attention_head
 TRAIN_DATASET="${TRAIN_DATASET:-full}"
 case "$TRAIN_DATASET" in
   full)
-    DEFAULT_DATA_SUBDIR="all_shuffled_data"
+    DEFAULT_DATA_SUBDIR="all_flatten_data"
     ;;
   test)
-    DEFAULT_DATA_SUBDIR="all_shuffled_data_test"
+    DEFAULT_DATA_SUBDIR="all_flatten_data_test"
     ;;
   *)
     echo "Unsupported TRAIN_DATASET=${TRAIN_DATASET}. Use full or test."

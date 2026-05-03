@@ -10,18 +10,34 @@ using the project-root Python imports, `.env`, data paths, and embedding paths.
 bash scripts/generate_test_data.sh
 ```
 
+This runs two steps:
+
+1. Merge a small per-species test dataset into
+   `Stage2_SpeciesLLMData/all_shuffled_test`.
+2. Flatten and globally shuffle that dataset into
+   `Stage2_SpeciesLLMData/all_flatten_data_test`, which is the directory read
+   by `TRAIN_DATASET=test`.
+
 Useful overrides:
 
 ```bash
 DRY_RUN=1 bash scripts/generate_test_data.sh
 SKIP_EXISTING=1 bash scripts/generate_test_data.sh
 OUTPUT_DIR=/path/to/output bash scripts/generate_test_data.sh
+FLATTEN_OUTPUT_DIR=/path/to/flat/output bash scripts/generate_test_data.sh
+SKIP_FLATTEN=1 bash scripts/generate_test_data.sh
 ```
 
-The generated dataset defaults to:
+The intermediate merged dataset defaults to:
 
 ```text
-Stage2_SpeciesLLMData/all_shuffled_data_test
+Stage2_SpeciesLLMData/all_shuffled_test
+```
+
+The final training-ready dataset defaults to:
+
+```text
+Stage2_SpeciesLLMData/all_flatten_data_test
 ```
 
 ## Train
