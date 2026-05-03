@@ -262,7 +262,7 @@ def setup_ddp(backend='hccl', device_type='npu'):
 
 def train_loop(args, model, ddp, rank, optimizer, train_data_filelist, train_sampler, device, config, ctx, scaler, grad_clip, out_dir, collate_fn, world_size):
     raw_model = model.module if ddp else model
-    iter_num, runing_mfu = 0, -1.0
+    iter_num, update_step, runing_mfu = 0, 0, -1.0
 
     save_step_interval = int(args.save_data_interval / world_size / args.batch_size)
     print(f"save_step_interval {save_step_interval} = save_data_interval {args.save_data_interval} / world_size {world_size} / batch_size {args.batch_size}")
@@ -317,22 +317,18 @@ def train_loop(args, model, ddp, rank, optimizer, train_data_filelist, train_sam
         max_batch_index = int(step_tensor.item())
         print(f"Node: {NODE_RANK} Rank: {rank} num_batches {num_batches} max_batch_index {max_batch_index}")
 
+        total_update_steps = math.ceil(max_batch_index / args.gradient_accumulation_steps) * args.epoch
+        lr_decay_iters = total_update_steps
+        warmup_iters = int(total_update_steps * args.warmup_ratio) if args.warmup_ratio else args.warmup_iters
+        if args.decay_lr:
+            assert lr_decay_iters > warmup_iters, \
+                f"lr_decay_iters ({lr_decay_iters}) must be > warmup_iters ({warmup_iters})"
+
         for batch_index, batch_data in enumerate(data_loader):
             loss_to_log.setdefault("train/epoch", []).append(epoch+1)
             loss_to_log.setdefault("train/batch_index", []).append(batch_index+1)
 
-            t_temp_1_lr = time.time()
-            lr_decay_iters = int(num_batches * args.epoch)
-            warmup_iters = int(num_batches * args.epoch * args.warmup_ratio) if args.warmup_ratio else args.warmup_iters
-            lr = get_lr(iter_num,
-                        args.min_lr,
-                        args.warmup_iters,
-                        args.learning_rate,
-                        lr_decay_iters) if args.decay_lr else args.learning_rate
-            for param_group in optimizer.param_groups:
-                param_group['lr'] = lr
-            t_temp_1_lr = time.time() - t_temp_1_lr
-            t_temp_1_sum_lr += t_temp_1_lr
+            t_temp_1_lr = 0.0
 
             t_temp_3_batchdata = time.time()
             input_gene_ids = batch_data["genes"].to(device)
@@ -445,7 +441,22 @@ def train_loop(args, model, ddp, rank, optimizer, train_data_filelist, train_sam
             #         print(f"WARNING: {name} grad is None! ^^^^^^^^^^^^^^^^^^^^^^")
             t_temp_9_step_update_grad = time.time()
             t_temp_10_sync = 0
-            if (batch_index + 1) % args.gradient_accumulation_steps == 0 or (batch_index + 1) == num_batches or (batch_index + 1) >= max_batch_index:
+            should_step = (
+                (batch_index + 1) % args.gradient_accumulation_steps == 0
+                or (batch_index + 1) >= max_batch_index
+            )
+            if should_step:
+                t_temp_1_lr = time.time()
+                lr = get_lr(update_step,
+                            args.min_lr,
+                            warmup_iters,
+                            args.learning_rate,
+                            lr_decay_iters) if args.decay_lr else args.learning_rate
+                for param_group in optimizer.param_groups:
+                    param_group['lr'] = lr
+                t_temp_1_lr = time.time() - t_temp_1_lr
+                t_temp_1_sum_lr += t_temp_1_lr
+
                 if grad_clip != 0.0:
                     scaler.unscale_(optimizer)
                     torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
@@ -464,6 +475,7 @@ def train_loop(args, model, ddp, rank, optimizer, train_data_filelist, train_sam
                 scaler.step(optimizer)
                 scaler.update()
                 optimizer.zero_grad()
+                update_step += 1
                 # print(f"rank: {rank} step update zero_grad done")
 
                 if (batch_index + 1) % save_step_interval == 0:
