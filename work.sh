@@ -2,6 +2,10 @@ set -euo pipefail
 
 cd /data/disk1/SpeciesLLM
 
+command -v ssh >/dev/null
+command -v rsync >/dev/null
+
+export SSH_USER=root
 export PYTHON_BIN=/data/miniconda3/bin/python
 export PROJECT_ROOT=/data/disk1/SpeciesLLM
 
@@ -60,30 +64,139 @@ export HCCL_WHITELIST_DISABLE=1
 export ASCEND_TOOLKIT_HOME=/usr/local/Ascend/ascend-toolkit/latest
 export ASCEND_HOME_PATH="${ASCEND_TOOLKIT_HOME}"
 
-# 只重新生成启动命令，不重新生成测试数据
-bash scripts/test_stage2_500m_multinode.sh commands
+split_hosts() {
+  HOSTS_ARR=()
+  local raw_host host
+  IFS=',' read -r -a HOSTS_ARR_RAW <<< "$HOSTS"
+  for raw_host in "${HOSTS_ARR_RAW[@]}"; do
+    host="${raw_host#"${raw_host%%[![:space:]]*}"}"
+    host="${host%"${host##*[![:space:]]}"}"
+    [[ -n "$host" ]] && HOSTS_ARR+=("$host")
+  done
+}
 
-# 检查 dry-run
+remote_mkdirs() {
+  local host="$1"
+  ssh "${SSH_USER}@${host}" "
+    set -e
+    mkdir -p '$PROJECT_ROOT' '$EMB_PATH' '$FLAT_TEST_DIR' '$COMMAND_DIR' '$WORKDIR/$LOG_SUBDIR' '$WORKDIR/training_output'
+  "
+}
+
+sync_dir_to_host() {
+  local source_dir="$1"
+  local host="$2"
+  local target_dir="$3"
+  shift 3
+
+  test -d "$source_dir"
+  rsync -aH --info=progress2 --delete "$@" \
+    "${source_dir%/}/" \
+    "${SSH_USER}@${host}:${target_dir%/}/"
+}
+
+sync_code_and_data_to_workers() {
+  split_hosts
+
+  local host
+  for host in "${HOSTS_ARR[@]}"; do
+    if [[ "$host" == "$MASTER_ADDR" ]]; then
+      echo "[SYNC] skip master host ${host}; source paths are already local"
+      continue
+    fi
+
+    echo "[SYNC] prepare ${host}"
+    remote_mkdirs "$host"
+
+    echo "[SYNC] project code -> ${host}:${PROJECT_ROOT}"
+    sync_dir_to_host "$PROJECT_ROOT" "$host" "$PROJECT_ROOT" \
+      --exclude '/Stage2_macrogene_embeddings/' \
+      --exclude '/Stage2_SpeciesLLMData/' \
+      --exclude '/training_output/' \
+      --exclude '/torchrun_logs/' \
+      --exclude '/papers/' \
+      --exclude '/.venv/' \
+      --exclude '/venv/' \
+      --exclude '/__pycache__/' \
+      --exclude '*.pt' \
+      --exclude '*.pth' \
+      --exclude '*.ckpt'
+
+    echo "[SYNC] embeddings -> ${host}:${EMB_PATH}"
+    sync_dir_to_host "$EMB_PATH" "$host" "$EMB_PATH"
+
+    echo "[SYNC] training data -> ${host}:${DATA_PATH}"
+    sync_dir_to_host "$DATA_PATH" "$host" "$DATA_PATH"
+
+    echo "[SYNC] generated command files -> ${host}:${COMMAND_DIR}"
+    sync_dir_to_host "$COMMAND_DIR" "$host" "$COMMAND_DIR"
+  done
+}
+
+check_remote_paths() {
+  split_hosts
+
+  local host
+  for host in "${HOSTS_ARR[@]}"; do
+    echo "===== ${host} ====="
+    ssh "${SSH_USER}@${host}" "
+      set -e
+      test -f '$WORKDIR/train_MNodes_torchrun_mfu_preindexparquet.py'
+      test -f '$MODEL_CONFIG_JSON'
+      test -d '$DATA_PATH'
+      cd '$WORKDIR'
+      git rev-parse --short HEAD
+      ls '$DATA_PATH'/*.parquet | wc -l
+    "
+  done
+}
+
+collect_training_outputs() {
+  split_hosts
+
+  local host
+  for host in "${HOSTS_ARR[@]}"; do
+    echo "[COLLECT] ${host}"
+    if ssh "${SSH_USER}@${host}" "test -d '${WORKDIR%/}/training_output'"; then
+      rsync -aH \
+        "${SSH_USER}@${host}:${WORKDIR%/}/training_output/" \
+        "${WORKDIR%/}/training_output/"
+    fi
+    if ssh "${SSH_USER}@${host}" "test -d '${WORKDIR%/}/${LOG_SUBDIR}'"; then
+      rsync -aH \
+        "${SSH_USER}@${host}:${WORKDIR%/}/${LOG_SUBDIR}/" \
+        "${WORKDIR%/}/${LOG_SUBDIR}/"
+    fi
+  done
+}
+
+# 已经生成好测试数据时用 commands；需要重新生成测试数据时：
+#   PREP_ACTION=all bash work.sh
+#
+# 训练脚本通过 nohup 在远端后台运行；训练完成后收集各节点输出：
+#   COLLECT_ONLY=1 bash work.sh
+if [[ "${COLLECT_ONLY:-0}" == "1" ]]; then
+  collect_training_outputs
+  bash scripts/test_stage2_500m_multinode.sh check-training
+  exit 0
+fi
+
+PREP_ACTION="${PREP_ACTION:-commands}"
+bash scripts/test_stage2_500m_multinode.sh "$PREP_ACTION"
+
+sync_code_and_data_to_workers
+check_remote_paths
+
+# 检查 dry-run，确认每个节点都会使用自己的 /data/disk1 路径。
 DRY_RUN=1 bash "${COMMAND_DIR}/launch_500m_3nodes.sh"
 
-cd '/data/disk1/SpeciesLLM'
-WORKDIR='/data/disk1/SpeciesLLM'
-emb_path='/data/disk1/SpeciesLLM/Stage2_macrogene_embeddings'
-config_json='/data/disk1/SpeciesLLM/Stage2_macrogene_embeddings/args_2nd_run.json'
-data_path='/data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData/all_flatten_data_test_500m'
+if [[ "${RUN_TRAINING:-1}" != "1" ]]; then
+  echo "[INFO] RUN_TRAINING is not 1; stop after sync, path check, and dry-run."
+  exit 0
+fi
 
+bash "${COMMAND_DIR}/launch_500m_3nodes.sh"
 
-for host in 7.150.12.45 7.150.15.14 7.150.14.170; do
-  echo "===== ${host} ====="
-  ssh root@"${host}" '
-    set -e
-    test -f /data/disk1/SpeciesLLM/train_MNodes_torchrun_mfu_preindexparquet.py
-    test -f /data/disk1/SpeciesLLM/Stage2_macrogene_embeddings/args_2nd_run.json
-    test -d /data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData/all_flatten_data_test_500m
-    cd /data/disk1/SpeciesLLM
-    git rev-parse --short HEAD
-    ls /data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData/all_flatten_data_test_500m/*.parquet | wc -l
-  '
-done
-
-bash /data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData/stage2_500m_test_commands/launch_500m_3nodes.sh
+echo "[INFO] Training has been launched through nohup on remote nodes."
+echo "[INFO] Monitor logs under each node: ${WORKDIR}/${LOG_SUBDIR}/node_rank*.log"
+echo "[INFO] After training finishes, run: COLLECT_ONLY=1 bash work.sh"
