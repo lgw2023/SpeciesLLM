@@ -5,7 +5,48 @@ cd /data/disk1/SpeciesLLM
 command -v ssh >/dev/null
 command -v rsync >/dev/null
 
+ENV_FILE="${ENV_FILE:-.env}"
+
+load_env_defaults() {
+  local env_file="$1"
+  [[ -f "$env_file" ]] || return 0
+
+  local line key value
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
+
+    [[ -z "$line" || "$line" == \#* ]] && continue
+    [[ "$line" == export[[:space:]]* ]] && line="${line#export }"
+    [[ "$line" == *=* ]] || continue
+
+    key="${line%%=*}"
+    value="${line#*=}"
+    key="${key%"${key##*[![:space:]]}"}"
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+
+    [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+    [[ -z "${!key+x}" ]] || continue
+
+    if [[ "$value" == \"*\" && "$value" == *\" && ${#value} -ge 2 ]]; then
+      value="${value:1:${#value}-2}"
+    elif [[ "$value" == \'*\' && "$value" == *\' && ${#value} -ge 2 ]]; then
+      value="${value:1:${#value}-2}"
+    fi
+
+    export "$key=$value"
+  done < "$env_file"
+}
+
+load_env_defaults "$ENV_FILE"
+
 export SSH_USER=root
+export SSH_PASSWORD="${SSH_PASSWORD:-}"
+if [[ -n "$SSH_PASSWORD" ]]; then
+  command -v sshpass >/dev/null
+fi
+
 export PYTHON_BIN=/data/miniconda3/bin/python
 export PROJECT_ROOT=/data/disk1/SpeciesLLM
 
@@ -64,6 +105,40 @@ export HCCL_WHITELIST_DISABLE=1
 export ASCEND_TOOLKIT_HOME=/usr/local/Ascend/ascend-toolkit/latest
 export ASCEND_HOME_PATH="${ASCEND_TOOLKIT_HOME}"
 
+ssh_run() {
+  local host="$1"
+  shift
+  if [[ -n "$SSH_PASSWORD" ]]; then
+    SSHPASS="$SSH_PASSWORD" sshpass -e ssh "${SSH_USER}@${host}" "$@"
+  else
+    ssh "${SSH_USER}@${host}" "$@"
+  fi
+}
+
+rsync_to_host() {
+  local source_path="$1"
+  local host="$2"
+  local target_path="$3"
+  shift 3
+  if [[ -n "$SSH_PASSWORD" ]]; then
+    SSHPASS="$SSH_PASSWORD" rsync -e "sshpass -e ssh" "$@" "$source_path" "${SSH_USER}@${host}:$target_path"
+  else
+    rsync "$@" "$source_path" "${SSH_USER}@${host}:$target_path"
+  fi
+}
+
+rsync_from_host() {
+  local host="$1"
+  local source_path="$2"
+  local target_path="$3"
+  shift 3
+  if [[ -n "$SSH_PASSWORD" ]]; then
+    SSHPASS="$SSH_PASSWORD" rsync -e "sshpass -e ssh" "$@" "${SSH_USER}@${host}:$source_path" "$target_path"
+  else
+    rsync "$@" "${SSH_USER}@${host}:$source_path" "$target_path"
+  fi
+}
+
 split_hosts() {
   HOSTS_ARR=()
   local raw_host host
@@ -77,7 +152,7 @@ split_hosts() {
 
 remote_mkdirs() {
   local host="$1"
-  ssh "${SSH_USER}@${host}" "
+  ssh_run "$host" "
     set -e
     mkdir -p '$PROJECT_ROOT' '$EMB_PATH' '$FLAT_TEST_DIR' '$COMMAND_DIR' '$WORKDIR/$LOG_SUBDIR' '$WORKDIR/training_output'
   "
@@ -90,9 +165,11 @@ sync_dir_to_host() {
   shift 3
 
   test -d "$source_dir"
-  rsync -aH --info=progress2 --delete "$@" \
+  rsync_to_host \
     "${source_dir%/}/" \
-    "${SSH_USER}@${host}:${target_dir%/}/"
+    "$host" \
+    "${target_dir%/}/" \
+    -aH --info=progress2 --delete "$@"
 }
 
 sync_code_and_data_to_workers() {
@@ -139,7 +216,7 @@ check_remote_paths() {
   local host
   for host in "${HOSTS_ARR[@]}"; do
     echo "===== ${host} ====="
-    ssh "${SSH_USER}@${host}" "
+    ssh_run "$host" "
       set -e
       test -f '$WORKDIR/train_MNodes_torchrun_mfu_preindexparquet.py'
       test -f '$MODEL_CONFIG_JSON'
@@ -157,15 +234,19 @@ collect_training_outputs() {
   local host
   for host in "${HOSTS_ARR[@]}"; do
     echo "[COLLECT] ${host}"
-    if ssh "${SSH_USER}@${host}" "test -d '${WORKDIR%/}/training_output'"; then
-      rsync -aH \
-        "${SSH_USER}@${host}:${WORKDIR%/}/training_output/" \
-        "${WORKDIR%/}/training_output/"
+    if ssh_run "$host" "test -d '${WORKDIR%/}/training_output'"; then
+      rsync_from_host \
+        "$host" \
+        "${WORKDIR%/}/training_output/" \
+        "${WORKDIR%/}/training_output/" \
+        -aH
     fi
-    if ssh "${SSH_USER}@${host}" "test -d '${WORKDIR%/}/${LOG_SUBDIR}'"; then
-      rsync -aH \
-        "${SSH_USER}@${host}:${WORKDIR%/}/${LOG_SUBDIR}/" \
-        "${WORKDIR%/}/${LOG_SUBDIR}/"
+    if ssh_run "$host" "test -d '${WORKDIR%/}/${LOG_SUBDIR}'"; then
+      rsync_from_host \
+        "$host" \
+        "${WORKDIR%/}/${LOG_SUBDIR}/" \
+        "${WORKDIR%/}/${LOG_SUBDIR}/" \
+        -aH
     fi
   done
 }
