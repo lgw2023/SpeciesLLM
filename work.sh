@@ -25,11 +25,13 @@ Examples:
   bash work.sh RUN_TRAINING=0
   bash work.sh COLLECT_ONLY=1
   bash work.sh SSH_PASSWORD='your-password' PREP_ACTION=commands
+  bash work.sh SSH_KEY=/path/to/id_ed25519 PREP_ACTION=commands
 
 Notes:
   - The script re-execs itself with env -i, so exported shell variables are ignored.
-  - .env is not loaded.
+  - .env is loaded explicitly after env -i and before command-line overrides.
   - Runtime overrides must be passed after work.sh as KEY=VALUE arguments.
+  - Use ENV_FILE=/path/to/env after work.sh to load a different env file.
   - Do not use KEY=VALUE bash work.sh; those inherited environment values are
     intentionally discarded.
 USAGE
@@ -37,10 +39,11 @@ USAGE
 
 is_allowed_cli_var() {
   case "$1" in
-    COLLECT_ONLY|PREP_ACTION|RUN_TRAINING|SSH_USER|SSH_PASSWORD|PYTHON_BIN|PROJECT_ROOT|\
-    STAGE2_CHECKS_PY|STAGE2_ROOT|INPUT_1ST|INPUT_2ND|INPUT_3SC|MERGED_TEST_DIR|\
-    FLAT_TEST_DIR|COMMAND_DIR|WORKDIR|TRAIN_ENTRY|LOG_SUBDIR|TRAIN_OUTPUT_ROOT|\
-    EMB_ROOT|EMB_PATH|MODEL_CONFIG_JSON|NNODES|NPROC_PER_NODE|HOSTS|MASTER_ADDR|\
+    ENV_FILE|COLLECT_ONLY|PREP_ACTION|RUN_TRAINING|SSH_USER|SSH_KEY|\
+    SSH_PASSWORD|SSH_EXTRA_OPTS|PYTHON_BIN|PROJECT_ROOT|STAGE2_CHECKS_PY|\
+    STAGE2_ROOT|INPUT_1ST|INPUT_2ND|INPUT_3SC|MERGED_TEST_DIR|FLAT_TEST_DIR|\
+    COMMAND_DIR|WORKDIR|TRAIN_ENTRY|LOG_SUBDIR|TRAIN_OUTPUT_ROOT|EMB_ROOT|\
+    EMB_PATH|MODEL_CONFIG_JSON|NNODES|NPROC_PER_NODE|HOSTS|MASTER_ADDR|\
     MASTER_PORT|TRAIN_DATASET|DATA_PATH|NUM_OF_USED_DATA|OUT_PATH|WORKERS|\
     FLATTEN_WORKERS|ROWS_PER_FILE|SHUFFLE_SEED|RESET_TEST_OUTPUT|SKIP_EXISTING|\
     SOURCE_PREFLIGHT_FILES_PER_BATCH|SOURCE_PREFLIGHT_MAX_SCAN|\
@@ -99,11 +102,66 @@ get_cli_value() {
   return 1
 }
 
+ENV_KEYS=()
+ENV_VALUES=()
+
+load_env_defaults() {
+  local env_file="$1"
+  [[ -f "$env_file" ]] || return 0
+
+  local line key value existing_key
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
+
+    [[ -z "$line" || "$line" == \#* ]] && continue
+    [[ "$line" == export[[:space:]]* ]] && line="${line#export }"
+    [[ "$line" == *=* ]] || continue
+
+    key="${line%%=*}"
+    value="${line#*=}"
+    key="${key%"${key##*[![:space:]]}"}"
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+
+    [[ "$key" =~ ^[A-Z_][A-Z0-9_]*$ ]] || die "Invalid variable name in $env_file: $key"
+    is_allowed_cli_var "$key" || die "Unsupported variable in $env_file: $key"
+
+    if [[ "$value" == \"*\" && "$value" == *\" && ${#value} -ge 2 ]]; then
+      value="${value:1:${#value}-2}"
+    elif [[ "$value" == \'*\' && "$value" == *\' && ${#value} -ge 2 ]]; then
+      value="${value:1:${#value}-2}"
+    fi
+
+    if ((${#ENV_KEYS[@]} > 0)); then
+      for existing_key in "${ENV_KEYS[@]}"; do
+        [[ "$existing_key" != "$key" ]] || die "Duplicate variable in $env_file: $key"
+      done
+    fi
+    ENV_KEYS+=("$key")
+    ENV_VALUES+=("$value")
+  done < "$env_file"
+}
+
+get_env_value() {
+  local name="$1"
+  local i
+  for i in "${!ENV_KEYS[@]}"; do
+    if [[ "${ENV_KEYS[$i]}" == "$name" ]]; then
+      printf "%s" "${ENV_VALUES[$i]}"
+      return 0
+    fi
+  done
+  return 1
+}
+
 set_default() {
   local name="$1"
   local default_value="$2"
   local cli_value
   if cli_value="$(get_cli_value "$name")"; then
+    printf -v "$name" "%s" "$cli_value"
+  elif cli_value="$(get_env_value "$name")"; then
     printf -v "$name" "%s" "$cli_value"
   else
     printf -v "$name" "%s" "$default_value"
@@ -116,14 +174,27 @@ cd /data/disk1/SpeciesLLM
 command -v ssh >/dev/null
 command -v rsync >/dev/null
 
+set_default ENV_FILE .env
+load_env_defaults "$ENV_FILE"
+
 set_default COLLECT_ONLY 0
 set_default PREP_ACTION commands
 set_default RUN_TRAINING 1
 
 set_default SSH_USER root
+set_default SSH_KEY ""
 set_default SSH_PASSWORD ""
+set_default SSH_EXTRA_OPTS ""
 if [[ -n "$SSH_PASSWORD" ]]; then
   command -v sshpass >/dev/null
+fi
+SSH_OPTS=()
+if [[ -n "$SSH_KEY" ]]; then
+  SSH_OPTS+=("-i" "$SSH_KEY")
+fi
+if [[ -n "$SSH_EXTRA_OPTS" ]]; then
+  read -r -a SSH_EXTRA_OPTS_ARR <<< "$SSH_EXTRA_OPTS"
+  SSH_OPTS+=("${SSH_EXTRA_OPTS_ARR[@]}")
 fi
 
 set_default PYTHON_BIN /data/miniconda3/bin/python
@@ -208,10 +279,23 @@ ssh_run() {
   local host="$1"
   shift
   if [[ -n "$SSH_PASSWORD" ]]; then
-    SSHPASS="$SSH_PASSWORD" sshpass -e ssh "${SSH_USER}@${host}" "$@"
+    SSHPASS="$SSH_PASSWORD" sshpass -e ssh ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} "${SSH_USER}@${host}" "$@"
   else
-    ssh "${SSH_USER}@${host}" "$@"
+    ssh ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} "${SSH_USER}@${host}" "$@"
   fi
+}
+
+rsync_ssh_cmd() {
+  local -a cmd
+  if [[ -n "$SSH_PASSWORD" ]]; then
+    cmd=(sshpass -e ssh)
+  else
+    cmd=(ssh)
+  fi
+  if ((${#SSH_OPTS[@]} > 0)); then
+    cmd+=("${SSH_OPTS[@]}")
+  fi
+  printf "%q " "${cmd[@]}"
 }
 
 rsync_to_host() {
@@ -220,9 +304,9 @@ rsync_to_host() {
   local target_path="$3"
   shift 3
   if [[ -n "$SSH_PASSWORD" ]]; then
-    SSHPASS="$SSH_PASSWORD" rsync -e "sshpass -e ssh" "$@" "$source_path" "${SSH_USER}@${host}:$target_path"
+    SSHPASS="$SSH_PASSWORD" rsync -e "$(rsync_ssh_cmd)" "$@" "$source_path" "${SSH_USER}@${host}:$target_path"
   else
-    rsync "$@" "$source_path" "${SSH_USER}@${host}:$target_path"
+    rsync -e "$(rsync_ssh_cmd)" "$@" "$source_path" "${SSH_USER}@${host}:$target_path"
   fi
 }
 
@@ -232,9 +316,9 @@ rsync_from_host() {
   local target_path="$3"
   shift 3
   if [[ -n "$SSH_PASSWORD" ]]; then
-    SSHPASS="$SSH_PASSWORD" rsync -e "sshpass -e ssh" "$@" "${SSH_USER}@${host}:$source_path" "$target_path"
+    SSHPASS="$SSH_PASSWORD" rsync -e "$(rsync_ssh_cmd)" "$@" "${SSH_USER}@${host}:$source_path" "$target_path"
   else
-    rsync "$@" "${SSH_USER}@${host}:$source_path" "$target_path"
+    rsync -e "$(rsync_ssh_cmd)" "$@" "${SSH_USER}@${host}:$source_path" "$target_path"
   fi
 }
 
