@@ -12,6 +12,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd -P)"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 STAGE2_CHECKS_PY="${STAGE2_CHECKS_PY:-${SCRIPT_DIR}/stage2_training_checks.py}"
+HOME="${HOME:-/root}"
+export HOME
 
 SERVER_STAGE2_ROOT_DEFAULT="/data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData"
 if [[ -d "$SERVER_STAGE2_ROOT_DEFAULT" ]]; then
@@ -420,6 +422,7 @@ write_torchrun_script() {
     echo "set -euo pipefail"
     echo "# Run this on host ${host} (node_rank=${node_rank})."
     printf "cd %q\n" "$WORKDIR"
+    print_export HOME "$HOME"
     print_export PYTHON_BIN "$PYTHON_BIN"
     print_export NNODES "$NNODES"
     print_export NPROC_PER_NODE "$NPROC_PER_NODE"
@@ -446,6 +449,7 @@ write_launcher_script() {
     echo "#!/usr/bin/env bash"
     echo "set -euo pipefail"
     printf "cd %q\n" "$PROJECT_ROOT"
+    print_export HOME "$HOME"
     print_export HOSTS "$HOSTS"
     print_export NNODES "$NNODES"
     print_export AUTO_NNODES 0

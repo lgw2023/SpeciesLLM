@@ -3,6 +3,7 @@ set -euo pipefail
 
 if [[ "${1:-}" != "--__speciesllm-work-sh-clean-env" ]]; then
   exec /usr/bin/env -i \
+    HOME="${HOME:-/root}" \
     PATH="/data/miniconda3/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
     LANG=C.UTF-8 \
     bash "$0" --__speciesllm-work-sh-clean-env "$@"
@@ -54,7 +55,7 @@ is_allowed_cli_var() {
     BACKEND|DEVICE|DEVICE_TYPE|S3_REMOTE_DIR_PATH|LOG_INTERVAL|PROFILE_INTERVAL|\
     NAN_CHECK_INTERVAL|METRICS_FLUSH_INTERVAL|LOG_LEVEL|LOG_ALL_RANKS|\
     ASCEND_RT_VISIBLE_DEVICES_VALUE|HCCL_CONNECT_TIMEOUT|HCCL_EXEC_TIMEOUT|\
-    HCCL_WHITELIST_DISABLE|ASCEND_TOOLKIT_HOME|ASCEND_ENV_SH|ASCEND_HOME_PATH)
+    HCCL_WHITELIST_DISABLE|ASCEND_TOOLKIT_HOME|ASCEND_ENV_SH|ASCEND_HOME_PATH|HOME)
       return 0
       ;;
     *)
@@ -178,6 +179,7 @@ command -v rsync >/dev/null
 set_default ENV_FILE .env
 load_env_defaults "$ENV_FILE"
 
+set_default HOME "${HOME:-/root}"
 set_default COLLECT_ONLY 0
 set_default PREP_ACTION commands
 set_default RUN_TRAINING 1
