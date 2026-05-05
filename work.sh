@@ -158,6 +158,10 @@ remote_mkdirs() {
   "
 }
 
+local_mkdirs() {
+  mkdir -p "$PROJECT_ROOT" "$EMB_PATH" "$FLAT_TEST_DIR" "$COMMAND_DIR" "$WORKDIR/$LOG_SUBDIR" "$WORKDIR/training_output"
+}
+
 sync_dir_to_host() {
   local source_dir="$1"
   local host="$2"
@@ -170,6 +174,20 @@ sync_dir_to_host() {
     "$host" \
     "${target_dir%/}/" \
     -aH --info=progress2 --delete "$@"
+}
+
+sync_dir_to_host_quiet() {
+  local source_dir="$1"
+  local host="$2"
+  local target_dir="$3"
+  shift 3
+
+  test -d "$source_dir"
+  rsync_to_host \
+    "${source_dir%/}/" \
+    "$host" \
+    "${target_dir%/}/" \
+    -aH --delete "$@"
 }
 
 sync_code_and_data_to_workers() {
@@ -186,7 +204,7 @@ sync_code_and_data_to_workers() {
     remote_mkdirs "$host"
 
     echo "[SYNC] project code -> ${host}:${PROJECT_ROOT}"
-    sync_dir_to_host "$PROJECT_ROOT" "$host" "$PROJECT_ROOT" \
+    sync_dir_to_host_quiet "$PROJECT_ROOT" "$host" "$PROJECT_ROOT" \
       --exclude '/Stage2_macrogene_embeddings/' \
       --exclude '/Stage2_SpeciesLLMData/' \
       --exclude '/training_output/' \
@@ -200,13 +218,13 @@ sync_code_and_data_to_workers() {
       --exclude '*.ckpt'
 
     echo "[SYNC] embeddings -> ${host}:${EMB_PATH}"
-    sync_dir_to_host "$EMB_PATH" "$host" "$EMB_PATH"
+    sync_dir_to_host_quiet "$EMB_PATH" "$host" "$EMB_PATH"
 
     echo "[SYNC] training data -> ${host}:${DATA_PATH}"
     sync_dir_to_host "$DATA_PATH" "$host" "$DATA_PATH"
 
     echo "[SYNC] generated command files -> ${host}:${COMMAND_DIR}"
-    sync_dir_to_host "$COMMAND_DIR" "$host" "$COMMAND_DIR"
+    sync_dir_to_host_quiet "$COMMAND_DIR" "$host" "$COMMAND_DIR"
   done
 }
 
@@ -216,6 +234,16 @@ check_remote_paths() {
   local host
   for host in "${HOSTS_ARR[@]}"; do
     echo "===== ${host} ====="
+    if [[ "$host" == "$MASTER_ADDR" ]]; then
+      test -f "$WORKDIR/train_MNodes_torchrun_mfu_preindexparquet.py"
+      test -f "$MODEL_CONFIG_JSON"
+      test -d "$DATA_PATH"
+      cd "$WORKDIR"
+      git rev-parse --short HEAD
+      ls "$DATA_PATH"/*.parquet | wc -l
+      continue
+    fi
+
     ssh_run "$host" "
       set -e
       test -f '$WORKDIR/train_MNodes_torchrun_mfu_preindexparquet.py'
@@ -265,6 +293,7 @@ fi
 PREP_ACTION="${PREP_ACTION:-commands}"
 bash scripts/test_stage2_500m_multinode.sh "$PREP_ACTION"
 
+local_mkdirs
 sync_code_and_data_to_workers
 check_remote_paths
 
