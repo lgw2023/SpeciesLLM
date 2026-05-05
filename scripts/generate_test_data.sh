@@ -25,6 +25,7 @@ FLATTEN_PATTERN="${FLATTEN_PATTERN:-macrogene_*.parquet}"
 FLATTEN_MANIFEST_NAME="${FLATTEN_MANIFEST_NAME:-shuffle_manifest.csv}"
 FLATTEN_COMPRESSION="${FLATTEN_COMPRESSION:-snappy}"
 FLATTEN_OVERWRITE="${FLATTEN_OVERWRITE:-1}"
+FLATTEN_DROP_REMAINDER="${FLATTEN_DROP_REMAINDER:-0}"
 VALIDATE_ALL_SCHEMAS="${VALIDATE_ALL_SCHEMAS:-0}"
 MAX_FLATTEN_FILES="${MAX_FLATTEN_FILES:-0}"
 
@@ -98,6 +99,10 @@ flatten_cmd=(
 
 if [[ "$FLATTEN_OVERWRITE" == "1" ]]; then
   flatten_cmd+=(--overwrite)
+fi
+
+if [[ "$FLATTEN_DROP_REMAINDER" == "1" ]]; then
+  flatten_cmd+=(--drop-remainder)
 fi
 
 if [[ "$VALIDATE_ALL_SCHEMAS" == "1" ]]; then

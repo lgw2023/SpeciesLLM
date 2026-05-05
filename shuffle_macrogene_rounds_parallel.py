@@ -132,6 +132,14 @@ def parse_args() -> argparse.Namespace:
         help="Delete existing output parquet files with the selected prefix before writing.",
     )
     parser.add_argument(
+        "--drop-remainder",
+        action="store_true",
+        help=(
+            "Drop trailing rows that do not fill a complete --rows-per-file output "
+            "parquet file. By default the final partial file is kept."
+        ),
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Only scan files and count rows from parquet metadata; do not read full data or write outputs.",
@@ -248,6 +256,16 @@ def write_manifest(manifest_path: Path, rows: List[dict]) -> None:
         writer.writerows(rows)
 
 
+def chunk_counts(total_rows: int, rows_per_file: int, drop_remainder: bool) -> tuple[int, int, int]:
+    if drop_remainder:
+        usable_rows = (total_rows // rows_per_file) * rows_per_file
+    else:
+        usable_rows = total_rows
+    dropped_rows = total_rows - usable_rows
+    num_files = math.ceil(usable_rows / rows_per_file) if usable_rows else 0
+    return usable_rows, dropped_rows, num_files
+
+
 def write_shuffled_chunks(
     df: pd.DataFrame,
     output_dir: Path,
@@ -255,11 +273,20 @@ def write_shuffled_chunks(
     output_prefix: str,
     compression: str,
     manifest_name: str,
+    drop_remainder: bool,
 ) -> None:
     start = time.time()
     total_rows = len(df)
-    num_files = math.ceil(total_rows / rows_per_file)
-    print(f"[INFO] total rows={total_rows}, output files={num_files}", flush=True)
+    usable_rows, dropped_rows, num_files = chunk_counts(
+        total_rows=total_rows,
+        rows_per_file=rows_per_file,
+        drop_remainder=drop_remainder,
+    )
+    print(
+        f"[INFO] total rows={total_rows}, usable rows={usable_rows}, "
+        f"dropped rows={dropped_rows}, output files={num_files}",
+        flush=True,
+    )
 
     manifest_rows: List[dict] = []
     iterator = range(num_files)
@@ -268,7 +295,7 @@ def write_shuffled_chunks(
 
     for i in iterator:
         start_row = i * rows_per_file
-        end_row = min((i + 1) * rows_per_file, total_rows)
+        end_row = min((i + 1) * rows_per_file, usable_rows)
         chunk = df.iloc[start_row:end_row]
         output_name = f"{output_prefix}{i}.parquet"
         output_path = output_dir / output_name
@@ -307,9 +334,16 @@ def main() -> None:
 
     if args.dry_run:
         rows = count_rows(files, args.workers)
+        usable_rows, dropped_rows, num_files = chunk_counts(
+            total_rows=rows,
+            rows_per_file=args.rows_per_file,
+            drop_remainder=args.drop_remainder,
+        )
         print(f"[DRY-RUN] input files={len(files)}", flush=True)
         print(f"[DRY-RUN] total rows={rows}", flush=True)
-        print(f"[DRY-RUN] output files={math.ceil(rows / args.rows_per_file)}", flush=True)
+        print(f"[DRY-RUN] usable rows={usable_rows}", flush=True)
+        print(f"[DRY-RUN] dropped rows={dropped_rows}", flush=True)
+        print(f"[DRY-RUN] output files={num_files}", flush=True)
         return
 
     prepare_output_dir(output_dir, args.output_prefix, args.overwrite)
@@ -328,6 +362,7 @@ def main() -> None:
         output_prefix=args.output_prefix,
         compression=args.compression,
         manifest_name=args.manifest_name,
+        drop_remainder=args.drop_remainder,
     )
     print(f"[DONE] Shuffled data written to: {output_dir}", flush=True)
 

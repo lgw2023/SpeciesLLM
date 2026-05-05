@@ -51,6 +51,7 @@ WORKERS="${WORKERS:-16}"
 FLATTEN_WORKERS="${FLATTEN_WORKERS:-$WORKERS}"
 ROWS_PER_FILE="${ROWS_PER_FILE:-1024}"
 SHUFFLE_SEED="${SHUFFLE_SEED:-42}"
+FLATTEN_DROP_REMAINDER="${FLATTEN_DROP_REMAINDER:-1}"
 RESET_TEST_OUTPUT="${RESET_TEST_OUTPUT:-0}"
 SKIP_EXISTING="${SKIP_EXISTING:-1}"
 
@@ -322,6 +323,9 @@ generate_flat() {
     --overwrite
     --validate-all-schemas
   )
+  if [[ "$FLATTEN_DROP_REMAINDER" == "1" ]]; then
+    flatten_cmd+=(--drop-remainder)
+  fi
 
   log "merge test-mode command:"
   printf "%q " "${merge_cmd[@]}"; printf "\n"
