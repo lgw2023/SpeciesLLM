@@ -26,6 +26,7 @@ Examples:
   bash work.sh COLLECT_ONLY=1
   bash work.sh SSH_PASSWORD='your-password' PREP_ACTION=commands
   bash work.sh SSH_KEY=/path/to/id_ed25519 PREP_ACTION=commands
+  bash work.sh BATCH_SIZE=16 PREP_ACTION=commands SKIP_DATA_SYNC=1
 
 Notes:
   - The script re-execs itself with env -i, so exported shell variables are ignored.
@@ -39,7 +40,7 @@ USAGE
 
 is_allowed_cli_var() {
   case "$1" in
-    ENV_FILE|COLLECT_ONLY|PREP_ACTION|RUN_TRAINING|SSH_USER|SSH_KEY|\
+    ENV_FILE|COLLECT_ONLY|PREP_ACTION|RUN_TRAINING|SKIP_DATA_SYNC|SSH_USER|SSH_KEY|\
     SSH_PASSWORD|SSH_EXTRA_OPTS|PYTHON_BIN|PROJECT_ROOT|STAGE2_CHECKS_PY|\
     STAGE2_ROOT|INPUT_1ST|INPUT_2ND|INPUT_3SC|MERGED_TEST_DIR|FLAT_TEST_DIR|\
     COMMAND_DIR|WORKDIR|TRAIN_ENTRY|LOG_SUBDIR|TRAIN_OUTPUT_ROOT|EMB_ROOT|\
@@ -180,6 +181,7 @@ load_env_defaults "$ENV_FILE"
 set_default COLLECT_ONLY 0
 set_default PREP_ACTION commands
 set_default RUN_TRAINING 1
+set_default SKIP_DATA_SYNC 0
 
 set_default SSH_USER root
 set_default SSH_KEY ""
@@ -333,6 +335,55 @@ split_hosts() {
   done
 }
 
+path_preflight_local() {
+  [[ -f "$WORKDIR/$TRAIN_ENTRY" ]] || die "Missing training entry on master: $WORKDIR/$TRAIN_ENTRY"
+  [[ -f "$MODEL_CONFIG_JSON" ]] || die "Missing model config on master: $MODEL_CONFIG_JSON"
+  [[ -d "$DATA_PATH" ]] || die "Missing training data directory on master: $DATA_PATH"
+
+  local git_rev parquet_count
+  git_rev="$(git -C "$WORKDIR" rev-parse --short HEAD 2>/dev/null || true)"
+  [[ -n "$git_rev" ]] || git_rev="no-git"
+  parquet_count="$(find "$DATA_PATH" -maxdepth 1 -type f -name '*.parquet' | wc -l | tr -d '[:space:]')"
+  [[ "$parquet_count" != "0" ]] || die "No parquet files found on master under: $DATA_PATH"
+
+  echo "git: ${git_rev}"
+  echo "parquet files: ${parquet_count}"
+}
+
+remote_path_preflight_script() {
+  cat <<'BASH'
+set -e
+train_entry="$1"
+model_config="$2"
+data_path="$3"
+workdir="$4"
+
+[[ -f "${workdir}/${train_entry}" ]] || {
+  echo "[ERROR] Missing training entry: ${workdir}/${train_entry}" >&2
+  exit 1
+}
+[[ -f "$model_config" ]] || {
+  echo "[ERROR] Missing model config: $model_config" >&2
+  exit 1
+}
+[[ -d "$data_path" ]] || {
+  echo "[ERROR] Missing training data directory: $data_path" >&2
+  exit 1
+}
+
+git_rev="$(git -C "$workdir" rev-parse --short HEAD 2>/dev/null || true)"
+[[ -n "$git_rev" ]] || git_rev="no-git"
+parquet_count="$(find "$data_path" -maxdepth 1 -type f -name '*.parquet' | wc -l | tr -d '[:space:]')"
+[[ "$parquet_count" != "0" ]] || {
+  echo "[ERROR] No parquet files found under: $data_path" >&2
+  exit 1
+}
+
+echo "git: ${git_rev}"
+echo "parquet files: ${parquet_count}"
+BASH
+}
+
 remote_mkdirs() {
   local host="$1"
   ssh_run "$host" "
@@ -403,8 +454,12 @@ sync_code_and_data_to_workers() {
     echo "[SYNC] embeddings -> ${host}:${EMB_PATH}"
     sync_dir_to_host_quiet "$EMB_PATH" "$host" "$EMB_PATH"
 
-    echo "[SYNC] training data -> ${host}:${DATA_PATH}"
-    sync_dir_to_host "$DATA_PATH" "$host" "$DATA_PATH"
+    if [[ "$SKIP_DATA_SYNC" == "1" ]]; then
+      echo "[SYNC] skip training data for ${host}; expect existing path ${DATA_PATH}"
+    else
+      echo "[SYNC] training data -> ${host}:${DATA_PATH}"
+      sync_dir_to_host "$DATA_PATH" "$host" "$DATA_PATH"
+    fi
 
     echo "[SYNC] generated command files -> ${host}:${COMMAND_DIR}"
     sync_dir_to_host_quiet "$COMMAND_DIR" "$host" "$COMMAND_DIR"
@@ -418,24 +473,11 @@ check_remote_paths() {
   for host in "${HOSTS_ARR[@]}"; do
     echo "===== ${host} ====="
     if [[ "$host" == "$MASTER_ADDR" ]]; then
-      test -f "$WORKDIR/train_MNodes_torchrun_mfu_preindexparquet.py"
-      test -f "$MODEL_CONFIG_JSON"
-      test -d "$DATA_PATH"
-      cd "$WORKDIR"
-      git rev-parse --short HEAD
-      ls "$DATA_PATH"/*.parquet | wc -l
+      path_preflight_local
       continue
     fi
 
-    ssh_run "$host" "
-      set -e
-      test -f '$WORKDIR/train_MNodes_torchrun_mfu_preindexparquet.py'
-      test -f '$MODEL_CONFIG_JSON'
-      test -d '$DATA_PATH'
-      cd '$WORKDIR'
-      git rev-parse --short HEAD
-      ls '$DATA_PATH'/*.parquet | wc -l
-    "
+    remote_path_preflight_script | ssh_run "$host" bash -s -- "$TRAIN_ENTRY" "$MODEL_CONFIG_JSON" "$DATA_PATH" "$WORKDIR"
   done
 }
 
