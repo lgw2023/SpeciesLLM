@@ -12,7 +12,10 @@ import warnings
 import numpy as np
 import pandas as pd
 import scanpy as sc
-import moxing as mox
+try:
+    import moxing as mox
+except ImportError:
+    mox = None
 from copy import deepcopy
 from dataclasses import dataclass
 from contextlib import nullcontext
@@ -640,6 +643,8 @@ def train_loop(args, model, ddp, rank, optimizer, train_data_filelist, train_sam
 def save_log_to_s3(args, out_dir, NODE_RANK, rank):
     if not args.s3_remote_dir_path or not is_remote_output_path(args.s3_remote_dir_path):
         return
+    if mox is None:
+        return
     try:
         mox.file.mk_dir(args.s3_remote_dir_path)
         mox.file.copy(os.path.join(out_dir,
@@ -668,12 +673,18 @@ def save_model(model, optimizer, epoch, step, loss, out_dir, local_rank=None, NO
         torch.save(model.state_dict(), os.path.join(out_dir, save_path))
         torch.save(optimizer.state_dict(), os.path.join(out_dir, save_other_path))
     if s3_remote_dir_path and (s3_remote_dir_path.startswith("s3://") or s3_remote_dir_path.startswith("obs://")):
-        mox.file.mk_dir(s3_remote_dir_path)
-        mox.file.copy(os.path.join(out_dir, save_path), s3_remote_dir_path.strip("/") + "/" + save_path)
-        mox.file.copy(os.path.join(out_dir, save_other_path), s3_remote_dir_path.strip("/") + "/" + save_other_path)
-        print(f'torch.save and to S3: {s3_remote_dir_path.strip("/") + "/" + save_path} {s3_remote_dir_path.strip("/") + "/" + save_other_path}')
-        os.remove(os.path.join(out_dir, save_path))
-        os.remove(os.path.join(out_dir, save_other_path))
+        if mox is not None:
+            mox.file.mk_dir(s3_remote_dir_path)
+            mox.file.copy(os.path.join(out_dir, save_path), s3_remote_dir_path.strip("/") + "/" + save_path)
+            mox.file.copy(os.path.join(out_dir, save_other_path), s3_remote_dir_path.strip("/") + "/" + save_other_path)
+            print(f'torch.save and to S3: {s3_remote_dir_path.strip("/") + "/" + save_path} {s3_remote_dir_path.strip("/") + "/" + save_other_path}')
+            os.remove(os.path.join(out_dir, save_path))
+            os.remove(os.path.join(out_dir, save_other_path))
+        else:
+            print(
+                f"moxing not available; checkpoints kept locally only: "
+                f"{os.path.join(out_dir, save_path)} {os.path.join(out_dir, save_other_path)}"
+            )
     else:
         print(f"torch.save: {save_path} {save_other_path}")
 
