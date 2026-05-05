@@ -85,6 +85,7 @@ TRAIN_ENTRY="${TRAIN_ENTRY:-train_MNodes_torchrun_mfu_preindexparquet.py}"
 LOG_SUBDIR="${LOG_SUBDIR:-torchrun_logs}"
 SYNC_SELF="${SYNC_SELF:-1}"
 DRY_RUN="${DRY_RUN:-0}"
+LOCAL_NODE_RANK="${LOCAL_NODE_RANK:-0}"
 
 # Visible NPU ids on each node.
 ASCEND_RT_VISIBLE_DEVICES_VALUE="${ASCEND_RT_VISIBLE_DEVICES_VALUE:-0,1,2,3,4,5,6,7}"
@@ -358,6 +359,11 @@ scp_run() {
   fi
 }
 
+is_local_rank() {
+  local rank="$1"
+  [[ "$rank" == "$LOCAL_NODE_RANK" ]]
+}
+
 bool_arg_value() {
   local value
   value="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
@@ -459,7 +465,7 @@ remote_env_assignments() {
   local rank="$1"
   local -a names=(
     NNODES NPROC_PER_NODE MASTER_ADDR MASTER_PORT WORKDIR TRAIN_ENTRY LOG_SUBDIR
-    DRY_RUN ASCEND_RT_VISIBLE_DEVICES_VALUE HCCL_CONNECT_TIMEOUT HCCL_EXEC_TIMEOUT
+    DRY_RUN LOCAL_NODE_RANK ASCEND_RT_VISIBLE_DEVICES_VALUE HCCL_CONNECT_TIMEOUT HCCL_EXEC_TIMEOUT
     HCCL_WHITELIST_DISABLE ASCEND_TOOLKIT_HOME ASCEND_HOME_PATH
     data_path num_of_used_data emb_path config_json out_path batch_size epoch
     gradient_accumulation_steps learning_rate min_lr decay_lr warmup_iters
@@ -493,7 +499,7 @@ run_launcher() {
   log "WORKDIR=${WORKDIR}, remote_script=${remote_self}"
   log "TRAIN_DATASET=${TRAIN_DATASET}, data_path=${data_path}, emb_path=${emb_path}"
   log "config_json=${config_json}"
-  log "SYNC_SELF=${SYNC_SELF}, DRY_RUN=${DRY_RUN}"
+  log "SYNC_SELF=${SYNC_SELF}, DRY_RUN=${DRY_RUN}, LOCAL_NODE_RANK=${LOCAL_NODE_RANK}"
 
   local rank host
   for ((rank=0; rank<NNODES; rank++)); do
@@ -504,15 +510,23 @@ run_launcher() {
     mkdir_cmd="mkdir -p $(shell_quote "$remote_log_dir") $(shell_quote "$remote_scripts_dir")"
 
     if [[ "$DRY_RUN" == "1" ]]; then
-      echo "$(ssh_display_cmd) ${SSH_OPTS[*]-} ${SSH_USER}@${host} ${mkdir_cmd}"
-      if [[ "$SYNC_SELF" == "1" ]]; then
-        echo "$(scp_display_cmd) ${SSH_OPTS[*]-} ${self_abs} ${SSH_USER}@${host}:${remote_self}"
+      if is_local_rank "$rank"; then
+        echo "local ${mkdir_cmd}"
+      else
+        echo "$(ssh_display_cmd) ${SSH_OPTS[*]-} ${SSH_USER}@${host} ${mkdir_cmd}"
+        if [[ "$SYNC_SELF" == "1" ]]; then
+          echo "$(scp_display_cmd) ${SSH_OPTS[*]-} ${self_abs} ${SSH_USER}@${host}:${remote_self}"
+        fi
       fi
       continue
     fi
 
-    ssh_run "${SSH_USER}@${host}" "$mkdir_cmd"
-    if [[ "$SYNC_SELF" == "1" ]]; then
+    if is_local_rank "$rank"; then
+      mkdir -p "$remote_log_dir" "$remote_scripts_dir"
+    else
+      ssh_run "${SSH_USER}@${host}" "$mkdir_cmd"
+    fi
+    if [[ "$SYNC_SELF" == "1" ]] && ! is_local_rank "$rank"; then
       scp_run "$self_abs" "${SSH_USER}@${host}:${remote_self}" >/dev/null
     fi
   done
@@ -524,9 +538,17 @@ run_launcher() {
     remote_cmd="cd $(shell_quote "$WORKDIR") && nohup env $(remote_env_assignments "$rank") bash $(shell_quote "$remote_self") --worker > $(shell_quote "$log_file") 2>&1 &"
 
     if [[ "$DRY_RUN" == "1" ]]; then
-      echo "$(ssh_display_cmd) ${SSH_OPTS[*]-} ${SSH_USER}@${host} ${remote_cmd}"
+      if is_local_rank "$rank"; then
+        echo "local ${remote_cmd}"
+      else
+        echo "$(ssh_display_cmd) ${SSH_OPTS[*]-} ${SSH_USER}@${host} ${remote_cmd}"
+      fi
     else
-      ssh_run "${SSH_USER}@${host}" "$remote_cmd" &
+      if is_local_rank "$rank"; then
+        bash -c "$remote_cmd"
+      else
+        ssh_run "${SSH_USER}@${host}" "$remote_cmd" &
+      fi
     fi
 
     log "sent start command: rank=${rank}, host=${host}, log=${log_file}"
