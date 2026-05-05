@@ -5,6 +5,7 @@ import json
 import time
 import math
 import glob
+import csv
 import logging
 import argparse
 import datetime
@@ -52,6 +53,175 @@ torch._dynamo.config.suppress_errors = True
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 DEFAULT_OUTPUT_DIR = "training_output"
+
+
+METRIC_FIELDNAMES = [
+    "time",
+    "node_rank",
+    "rank",
+    "local_rank",
+    "epoch",
+    "batch_index",
+    "num_batches",
+    "update_step",
+    "should_step",
+    "lr",
+    "loss_total",
+    "loss_gep",
+    "loss_zero_prob",
+    "loss_gepc",
+    "loss_gepc_zero_prob",
+    "step_ms",
+    "data_load_s",
+    "to_device_s",
+    "forward_s",
+    "loss_s",
+    "backward_s",
+    "optimizer_s",
+    "grad_sync_s",
+    "samples_per_s",
+    "tokens_per_s",
+    "mfu",
+    "cluster_loss_total_mean",
+    "cluster_loss_total_min",
+    "cluster_loss_total_max",
+    "cluster_step_ms_mean",
+    "cluster_step_ms_max",
+    "cluster_data_load_s_max",
+    "cluster_grad_sync_s_max",
+    "cluster_samples_per_s_sum",
+    "cluster_tokens_per_s_sum",
+]
+
+
+class RankContextFilter(logging.Filter):
+    def __init__(self, node_rank, rank, local_rank):
+        super().__init__()
+        self.node_rank = node_rank
+        self.rank = rank
+        self.local_rank = local_rank
+
+    def filter(self, record):
+        record.node_rank = self.node_rank
+        record.rank = self.rank
+        record.local_rank = self.local_rank
+        return True
+
+
+def setup_rank_logger(out_dir, node_rank, rank, local_rank, master_process, log_level="INFO", log_all_ranks=False):
+    level = getattr(logging, str(log_level).upper(), logging.INFO)
+    logger = logging.getLogger(f"speciesllm.train.node{node_rank}.rank{rank}")
+    logger.setLevel(level)
+    for handler in logger.handlers:
+        handler.close()
+    logger.handlers.clear()
+    logger.propagate = False
+
+    context_filter = RankContextFilter(node_rank=node_rank, rank=rank, local_rank=local_rank)
+    formatter = logging.Formatter(
+        fmt="%(asctime)s %(levelname)s node=%(node_rank)s rank=%(rank)s local_rank=%(local_rank)s pid=%(process)d %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+
+    log_path = os.path.join(out_dir, f"log.{node_rank}-{rank}.txt")
+    file_handler = logging.FileHandler(log_path, mode="w", encoding="utf-8")
+    file_handler.setLevel(level)
+    file_handler.setFormatter(formatter)
+    file_handler.addFilter(context_filter)
+    logger.addHandler(file_handler)
+
+    if log_all_ranks or master_process:
+        stream_handler = logging.StreamHandler(sys.stdout)
+        stream_handler.setLevel(level)
+        stream_handler.setFormatter(formatter)
+        stream_handler.addFilter(context_filter)
+        logger.addHandler(stream_handler)
+
+    return logger
+
+
+def log_or_print(logger, level, message, exc_info=False):
+    if logger is None:
+        print(message, flush=True)
+        return
+    log_method = getattr(logger, level)
+    log_method(message, exc_info=exc_info)
+
+
+def json_default(value):
+    if isinstance(value, (np.integer,)):
+        return int(value)
+    if isinstance(value, (np.floating,)):
+        return float(value)
+    if isinstance(value, (np.ndarray,)):
+        return value.tolist()
+    return str(value)
+
+
+class StreamingMetricsWriter:
+    def __init__(self, out_dir, node_rank, rank, flush_interval=100):
+        self.flush_interval = max(1, int(flush_interval))
+        self.rows_since_flush = 0
+        self.jsonl_path = os.path.join(out_dir, f"metrics.{node_rank}-{rank}.jsonl")
+        self.csv_path = os.path.join(out_dir, f"loss_to_log.{node_rank}-{rank}.txt")
+        self.jsonl_file = open(self.jsonl_path, "w", encoding="utf-8")
+        self.csv_file = open(self.csv_path, "w", newline="", encoding="utf-8")
+        self.csv_writer = csv.DictWriter(self.csv_file, fieldnames=METRIC_FIELDNAMES)
+        self.csv_writer.writeheader()
+
+    def write(self, row):
+        clean_row = {field: row.get(field, None) for field in METRIC_FIELDNAMES}
+        self.jsonl_file.write(json.dumps(clean_row, ensure_ascii=False, default=json_default) + "\n")
+        self.csv_writer.writerow(clean_row)
+        self.rows_since_flush += 1
+        if self.rows_since_flush >= self.flush_interval:
+            self.flush()
+
+    def flush(self):
+        self.jsonl_file.flush()
+        self.csv_file.flush()
+        self.rows_since_flush = 0
+
+    def close(self):
+        self.flush()
+        self.jsonl_file.close()
+        self.csv_file.close()
+
+
+def distributed_step_summary(local_values, device, world_size):
+    if world_size <= 1 or not dist.is_available() or not dist.is_initialized():
+        return {}
+
+    mean_keys = ["loss_total", "step_ms"]
+    max_keys = ["loss_total", "step_ms", "data_load_s", "grad_sync_s"]
+    min_keys = ["loss_total"]
+    sum_keys = ["samples_per_s", "tokens_per_s"]
+
+    def reduce_values(keys, op):
+        tensor = torch.tensor(
+            [float(local_values.get(key, 0.0) or 0.0) for key in keys],
+            dtype=torch.float32,
+            device=device,
+        )
+        dist.all_reduce(tensor, op=op)
+        return {key: float(value) for key, value in zip(keys, tensor.detach().cpu().tolist())}
+
+    mean_values = reduce_values(mean_keys, dist.ReduceOp.SUM)
+    max_values = reduce_values(max_keys, dist.ReduceOp.MAX)
+    min_values = reduce_values(min_keys, dist.ReduceOp.MIN)
+    sum_values = reduce_values(sum_keys, dist.ReduceOp.SUM)
+
+    return {
+        "cluster_loss_total_mean": mean_values["loss_total"] / world_size,
+        "cluster_loss_total_min": min_values["loss_total"],
+        "cluster_loss_total_max": max_values["loss_total"],
+        "cluster_step_ms_mean": mean_values["step_ms"] / world_size,
+        "cluster_step_ms_max": max_values["step_ms"],
+        "cluster_data_load_s_max": max_values["data_load_s"],
+        "cluster_grad_sync_s_max": max_values["grad_sync_s"],
+        "cluster_samples_per_s_sum": sum_values["samples_per_s"],
+        "cluster_tokens_per_s_sum": sum_values["tokens_per_s"],
+    }
 
 
 def str2bool(v):
@@ -137,6 +307,10 @@ def remote_output_name(out_path):
     if path.is_absolute():
         return path.name
     return out_path.rstrip("/")
+
+
+def get_node_rank():
+    return os.getenv("NODE_RANK") or os.getenv("node_rank") or "0"
 
 
 class DistributedFileSampler:
@@ -226,18 +400,18 @@ def read_parquet_delayed(fp):
     return dask.dataframe.read_parquet(fp, engine="pyarrow", memory_map=True)
 
 
-def load_data_for_rank(folder_path, rank, world_size):
+def load_data_for_rank(folder_path, rank, world_size, logger=None):
     file_paths = sorted(glob.glob(f"{folder_path}/*.parquet"))
     if not file_paths:
         raise FileNotFoundError(f"No parquet files found in {folder_path}")
 
     sub_file_paths = file_paths[rank::world_size]
-    print(f"[Rank {rank}] will read files: {sub_file_paths}", flush=True)
+    log_or_print(logger, "info", f"[Rank {rank}] will read files: {sub_file_paths}")
 
     delayed_reads = [read_parquet(fp) for fp in sub_file_paths]
     ddf = dask.dataframe.from_delayed(delayed_reads)
     pdf = ddf.compute()
-    print(f"[Rank {rank}] total rows read: {len(pdf)}", flush=True)
+    log_or_print(logger, "info", f"[Rank {rank}] total rows read: {len(pdf)}")
 
     return pdf
 
@@ -264,18 +438,22 @@ def load_data(folder_path):
     return delayed_reads
 
 
-def load_data_for_rank_with_DistributedFileSampler(train_data_filelist, file_indices, rank, NODE_RANK):
+def load_data_for_rank_with_DistributedFileSampler(train_data_filelist, file_indices, rank, NODE_RANK, logger=None):
     file_paths = deepcopy(train_data_filelist)
     if not train_data_filelist:
         raise FileNotFoundError(f"No parquet files found in {train_data_filelist}")
 
     sub_file_paths = [file_paths[i] for i in file_indices]
-    print(f"[Node {NODE_RANK} Rank {rank}] will read files: {[i.split('/')[-1] for i in sub_file_paths]}", flush=True)
+    log_or_print(
+        logger,
+        "info",
+        f"[Node {NODE_RANK} Rank {rank}] will read files: {[i.split('/')[-1] for i in sub_file_paths]}",
+    )
 
     delayed_reads = [read_parquet(fp) for fp in sub_file_paths]
     ddf = dd.from_delayed(delayed_reads)
     pdf = ddf.compute()
-    print(f"[Node {NODE_RANK} Rank {rank}] total rows read: {len(pdf)}", flush=True)
+    log_or_print(logger, "info", f"[Node {NODE_RANK} Rank {rank}] total rows read: {len(pdf)}")
 
     return pdf, sub_file_paths
 
@@ -347,15 +525,26 @@ def setup_ddp(backend='hccl', device_type='npu'):
     return ddp, rank, local_rank, master_process, world_size
 
 
-def train_loop(args, model, ddp, rank, optimizer, train_data_filelist, train_sampler, device, config, ctx, scaler, grad_clip, out_dir, collate_fn, world_size):
+def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelist, train_sampler, device, config, ctx, scaler, grad_clip, out_dir, collate_fn, world_size, logger):
     raw_model = model.module if ddp else model
     iter_num, update_step, runing_mfu = 0, 0, -1.0
 
-    save_step_interval = int(args.save_data_interval / world_size / args.batch_size)
-    print(f"save_step_interval {save_step_interval} = save_data_interval {args.save_data_interval} / world_size {world_size} / batch_size {args.batch_size}")
-    NODE_RANK = os.getenv('NODE_RANK') if os.getenv('NODE_RANK') else os.getenv('node_rank')
-    local_log_file = os.path.join(out_dir, f"log.{NODE_RANK}-{rank}.txt")
-    loss_to_log = {}
+    save_step_interval = max(1, int(args.save_data_interval / world_size / args.batch_size))
+    NODE_RANK = get_node_rank()
+    metrics_writer = StreamingMetricsWriter(
+        out_dir=out_dir,
+        node_rank=NODE_RANK,
+        rank=rank,
+        flush_interval=args.metrics_flush_interval,
+    )
+    logger.info(
+        "save_step_interval=%s save_data_interval=%s world_size=%s batch_size=%s",
+        save_step_interval,
+        args.save_data_interval,
+        world_size,
+        args.batch_size,
+    )
+    lr = optimizer.param_groups[0]["lr"]
 
     t_temp_1_sum_lr = 0
     t_temp_2_sum_data = 0
@@ -379,9 +568,9 @@ def train_loop(args, model, ddp, rank, optimizer, train_data_filelist, train_sam
                 train_data_filelist,
                 train_sampler,
                 rank,
-                NODE_RANK)
-            print(f"Node: {NODE_RANK}, Rank: {rank}, Epoch: {epoch}, Data: {[x.split('/')[-1] for x in file_paths]}")
-            write_to_log(f"Node: {NODE_RANK}, Rank: {rank}, Epoch: {epoch}, Data: {[x.split('/')[-1] for x in file_paths]}", local_log_file)
+                NODE_RANK,
+                logger=logger)
+            logger.info(f"Node: {NODE_RANK}, Rank: {rank}, Epoch: {epoch}, Data: {[x.split('/')[-1] for x in file_paths]}")
             data_loader = DataLoader(dataset=ParquetDataset(data_pt),
                 batch_size=args.batch_size,
                 collate_fn=collate_fn,
@@ -397,12 +586,12 @@ def train_loop(args, model, ddp, rank, optimizer, train_data_filelist, train_sam
         num_batches = len(data_loader) # 已经处理过 // args.batch_size
 
         # 确保 local_step 是一个 tensor，并且在 GPU 上或 CPU 上与进程环境一致
-        step_tensor = torch.tensor([num_batches], dtype=torch.long).to("npu" if torch.cuda.is_available() else "cpu")
+        step_tensor = torch.tensor([num_batches], dtype=torch.long, device=device)
         # 使用 all_reduce 进行全局最小值操作
         dist.all_reduce(step_tensor, op=dist.ReduceOp.MIN)
         # 返回全局最小值
         max_batch_index = int(step_tensor.item())
-        print(f"Node: {NODE_RANK} Rank: {rank} num_batches {num_batches} max_batch_index {max_batch_index}")
+        logger.info("Node: %s Rank: %s num_batches=%s max_batch_index=%s", NODE_RANK, rank, num_batches, max_batch_index)
 
         total_update_steps = math.ceil(max_batch_index / args.gradient_accumulation_steps) * args.epoch
         lr_decay_iters = total_update_steps
@@ -412,10 +601,11 @@ def train_loop(args, model, ddp, rank, optimizer, train_data_filelist, train_sam
                 f"lr_decay_iters ({lr_decay_iters}) must be > warmup_iters ({warmup_iters})"
 
         for batch_index, batch_data in enumerate(data_loader):
-            loss_to_log.setdefault("train/epoch", []).append(epoch+1)
-            loss_to_log.setdefault("train/batch_index", []).append(batch_index+1)
-
             t_temp_1_lr = 0.0
+            t_temp_7_loss_other = 0.0
+            loss_zero_prob_value = None
+            loss_gepc_value = None
+            loss_gepc_zero_prob_value = None
 
             t_temp_3_batchdata = time.time()
             input_gene_ids = batch_data["genes"].to(device)
@@ -480,12 +670,12 @@ def train_loop(args, model, ddp, rank, optimizer, train_data_filelist, train_sam
                                            target_values,
                                            mask_positions)
                 loss += loss_gep
-                loss_to_log.setdefault("train/GEP", []).append(loss_gep.item())
+                loss_gep_value = loss_gep.item()
                 # print(f"rank: {rank} loss_gep done")
                 t_temp_6_loss_gep = time.time() - t_temp_6_loss_gep
                 t_temp_6_sum_loss_gep += t_temp_6_loss_gep
 
-                t_temp_7_loss_gep_zero_prob = time.time()
+                t_temp_7_loss_other = time.time()
                 if config.explicit_zero_prob:
                     if torch.isnan(outputs["model_zero_prob"]).any():
                         raise ValueError("There are nan values in zero prob output!")
@@ -493,7 +683,7 @@ def train_loop(args, model, ddp, rank, optimizer, train_data_filelist, train_sam
                                                                  target_values,
                                                                  mask_positions)
                     loss += loss_zero_prob
-                    loss_to_log.setdefault("train/nzlp", []).append(loss_gep.item())
+                    loss_zero_prob_value = loss_zero_prob.item()
 
                     # print(f"rank: {rank} loss_zero_prob done")
                 if "mvc_output" in outputs:
@@ -501,7 +691,7 @@ def train_loop(args, model, ddp, rank, optimizer, train_data_filelist, train_sam
                                                 target_values,
                                                 mask_positions)
                     loss += loss_gepc
-                    loss_to_log.setdefault("train/GEPC", []).append(loss_gep.item())
+                    loss_gepc_value = loss_gepc.item()
 
                     # print(f"rank: {rank} mvc_output done")
                 if "mvc_output" in outputs and config.explicit_zero_prob:
@@ -509,12 +699,12 @@ def train_loop(args, model, ddp, rank, optimizer, train_data_filelist, train_sam
                                                                       target_values,
                                                                       mask_positions)
                     loss += loss_gepc_zero_prob
-                    loss_to_log.setdefault("train/GEPC_nzlp", []).append(loss_gep.item())
+                    loss_gepc_zero_prob_value = loss_gepc_zero_prob.item()
 
                     # print(f"rank: {rank} loss_gepc_zero_prob done")
                 loss = loss / args.gradient_accumulation_steps
-                t_temp_7_loss_gep_zero_prob = time.time() - t_temp_7_loss_gep_zero_prob
-                t_temp_7_sum_loss_gep_zero_prob += t_temp_7_loss_gep_zero_prob
+                t_temp_7_loss_other = time.time() - t_temp_7_loss_other
+                t_temp_7_sum_loss_gep_zero_prob += t_temp_7_loss_other
 
             # backward and optimization
             t_temp_8_backward = time.time()
@@ -568,10 +758,11 @@ def train_loop(args, model, ddp, rank, optimizer, train_data_filelist, train_sam
                 if (batch_index + 1) % save_step_interval == 0:
                     lossf = loss.item() * args.gradient_accumulation_steps
                     if ddp:
-                        save_model(model.module, optimizer, epoch, batch_index + 1, lossf, out_dir, rank, NODE_RANK, s3_remote_dir_path=args.s3_remote_dir_path)
+                        save_model(model.module, optimizer, epoch, batch_index + 1, lossf, out_dir, rank, NODE_RANK, s3_remote_dir_path=args.s3_remote_dir_path, logger=logger)
                     else:
-                        save_model(model, optimizer, epoch, batch_index + 1, lossf, out_dir, rank, NODE_RANK, s3_remote_dir_path=args.s3_remote_dir_path)
-                    save_log_to_s3(args, out_dir, NODE_RANK, rank)
+                        save_model(model, optimizer, epoch, batch_index + 1, lossf, out_dir, rank, NODE_RANK, s3_remote_dir_path=args.s3_remote_dir_path, logger=logger)
+                    metrics_writer.flush()
+                    save_log_to_s3(args, out_dir, NODE_RANK, rank, logger=logger)
             else:
                 pass
                 # print(f"rank: {rank} not in step update zero_grad")
@@ -581,38 +772,107 @@ def train_loop(args, model, ddp, rank, optimizer, train_data_filelist, train_sam
 
             t_temp_1 = time.time()
             dt = t_temp_1 - t_temp_0
-            time_checker = (f"1_lr {t_temp_1_lr:.4f} "
-                            f"2_epoch_dataloder {t_temp_2_data:.4f} "
-                            f"3_step_batched_data {t_temp_3_batchdata:.4f} "
-                            # f"4_sync {t_temp_4_sync:.4f} "
-                            f"5_forward {t_temp_5_forward:.4f} "
-                            f"6_loss_gep {t_temp_6_loss_gep:.4f} "
-                            f"7_loss_gep_zero_prob {t_temp_7_loss_gep_zero_prob:.4f} "
-                            f"8_backward {t_temp_8_backward:.4f} "
-                            f"9_step_update_grad {t_temp_9_step_update_grad:.4f} "
-                            f"10_sync {t_temp_10_sync:.4f}")
             t_temp_0 = t_temp_1
 
             lossf = loss.item() * args.gradient_accumulation_steps
             if iter_num % 100 == 0 and iter_num != 0:
                 mfu = raw_model.estimate_mfu(args.batch_size * args.gradient_accumulation_steps, dt)
                 runing_mfu = mfu if runing_mfu == -1.0 else 0.9 * runing_mfu + 0.1 * mfu
-            log_info = f"Node: {NODE_RANK}, rank: {rank}, [e: {epoch+1}, {batch_index + 1}/{num_batches}], loss: {lossf:.4f}, time {dt * 1000:.2f}ms, mfu: {runing_mfu * 100:.2f}%, {time_checker}"
-            print(log_info)
-            write_to_log(log_info, local_log_file)
 
-            total_loss += loss.item()
-            # print(f"rank: {rank} total_loss")
-            loss_to_log.setdefault("train/total_loss", []).append(loss_gep.item())
+            local_batch_size = int(target_values.shape[0])
+            step_ms = dt * 1000.0
+            samples_per_s = local_batch_size / dt if dt > 0 else 0.0
+            tokens_per_s = local_batch_size * args.seq_len / dt if dt > 0 else 0.0
+            mfu_value = None if runing_mfu < 0 else runing_mfu
+            local_metric_values = {
+                "loss_total": lossf,
+                "step_ms": step_ms,
+                "data_load_s": t_temp_2_data,
+                "grad_sync_s": t_temp_10_sync,
+                "samples_per_s": samples_per_s,
+                "tokens_per_s": tokens_per_s,
+            }
+
+            final_step_in_epoch = (batch_index + 1) >= max_batch_index
+            should_log = (iter_num % max(1, args.log_interval) == 0) or final_step_in_epoch
+            should_profile = (
+                args.profile_interval > 0
+                and ((iter_num % args.profile_interval == 0) or final_step_in_epoch)
+            )
+            cluster_summary = distributed_step_summary(local_metric_values, device, world_size) if should_log else {}
+
+            metric_row = {
+                "time": datetime.datetime.now().isoformat(timespec="seconds"),
+                "node_rank": NODE_RANK,
+                "rank": rank,
+                "local_rank": local_rank,
+                "epoch": epoch + 1,
+                "batch_index": batch_index + 1,
+                "num_batches": num_batches,
+                "update_step": update_step,
+                "should_step": should_step,
+                "lr": lr,
+                "loss_total": lossf,
+                "loss_gep": loss_gep_value,
+                "loss_zero_prob": loss_zero_prob_value,
+                "loss_gepc": loss_gepc_value,
+                "loss_gepc_zero_prob": loss_gepc_zero_prob_value,
+                "step_ms": step_ms,
+                "data_load_s": t_temp_2_data,
+                "to_device_s": t_temp_3_batchdata,
+                "forward_s": t_temp_5_forward,
+                "loss_s": t_temp_6_loss_gep + t_temp_7_loss_other,
+                "backward_s": t_temp_8_backward,
+                "optimizer_s": t_temp_9_step_update_grad,
+                "grad_sync_s": t_temp_10_sync,
+                "samples_per_s": samples_per_s,
+                "tokens_per_s": tokens_per_s,
+                "mfu": mfu_value,
+                **cluster_summary,
+            }
+            metrics_writer.write(metric_row)
+
+            if should_log:
+                mfu_text = "NA" if mfu_value is None else f"{mfu_value * 100:.2f}%"
+                logger.info(
+                    "Node: %s, rank: %s, [e: %s, %s/%s], loss: %.4f, time %.2fms, mfu: %s, "
+                    "cluster_loss_mean=%s, cluster_step_max_ms=%s",
+                    NODE_RANK,
+                    rank,
+                    epoch + 1,
+                    batch_index + 1,
+                    num_batches,
+                    lossf,
+                    step_ms,
+                    mfu_text,
+                    f"{cluster_summary['cluster_loss_total_mean']:.4f}" if cluster_summary else "NA",
+                    f"{cluster_summary['cluster_step_ms_max']:.2f}" if cluster_summary else "NA",
+                )
+            if should_profile:
+                logger.info(
+                    "profile epoch=%s batch=%s lr_s=%.4f data_load_s=%.4f to_device_s=%.4f forward_s=%.4f "
+                    "loss_s=%.4f backward_s=%.4f optimizer_s=%.4f grad_sync_s=%.4f",
+                    epoch + 1,
+                    batch_index + 1,
+                    t_temp_1_lr,
+                    t_temp_2_data,
+                    t_temp_3_batchdata,
+                    t_temp_5_forward,
+                    t_temp_6_loss_gep + t_temp_7_loss_other,
+                    t_temp_8_backward,
+                    t_temp_9_step_update_grad,
+                    t_temp_10_sync,
+                )
+
+            total_loss += lossf
             iter_num += 1
 
             if (batch_index + 1) >= max_batch_index:
                 break
 
-        total_loss = total_loss * args.gradient_accumulation_steps / num_batches
+        total_loss = total_loss / num_batches
         loss_info = f"Node: {NODE_RANK}, Rank: {rank}, Epoch [{epoch + 1}/{args.epoch}], average loss is: {total_loss:.4f} | Learning rate is: {lr}"
-        print(loss_info)
-        write_to_log(loss_info, local_log_file)
+        logger.info(loss_info)
         time_checker = (
                         f"Node: {NODE_RANK} "
                         f"Rank: {rank} "
@@ -626,40 +886,47 @@ def train_loop(args, model, ddp, rank, optimizer, train_data_filelist, train_sam
                         f"8_backward {t_temp_8_sum_backward:.4f} "
                         f"9_step_update_grad {t_temp_9_sum_step_update_grad:.4f} "
                         f"10_sync {t_temp_10_sum_sync:.4f}")
-        print(time_checker)
-        write_to_log(time_checker, local_log_file)
+        logger.info(time_checker)
         total_loss = 0
 
-    pd.DataFrame(loss_to_log).to_csv(os.path.join(out_dir, f"loss_to_log.{NODE_RANK}-{rank}.txt"), index=False)
-    save_log_to_s3(args, out_dir, NODE_RANK, rank)
+    metrics_writer.close()
+    save_log_to_s3(args, out_dir, NODE_RANK, rank, logger=logger)
 
-    NODE_RANK = os.getenv('NODE_RANK') if os.getenv('NODE_RANK') else os.getenv('node_rank')
+    NODE_RANK = get_node_rank()
     if ddp:
-        save_model(model.module, optimizer, args.epoch+1, 0, 0, out_dir, rank, NODE_RANK, s3_remote_dir_path=args.s3_remote_dir_path)
+        save_model(model.module, optimizer, args.epoch+1, 0, 0, out_dir, rank, NODE_RANK, s3_remote_dir_path=args.s3_remote_dir_path, logger=logger)
     else:
-        save_model(model, optimizer, args.epoch+1, 0, 0, out_dir, rank, NODE_RANK, s3_remote_dir_path=args.s3_remote_dir_path)
-    save_log_to_s3(args, out_dir, NODE_RANK, rank)
+        save_model(model, optimizer, args.epoch+1, 0, 0, out_dir, rank, NODE_RANK, s3_remote_dir_path=args.s3_remote_dir_path, logger=logger)
+    save_log_to_s3(args, out_dir, NODE_RANK, rank, logger=logger)
 
-def save_log_to_s3(args, out_dir, NODE_RANK, rank):
+def save_log_to_s3(args, out_dir, NODE_RANK, rank, logger=None):
     if not args.s3_remote_dir_path or not is_remote_output_path(args.s3_remote_dir_path):
         return
     if mox is None:
+        log_or_print(logger, "warning", "moxing is not available; skip log upload to remote output path")
         return
     try:
         mox.file.mk_dir(args.s3_remote_dir_path)
-        mox.file.copy(os.path.join(out_dir,
-                                   f"loss_to_log.{NODE_RANK}-{rank}.txt"),
-                      args.s3_remote_dir_path.strip("/") + "/" + f"loss_to_log.{NODE_RANK}-{rank}.txt")
-        mox.file.copy(os.path.join(out_dir,
-                                   f"log.{NODE_RANK}-{rank}.txt"),
-                      args.s3_remote_dir_path.strip("/") + "/" + f"log.{NODE_RANK}-{rank}.txt")
-        print(f'torch.save and to S3: {args.s3_remote_dir_path.strip("/") + "/" + f"loss_to_log.{NODE_RANK}-{rank}.txt"} {args.s3_remote_dir_path.strip("/") + "/" + f"log.{NODE_RANK}-{rank}.txt"}')
+        uploaded = []
+        for filename in (
+            f"loss_to_log.{NODE_RANK}-{rank}.txt",
+            f"metrics.{NODE_RANK}-{rank}.jsonl",
+            f"log.{NODE_RANK}-{rank}.txt",
+        ):
+            local_path = os.path.join(out_dir, filename)
+            if not os.path.exists(local_path):
+                continue
+            remote_path = args.s3_remote_dir_path.strip("/") + "/" + filename
+            mox.file.copy(local_path, remote_path)
+            uploaded.append(remote_path)
+        if uploaded:
+            log_or_print(logger, "info", f"log_sync remote_paths={uploaded}")
     except Exception as e:
-        print(e)
+        log_or_print(logger, "exception", f"log_sync_failed error={e}", exc_info=True)
 
-def save_model(model, optimizer, epoch, step, loss, out_dir, local_rank=None, NODE_RANK=None, savepath=None, s3_remote_dir_path=None):
+def save_model(model, optimizer, epoch, step, loss, out_dir, local_rank=None, NODE_RANK=None, savepath=None, s3_remote_dir_path=None, logger=None):
     if NODE_RANK is None:
-        NODE_RANK = os.getenv('NODE_RANK') if os.getenv('NODE_RANK') else os.getenv('node_rank')
+        NODE_RANK = get_node_rank()
     if not savepath:
         savepath = "SC-node-{node:02d}-rank-{rank:02d}-epoch-{epoch:02d}-step-{step}-loss-{loss:.6f}.pt"
     save_path = savepath.format(
@@ -677,21 +944,23 @@ def save_model(model, optimizer, epoch, step, loss, out_dir, local_rank=None, NO
             mox.file.mk_dir(s3_remote_dir_path)
             mox.file.copy(os.path.join(out_dir, save_path), s3_remote_dir_path.strip("/") + "/" + save_path)
             mox.file.copy(os.path.join(out_dir, save_other_path), s3_remote_dir_path.strip("/") + "/" + save_other_path)
-            print(f'torch.save and to S3: {s3_remote_dir_path.strip("/") + "/" + save_path} {s3_remote_dir_path.strip("/") + "/" + save_other_path}')
+            log_or_print(
+                logger,
+                "info",
+                f'checkpoint_saved remote_model={s3_remote_dir_path.strip("/") + "/" + save_path} '
+                f'remote_optimizer={s3_remote_dir_path.strip("/") + "/" + save_other_path}',
+            )
             os.remove(os.path.join(out_dir, save_path))
             os.remove(os.path.join(out_dir, save_other_path))
         else:
-            print(
+            log_or_print(
+                logger,
+                "warning",
                 f"moxing not available; checkpoints kept locally only: "
                 f"{os.path.join(out_dir, save_path)} {os.path.join(out_dir, save_other_path)}"
             )
     else:
-        print(f"torch.save: {save_path} {save_other_path}")
-
-def write_to_log(c, path):
-    with open(path, "a") as f:
-        f.write(c+"\n")
-
+        log_or_print(logger, "info", f"checkpoint_saved model={save_path} optimizer={save_other_path}")
 
 def main(args):
     data_path = args.data_path
@@ -749,9 +1018,6 @@ def main(args):
                                         desc_embeddings=desc_embeddings,
                                         dna_embeddings=dna_embeddings)
     
-    print("\n=== build model ===")
-    print(config)
-
     out_dir = out_dir.format(hidden_size=config.hidden_size, num_hidden_layers=config.num_hidden_layers,
                              num_attention_heads=config.num_attention_heads, hidden_dropout_prob=config.hidden_dropout_prob,
                              learning_rate=learning_rate, min_lr=min_lr, weight_decay=weight_decay, warmup_ratio=warmup_ratio)
@@ -764,14 +1030,35 @@ def main(args):
     if not os.path.exists(out_dir):
         raise FileNotFoundError(f"Output directory {out_dir} does not exist!")
         sys.exit(1)
-    print(os.path.abspath(out_dir))
-    print(args.s3_remote_dir_path)
 
     # set up for multiple GPUs run
-    ddp, rank, local_rank, master_process, world_size = setup_ddp(backend='hccl', device_type='npu')
+    ddp, rank, local_rank, master_process, world_size = setup_ddp(backend=backend, device_type=device_type)
     device = f"npu:{local_rank}"
     tokens_per_epoch = gradient_accumulation_steps * world_size * batch_size * seq_len
-    print(f"ddp: {ddp}, rank: {rank}, local_rank: {local_rank}, world_size: {world_size}, master_process: {master_process}, device: {device}, tokens_per_epoch: {tokens_per_epoch}")
+    NODE_RANK = get_node_rank()
+    logger = setup_rank_logger(
+        out_dir=out_dir,
+        node_rank=NODE_RANK,
+        rank=rank,
+        local_rank=local_rank,
+        master_process=master_process,
+        log_level=args.log_level,
+        log_all_ranks=args.log_all_ranks,
+    )
+    logger.info("sys.argv=%s", sys.argv)
+    logger.info("args=%s", json.dumps(vars(args), ensure_ascii=False, indent=2, default=json_default))
+    logger.info("model_config=%s", config)
+    logger.info("output_dir=%s remote_output_dir=%s", os.path.abspath(out_dir), args.s3_remote_dir_path)
+    logger.info(
+        "ddp=%s rank=%s local_rank=%s world_size=%s master_process=%s device=%s tokens_per_epoch=%s",
+        ddp,
+        rank,
+        local_rank,
+        world_size,
+        master_process,
+        device,
+        tokens_per_epoch,
+    )
 
     # Since we do not use DistributedSampler to distribute data, so commenting it
     train_data_filelist = get_files(data_path, args.num_of_used_data)  # get all parquet files, use for PreindexedParquetDataset
@@ -790,17 +1077,17 @@ def main(args):
     # compile the model
     if compile:
         if master_process:
-            print(f"{compile} compiling the model...(take a ~minute)")
+            logger.info("%s compiling the model...(take a ~minute)", compile)
         unoptimized_model = model
         model = torch.compile(model)  # requires P
     if ddp:
         model = DDP(model, device_ids=[local_rank], find_unused_parameters=False)
 
     ctx = nullcontext() if device_type == 'cpu' else torch.autocast(device_type=device_type, dtype=ptdtype)
-    train_loop(args, model, ddp, rank, optimizer, train_data_filelist, train_sampler, device, config, ctx, scaler, grad_clip, out_dir, collate_fn, world_size)
+    train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelist, train_sampler, device, config, ctx, scaler, grad_clip, out_dir, collate_fn, world_size, logger)
 
     t1 = time.time()
-    print(f"Complete pretraining! Running time is {t1 - t0:.2f}s.")
+    logger.info("Complete pretraining! Running time is %.2fs.", t1 - t0)
 
 
 def argumentparser():
@@ -885,6 +1172,25 @@ def argumentparser():
     parser.add_argument('--s3_remote_dir_path',
                         type=str,
                         default="")
+    parser.add_argument('--log_interval',
+                        type=int,
+                        default=10,
+                        help="Write human-readable step summaries every N local batches.")
+    parser.add_argument('--profile_interval',
+                        type=int,
+                        default=100,
+                        help="Write detailed timing profiles every N local batches. Use 0 to disable.")
+    parser.add_argument('--metrics_flush_interval',
+                        type=int,
+                        default=100,
+                        help="Flush JSONL/CSV metric files every N rows.")
+    parser.add_argument('--log_level',
+                        type=str,
+                        default="INFO")
+    parser.add_argument('--log_all_ranks',
+                        type=str2bool,
+                        default=False,
+                        help="If true, all ranks also write summaries to stdout; otherwise only global rank 0 does.")
     parser.add_argument('--hidden_size',
         type=int,
         default=None)
@@ -984,13 +1290,6 @@ def argumentparser():
 
 if __name__ == "__main__":
     args = argumentparser()
-    # 使用json格式化
-    print("\n=== sys.argv ===")
-    print(sys.argv)
-    time.sleep(10)
-    print("\n=== JSON格式 ===")
-    print(json.dumps(vars(args), indent=4))
-    time.sleep(10)
     main(args)
 
 """

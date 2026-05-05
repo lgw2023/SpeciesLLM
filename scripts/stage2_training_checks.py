@@ -391,6 +391,7 @@ def check_training(args: argparse.Namespace) -> None:
     else:
         rank_logs = sorted(args.train_out_dir.glob("log.*.txt"))
         loss_logs = sorted(args.train_out_dir.glob("loss_to_log.*.txt"))
+        metrics_logs = sorted(args.train_out_dir.glob("metrics.*.jsonl"))
         all_pt_files = sorted(args.train_out_dir.glob("SC-node-*-rank-*-epoch-*-step-*-loss-*.pt"))
         weights = [p for p in all_pt_files if not p.name.endswith(".optimizer.pt")]
         optimizer_weights = sorted(
@@ -399,7 +400,7 @@ def check_training(args: argparse.Namespace) -> None:
 
         print(f"[INFO] output dir: {args.train_out_dir}")
         print(
-            f"[INFO] rank logs={len(rank_logs)}, loss logs={len(loss_logs)}, "
+            f"[INFO] rank logs={len(rank_logs)}, loss logs={len(loss_logs)}, metrics logs={len(metrics_logs)}, "
             f"weights={len(weights)}, optimizer states={len(optimizer_weights)}"
         )
 
@@ -407,6 +408,8 @@ def check_training(args: argparse.Namespace) -> None:
             errors.append(f"expected at least {args.world_size} rank logs, found {len(rank_logs)}")
         if len(loss_logs) < args.world_size:
             errors.append(f"expected at least {args.world_size} loss logs, found {len(loss_logs)}")
+        if len(metrics_logs) < args.world_size:
+            warnings.append(f"expected metrics jsonl logs for {args.world_size} ranks, found {len(metrics_logs)}")
 
         final_epoch = args.epoch + 1
         final_pattern = re.compile(
@@ -469,11 +472,24 @@ def check_training(args: argparse.Namespace) -> None:
         for loss_path in loss_logs:
             try:
                 with loss_path.open(newline="", encoding="utf-8") as fh:
-                    rows = list(csv.DictReader(fh))
-                if not rows:
+                    reader = csv.DictReader(fh)
+                    first_row = next(reader, None)
+                if first_row is None:
                     errors.append(f"{loss_path}: empty loss csv")
             except Exception as exc:  # noqa: BLE001
                 errors.append(f"{loss_path}: cannot parse loss csv: {exc}")
+
+        for metrics_path in metrics_logs:
+            try:
+                with metrics_path.open(encoding="utf-8", errors="replace") as fh:
+                    first_line = fh.readline()
+                if not first_line:
+                    raise IndexError
+                json.loads(first_line)
+            except IndexError:
+                warnings.append(f"{metrics_path}: empty metrics jsonl")
+            except Exception as exc:  # noqa: BLE001
+                warnings.append(f"{metrics_path}: cannot parse first metrics jsonl row: {exc}")
 
     if args.node_log_dir.exists():
         node_logs = sorted(args.node_log_dir.glob("node_rank*.log"))

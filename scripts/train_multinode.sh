@@ -149,6 +149,11 @@ backend="${backend:-${BACKEND:-hccl}}"
 device="${device:-${DEVICE:-npu}}"
 device_type="${device_type:-${DEVICE_TYPE:-npu}}"
 s3_remote_dir_path="${s3_remote_dir_path:-${S3_REMOTE_DIR_PATH:-}}"
+log_interval="${log_interval:-${LOG_INTERVAL:-10}}"
+profile_interval="${profile_interval:-${PROFILE_INTERVAL:-100}}"
+metrics_flush_interval="${metrics_flush_interval:-${METRICS_FLUSH_INTERVAL:-100}}"
+log_level="${log_level:-${LOG_LEVEL:-INFO}}"
+log_all_ranks="${log_all_ranks:-${LOG_ALL_RANKS:-false}}"
 
 WORKER_MODE=0
 if [[ "${1:-}" == "--worker" ]]; then
@@ -408,6 +413,11 @@ build_train_args() {
     "--backend=${backend}"
     "--device=${device}"
     "--device_type=${device_type}"
+    "--log_interval=${log_interval}"
+    "--profile_interval=${profile_interval}"
+    "--metrics_flush_interval=${metrics_flush_interval}"
+    "--log_level=${log_level}"
+    "--log_all_ranks=${log_all_ranks}"
   )
 
   if [[ -n "$s3_remote_dir_path" ]]; then
@@ -526,6 +536,7 @@ remote_env_assignments() {
     gradient_accumulation_steps learning_rate min_lr decay_lr warmup_iters
     warmup_ratio weight_decay save_data_interval beta1 beta2 grad_clip compile
     backend device device_type s3_remote_dir_path
+    log_interval profile_interval metrics_flush_interval log_level log_all_ranks
   )
 
   printf "NODE_RANK=%s " "$(shell_quote "$rank")"

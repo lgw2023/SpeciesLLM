@@ -93,6 +93,11 @@ BACKEND="${BACKEND:-hccl}"
 DEVICE="${DEVICE:-npu}"
 DEVICE_TYPE="${DEVICE_TYPE:-npu}"
 S3_REMOTE_DIR_PATH="${S3_REMOTE_DIR_PATH:-}"
+LOG_INTERVAL="${LOG_INTERVAL:-10}"
+PROFILE_INTERVAL="${PROFILE_INTERVAL:-100}"
+METRICS_FLUSH_INTERVAL="${METRICS_FLUSH_INTERVAL:-100}"
+LOG_LEVEL="${LOG_LEVEL:-INFO}"
+LOG_ALL_RANKS="${LOG_ALL_RANKS:-false}"
 
 # 模型结构、label 开关、label 数量和 SEQ_LEN 不在 shell 中写默认值；
 # load_model_config_from_json 会从 MODEL_CONFIG_JSON 严格加载，缺字段立即退出。
@@ -379,6 +384,11 @@ train_args() {
     "--backend=${BACKEND}"
     "--device=${DEVICE}"
     "--device_type=${DEVICE_TYPE}"
+    "--log_interval=${LOG_INTERVAL}"
+    "--profile_interval=${PROFILE_INTERVAL}"
+    "--metrics_flush_interval=${METRICS_FLUSH_INTERVAL}"
+    "--log_level=${LOG_LEVEL}"
+    "--log_all_ranks=${LOG_ALL_RANKS}"
   )
   if [[ -n "$S3_REMOTE_DIR_PATH" ]]; then
     TRAIN_ARGS+=("--s3_remote_dir_path=${S3_REMOTE_DIR_PATH}")
@@ -470,6 +480,11 @@ write_launcher_script() {
     print_export DEVICE "$DEVICE"
     print_export DEVICE_TYPE "$DEVICE_TYPE"
     print_export S3_REMOTE_DIR_PATH "$S3_REMOTE_DIR_PATH"
+    print_export LOG_INTERVAL "$LOG_INTERVAL"
+    print_export PROFILE_INTERVAL "$PROFILE_INTERVAL"
+    print_export METRICS_FLUSH_INTERVAL "$METRICS_FLUSH_INTERVAL"
+    print_export LOG_LEVEL "$LOG_LEVEL"
+    print_export LOG_ALL_RANKS "$LOG_ALL_RANKS"
     print_export ASCEND_RT_VISIBLE_DEVICES_VALUE "$ASCEND_RT_VISIBLE_DEVICES_VALUE"
     print_export HCCL_CONNECT_TIMEOUT "$HCCL_CONNECT_TIMEOUT"
     print_export HCCL_EXEC_TIMEOUT "$HCCL_EXEC_TIMEOUT"

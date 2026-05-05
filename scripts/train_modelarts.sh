@@ -22,6 +22,11 @@ usage() {
     echo "  --compile=<value>                  compile."
     echo "  --num_of_used_data=<value>         num_of_used_data."
     echo "  --save_data_interval=<value>       save_data_interval."
+    echo "  --log_interval=<value>             Human-readable training log interval."
+    echo "  --profile_interval=<value>         Detailed timing profile interval; 0 disables."
+    echo "  --metrics_flush_interval=<value>   Structured metrics flush interval."
+    echo "  --log_level=<value>                Python logging level."
+    echo "  --log_all_ranks=<value>            Whether every rank writes summaries to stdout."
     echo "  -h, --help                         Display this help message and exit."
     echo ""
     echo "Example:"
@@ -54,6 +59,11 @@ grad_clip=1.0
 gradient_accumulation_steps=4
 device="npu"
 device_type="npu"
+log_interval=10
+profile_interval=100
+metrics_flush_interval=100
+log_level="INFO"
+log_all_ranks=false
 hidden_size=1280
 num_hidden_layers=24
 num_attention_heads=20
@@ -299,6 +309,26 @@ for arg in "$@"; do
             explicit_zero_prob="${arg#*=}"
             shift
             ;;
+        --log_interval=*)
+            log_interval="${arg#*=}"
+            shift
+            ;;
+        --profile_interval=*)
+            profile_interval="${arg#*=}"
+            shift
+            ;;
+        --metrics_flush_interval=*)
+            metrics_flush_interval="${arg#*=}"
+            shift
+            ;;
+        --log_level=*)
+            log_level="${arg#*=}"
+            shift
+            ;;
+        --log_all_ranks=*)
+            log_all_ranks="${arg#*=}"
+            shift
+            ;;
         -h|--help)
             usage
             ;;
@@ -330,6 +360,11 @@ export grad_clip="$grad_clip"
 export gradient_accumulation_steps="$gradient_accumulation_steps"
 export device="$device"
 export device_type="$device_type"
+export log_interval="$log_interval"
+export profile_interval="$profile_interval"
+export metrics_flush_interval="$metrics_flush_interval"
+export log_level="$log_level"
+export log_all_ranks="$log_all_ranks"
 
 export hidden_size="$hidden_size"
 export num_hidden_layers="$num_hidden_layers"
@@ -458,6 +493,11 @@ cmd_args="--data_path=$data_path \
     --backend=$backend \
     --device=$device \
     --device_type=$device_type \
+    --log_interval=$log_interval \
+    --profile_interval=$profile_interval \
+    --metrics_flush_interval=$metrics_flush_interval \
+    --log_level=$log_level \
+    --log_all_ranks=$log_all_ranks \
     --s3_remote_dir_path=$full_s3_remote_dir_path \
     --hidden_size=$hidden_size \
     --num_hidden_layers=$num_hidden_layers \
