@@ -78,8 +78,8 @@ export DATA_PATH="${FLAT_TEST_DIR}"
 export NUM_OF_USED_DATA=0
 export OUT_PATH=training_output
 
-# 保留你自己改过的训练参数
-export BATCH_SIZE=64
+# 保留你自己改过的训练参数；已在环境中设置时不会覆盖
+export BATCH_SIZE="${BATCH_SIZE:-64}"
 export EPOCH=1
 export GRADIENT_ACCUMULATION_STEPS=4
 export LEARNING_RATE=0.00001
