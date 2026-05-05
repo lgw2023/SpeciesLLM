@@ -172,18 +172,6 @@ SpeciesLLM/
     └── speciesllm_macrogene_revised_proposal.md  # Macrogene design document
 ```
 
-## Citation
-
-If you use SpeciesLLM in your research, please cite:
-
-```bibtex
-@article{speciesllm2026,
-  title={SpeciesLLM: A Multi-Species Single-Cell Foundation Model via Macrogene Construction},
-  author={Li, Guowei},
-  year={2026}
-}
-```
-
 ## License
 
 This project is licensed under the terms included in the [LICENSE](LICENSE) file.
