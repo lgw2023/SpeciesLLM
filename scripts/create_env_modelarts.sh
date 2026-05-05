@@ -12,7 +12,6 @@ pip install --upgrade pip --quiet --no-warn-script-location
 
 # 批量安装包
 packages=(
-    "torchtext==0.15.2 --no-deps"
     "torchdata==0.6.1 --no-deps"
     "toolz==1.0.0 --no-deps"
     "pydantic==2.7.1 --no-deps"

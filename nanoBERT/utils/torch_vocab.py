@@ -1,169 +1,142 @@
-from typing import Dict, List, Optional
+from collections import OrderedDict
+from typing import Dict, Iterable, List, Mapping, Optional
 
-import torch
-import torch.nn as nn
 
-def log_class_usage(klass):
-    identifier = "torchtext"
-    if klass and hasattr(klass, "__name__"):
-        identifier += f".{klass.__name__}"
-    torch._C._log_api_usage_once(identifier)
+class Vocab:
+    """Small Vocab-compatible token/index mapping.
 
-class Vocab(nn.Module):
-    __jit_unused_properties__ = ["is_jitable"]
-    r"""Creates a vocab object which maps tokens to indices.
-
-    Args:
-        vocab (torch.classes.torchtext.Vocab or torchtext._torchtext.Vocab): a cpp vocab object.
+    The project only needs vocabulary bookkeeping. Keeping this implementation
+    local avoids external binary dependencies on specific
+    PyTorch releases.
     """
 
-    def __init__(self, vocab) -> None:
-        super(Vocab, self).__init__()
-        self.vocab = vocab
-        log_class_usage(__class__)
+    def __init__(self, tokens: Iterable[str] = (), default_index: Optional[int] = None) -> None:
+        self.itos_: List[str] = []
+        self.stoi_: Dict[str, int] = {}
+        self.default_index_ = default_index
+
+        for token in tokens:
+            self.append_token(token)
 
     @property
-    def is_jitable(self):
-        return isinstance(self.vocab, torch._C.ScriptObject)
-
-    @torch.jit.export
-    def forward(self, tokens: List[str]) -> List[int]:
-        r"""Calls the `lookup_indices` method
-
-        Args:
-            tokens: a list of tokens used to lookup their corresponding `indices`.
-
-        Returns:
-            The indices associated with a list of `tokens`.
-        """
-        return self.vocab.lookup_indices(tokens)
-
-    @torch.jit.export
-    def __len__(self) -> int:
-        r"""
-        Returns:
-            The length of the vocab.
-        """
-        return len(self.vocab)
-
-    @torch.jit.export
-    def __contains__(self, token: str) -> bool:
-        r"""
-        Args:
-            token: The token for which to check the membership.
-
-        Returns:
-            Whether the token is member of vocab or not.
-        """
-        return self.vocab.__contains__(token)
-
-    @torch.jit.export
-    def __getitem__(self, token: str) -> int:
-        r"""
-        Args:
-            token: The token used to lookup the corresponding index.
-
-        Returns:
-            The index corresponding to the associated token.
-        """
-        return self.vocab[token]
-
-    @torch.jit.export
-    def set_default_index(self, index: Optional[int]) -> None:
-        r"""
-        Args:
-            index: Value of default index. This index will be returned when OOV token is queried.
-        """
-        self.vocab.set_default_index(index)
-
-    @torch.jit.export
-    def get_default_index(self) -> Optional[int]:
-        r"""
-        Returns:
-            Value of default index if it is set.
-        """
-        return self.vocab.get_default_index()
-
-    @torch.jit.export
-    def insert_token(self, token: str, index: int) -> None:
-        r"""
-        Args:
-            token: The token used to lookup the corresponding index.
-            index: The index corresponding to the associated token.
-        Raises:
-            RuntimeError: If `index` is not in range [0, Vocab.size()] or if `token` already exists in the vocab.
-        """
-        self.vocab.insert_token(token, index)
-
-    @torch.jit.export
-    def append_token(self, token: str) -> None:
-        r"""
-        Args:
-            token: The token used to lookup the corresponding index.
-
-        Raises:
-            RuntimeError: If `token` already exists in the vocab
-        """
-        self.vocab.append_token(token)
-
-    @torch.jit.export
-    def lookup_token(self, index: int) -> str:
-        r"""
-        Args:
-            index: The index corresponding to the associated token.
-
-        Returns:
-            token: The token used to lookup the corresponding index.
-
-        Raises:
-            RuntimeError: If `index` not in range [0, itos.size()).
-        """
-        return self.vocab.lookup_token(index)
-
-    @torch.jit.export
-    def lookup_tokens(self, indices: List[int]) -> List[str]:
-        r"""
-        Args:
-            indices: The `indices` used to lookup their corresponding`tokens`.
-
-        Returns:
-            The `tokens` associated with `indices`.
-
-        Raises:
-            RuntimeError: If an index within `indices` is not int range [0, itos.size()).
-        """
-        return self.vocab.lookup_tokens(indices)
-
-    @torch.jit.export
-    def lookup_indices(self, tokens: List[str]) -> List[int]:
-        r"""
-        Args:
-            tokens: the tokens used to lookup their corresponding `indices`.
-
-        Returns:
-            The 'indices` associated with `tokens`.
-        """
-        return self.vocab.lookup_indices(tokens)
-
-    @torch.jit.export
-    def get_stoi(self) -> Dict[str, int]:
-        r"""
-        Returns:
-            Dictionary mapping tokens to indices.
-        """
-        return self.vocab.get_stoi()
-
-    @torch.jit.export
-    def get_itos(self) -> List[str]:
-        r"""
-        Returns:
-            List mapping indices to tokens.
-        """
-        return self.vocab.get_itos()
-
-    def __prepare_scriptable__(self):
-        r"""Return a JITable Vocab."""
-        if not self.is_jitable:
-            cpp_vocab = torch.classes.torchtext.Vocab(self.vocab.itos_, self.vocab.default_index_)
-            return Vocab(cpp_vocab)
+    def vocab(self) -> "Vocab":
+        """Compatibility with wrappers that expose `.vocab`."""
         return self
+
+    @property
+    def is_jitable(self) -> bool:
+        return False
+
+    def forward(self, tokens: List[str]) -> List[int]:
+        return self.lookup_indices(tokens)
+
+    def __call__(self, tokens: List[str]) -> List[int]:
+        return self.lookup_indices(tokens)
+
+    def __len__(self) -> int:
+        return len(self.itos_)
+
+    def __contains__(self, token: str) -> bool:
+        return token in self.stoi_
+
+    def __getitem__(self, token: str) -> int:
+        if token in self.stoi_:
+            return self.stoi_[token]
+        if self.default_index_ is not None:
+            return self.default_index_
+        raise KeyError(f"Token {token!r} not found and default index is not set.")
+
+    def set_default_index(self, index: Optional[int]) -> None:
+        self.default_index_ = index
+
+    def get_default_index(self) -> Optional[int]:
+        return self.default_index_
+
+    def insert_token(self, token: str, index: int) -> None:
+        if token in self.stoi_:
+            raise RuntimeError(f"Token {token!r} already exists in the vocabulary.")
+        if index < 0 or index > len(self.itos_):
+            raise RuntimeError(
+                f"Index {index} is out of range for vocabulary size {len(self.itos_)}."
+            )
+
+        self.itos_.insert(index, token)
+        self._rebuild_stoi(start=index)
+
+    def append_token(self, token: str) -> None:
+        self.insert_token(token, len(self.itos_))
+
+    def lookup_token(self, index: int) -> str:
+        if index < 0 or index >= len(self.itos_):
+            raise RuntimeError(
+                f"Index {index} is out of range for vocabulary size {len(self.itos_)}."
+            )
+        try:
+            return self.itos_[index]
+        except IndexError as exc:
+            raise RuntimeError(
+                f"Index {index} is out of range for vocabulary size {len(self.itos_)}."
+            ) from exc
+
+    def lookup_tokens(self, indices: List[int]) -> List[str]:
+        return [self.lookup_token(index) for index in indices]
+
+    def lookup_indices(self, tokens: List[str]) -> List[int]:
+        return [self[token] for token in tokens]
+
+    def get_stoi(self) -> Dict[str, int]:
+        return {token: index for index, token in enumerate(self.itos_)}
+
+    def get_itos(self) -> List[str]:
+        return list(self.itos_)
+
+    def __prepare_scriptable__(self) -> "Vocab":
+        return self
+
+    def _rebuild_stoi(self, start: int = 0) -> None:
+        self.stoi_ = {token: index for index, token in enumerate(self.itos_)}
+
+
+def vocab(
+    ordered_dict: Mapping[str, int],
+    min_freq: int = 1,
+    specials: Optional[List[str]] = None,
+    special_first: bool = True,
+) -> Vocab:
+    """Build a Vocab from an ordered token-frequency mapping.
+
+    This mirrors the subset of vocabulary factory behavior used by GeneVocab.
+    """
+    tokens: List[str] = []
+    special_set = set(specials or [])
+
+    if specials is not None and special_first:
+        tokens.extend(specials)
+
+    tokens.extend(
+        token
+        for token, freq in ordered_dict.items()
+        if freq >= min_freq and token not in special_set
+    )
+
+    if specials is not None and not special_first:
+        tokens.extend(specials)
+
+    return Vocab(tokens)
+
+
+def build_vocab_from_iterator(
+    iterator: Iterable[Iterable[str]],
+    min_freq: int = 1,
+    specials: Optional[List[str]] = None,
+    special_first: bool = True,
+) -> Vocab:
+    counter: Dict[str, int] = {}
+    for tokens in iterator:
+        for token in tokens:
+            counter[token] = counter.get(token, 0) + 1
+
+    sorted_items = sorted(counter.items(), key=lambda item: item[0])
+    sorted_items.sort(key=lambda item: item[1], reverse=True)
+    ordered_dict = OrderedDict(sorted_items)
+    return vocab(ordered_dict, min_freq=min_freq, specials=specials, special_first=special_first)

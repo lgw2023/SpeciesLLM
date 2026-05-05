@@ -6,12 +6,11 @@ from typing import Dict, Iterable, List, Optional, Tuple, Union
 from typing_extensions import Self
 
 import torch
-import torchtext
-
-import torchtext.vocab as torch_vocab
 import pandas as pd
 import numpy as np
-from torchtext.vocab import Vocab
+
+from . import torch_vocab
+from .torch_vocab import Vocab
 
 
 class GeneVocab(Vocab):
@@ -26,9 +25,11 @@ class GeneVocab(Vocab):
 			specials (List[str]): List of special tokens.
 			special_first (bool): Whether to add special tokens to the beginning of the vocabulary.
 		"""
-        if isinstance(gene_list_or_vocab,
-                      Vocab):
-            _vocab = gene_list_or_vocab
+        if _is_vocab_like(gene_list_or_vocab):
+            _vocab = Vocab(
+                gene_list_or_vocab.get_itos(),
+                default_index=gene_list_or_vocab.get_default_index(),
+            )
             if specials is not None:
                 raise ValueError("receive non-empty specials when init from a Vocab object.")
         elif isinstance(gene_list_or_vocab,
@@ -38,7 +39,7 @@ class GeneVocab(Vocab):
                 special_first=special_first, )
         else:
             raise ValueError("gene_list_or_vocab must be a list of gene names or a Vocab object.")
-        super().__init__(_vocab.vocab)
+        super().__init__(_vocab.get_itos(), default_index=_vocab.get_default_index())
 
     @classmethod
     def from_file(cls, file_path: Union[Path, str]) -> Self:
@@ -51,6 +52,8 @@ class GeneVocab(Vocab):
         if file_path.suffix == ".pkl":
             with file_path.open("rb") as f:
                 vocab = pickle.load(f)
+                if isinstance(vocab, dict):
+                    return cls.from_dict(vocab)
                 return cls(vocab)
         elif file_path.suffix == ".json":
             with file_path.open("r") as f:
@@ -81,8 +84,7 @@ class GeneVocab(Vocab):
     def _build_vocab_from_iterator(self, iterator=Iterable, min_freq: int = 1, specials: Optional[List[str]] = None,
             special_first: bool = True, ) -> Vocab:
         """
-		Build a Vocab from an iterator. This function is modified from
-        torchtext.vocab.build_vocab_from_iterator.
+		Build a Vocab from an iterator without an external vocab package.
 
         Args:
         	iterator (Iterable): Iterator used to build Vocab. Must yield list or iterator of tokens.
@@ -90,8 +92,8 @@ class GeneVocab(Vocab):
         	specials (List[str]): Special symbols to add. The order of supplied tokens will be preserved.
         	special_first (bool): Whether to add special tokens to the begining.
 
-        Retuens:
-        	torchtext.vocab.Vocab: A Vocab object.
+        Returns:
+            Vocab: A Vocab object.
 		"""
 
         counter = Counter()
@@ -124,9 +126,18 @@ class GeneVocab(Vocab):
                       str):
             file_path = Path(file_path)
         with file_path.open("w") as f:
-            json.dump(self.get_stoi(),
-                      f,
-                      indent=2)
+            json.dump(
+                self.get_stoi(),
+                f,
+                indent=2,
+            )
+
+
+def _is_vocab_like(value: object) -> bool:
+    return all(
+        hasattr(value, attr)
+        for attr in ("get_itos", "get_default_index", "insert_token", "append_token")
+    )
 
 
 def get_customized_gene_vocab() -> GeneVocab:

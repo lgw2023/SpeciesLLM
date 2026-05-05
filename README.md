@@ -159,7 +159,7 @@ SpeciesLLM/
 │       ├── data_collator_3GeneEmb.py  # Tri-modal gene embedding collator
 │       ├── gene_tokenizer.py          # GeneVocab
 │       ├── losses.py                  # Loss functions
-│       └── torch_vocab.py             # torchtext Vocab wrapper
+│       └── torch_vocab.py             # lightweight local Vocab implementation
 ├── Stage2_Convert_gene_to_macrogene/
 │   ├── batch_mapping.py              # Gene-to-Macrogene conversion
 │   └── check_var_weight_gene_sets.py # Macrogene quality check
