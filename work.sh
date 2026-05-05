@@ -335,8 +335,19 @@ split_hosts() {
   done
 }
 
+validate_project_paths() {
+  [[ -d "$PROJECT_ROOT" ]] || die "Missing PROJECT_ROOT: $PROJECT_ROOT"
+  [[ -f "$PROJECT_ROOT/$TRAIN_ENTRY" ]] || die "Missing training entry under PROJECT_ROOT: $PROJECT_ROOT/$TRAIN_ENTRY"
+  if [[ ! -f "$WORKDIR/$TRAIN_ENTRY" ]]; then
+    if [[ "$WORKDIR" != "$PROJECT_ROOT" ]]; then
+      die "WORKDIR does not contain the training entry: $WORKDIR/$TRAIN_ENTRY. PROJECT_ROOT is $PROJECT_ROOT. Update .env WORKDIR=$PROJECT_ROOT or override this run with WORKDIR=$PROJECT_ROOT."
+    fi
+    die "Missing training entry under WORKDIR: $WORKDIR/$TRAIN_ENTRY"
+  fi
+}
+
 path_preflight_local() {
-  [[ -f "$WORKDIR/$TRAIN_ENTRY" ]] || die "Missing training entry on master: $WORKDIR/$TRAIN_ENTRY"
+  validate_project_paths
   [[ -f "$MODEL_CONFIG_JSON" ]] || die "Missing model config on master: $MODEL_CONFIG_JSON"
   [[ -d "$DATA_PATH" ]] || die "Missing training data directory on master: $DATA_PATH"
 
@@ -514,6 +525,8 @@ if [[ "$COLLECT_ONLY" == "1" ]]; then
   bash scripts/test_stage2_500m_multinode.sh check-training
   exit 0
 fi
+
+validate_project_paths
 
 bash scripts/test_stage2_500m_multinode.sh "$PREP_ACTION"
 

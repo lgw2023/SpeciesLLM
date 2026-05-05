@@ -5,7 +5,7 @@ set -euo pipefail
 # SpeciesLLM multi-node torchrun launcher for bare-metal servers.
 #
 # Run on the master node:
-#   SSH_PASSWORD='your-password' WORKDIR=/data1/liguowei/SpeciesLLM \
+#   SSH_PASSWORD='your-password' WORKDIR=/data/disk1/SpeciesLLM \
 #   bash scripts/train_multinode.sh
 #
 # Worker mode is normally started by the launcher through ssh:

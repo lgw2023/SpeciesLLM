@@ -117,8 +117,8 @@ Run multi-node training on the test dataset:
 
 ```bash
 TRAIN_DATASET=test \
-DATA_ROOT=/data1/.../Stage2_SpeciesLLMData \
-EMB_ROOT=/data2/... \
+DATA_ROOT=/data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData \
+EMB_ROOT=/data/disk1/SpeciesLLM \
 bash scripts/train_multinode.sh
 ```
 
@@ -131,8 +131,8 @@ cp .env.example .env
 
 Do not put data paths or training hyperparameters in `.env`. Pass them in the
 launch command instead. `DATA_ROOT` and `EMB_ROOT` are independent; for example,
-test data can live under `/data1/.../Stage2_SpeciesLLMData` while embeddings
-live under `/data2/.../Stage2_macrogene_embeddings`.
+test data can live under `/data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData`
+while embeddings live under `/data/disk1/SpeciesLLM/Stage2_macrogene_embeddings`.
 
 Single-node command:
 
