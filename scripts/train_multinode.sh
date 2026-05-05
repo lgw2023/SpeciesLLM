@@ -95,7 +95,8 @@ ASCEND_RT_VISIBLE_DEVICES_VALUE="${ASCEND_RT_VISIBLE_DEVICES_VALUE:-0,1,2,3,4,5,
 HCCL_CONNECT_TIMEOUT="${HCCL_CONNECT_TIMEOUT:-7200}"
 HCCL_EXEC_TIMEOUT="${HCCL_EXEC_TIMEOUT:-7200}"
 HCCL_WHITELIST_DISABLE="${HCCL_WHITELIST_DISABLE:-1}"
-ASCEND_TOOLKIT_HOME="${ASCEND_TOOLKIT_HOME:-/usr/local/Ascend/ascend-toolkit/latest}"
+ASCEND_TOOLKIT_HOME="${ASCEND_TOOLKIT_HOME:-/usr/local/Ascend/ascend-toolkit}"
+ASCEND_ENV_SH="${ASCEND_ENV_SH:-}"
 ASCEND_HOME_PATH="${ASCEND_HOME_PATH:-$ASCEND_TOOLKIT_HOME}"
 
 # ---------- training parameters ----------
@@ -419,6 +420,49 @@ print_command() {
   printf '\n'
 }
 
+resolve_ascend_env_sh() {
+  local candidate
+  for candidate in \
+    "$ASCEND_ENV_SH" \
+    "/usr/local/Ascend/ascend-toolkit/set_env.sh" \
+    "${ASCEND_TOOLKIT_HOME}/set_env.sh" \
+    "/usr/local/Ascend/ascend-toolkit/latest/set_env.sh" \
+    "${ASCEND_TOOLKIT_HOME}/latest/set_env.sh"; do
+    [[ -n "$candidate" && -f "$candidate" ]] && {
+      printf "%s" "$candidate"
+      return 0
+    }
+  done
+  return 1
+}
+
+source_ascend_env() {
+  local env_sh
+  if ! env_sh="$(resolve_ascend_env_sh)"; then
+    echo "Missing Ascend environment script. Set ASCEND_ENV_SH=/path/to/set_env.sh" >&2
+    exit 1
+  fi
+
+  log "source Ascend environment: ${env_sh}"
+  set +u
+  # shellcheck source=/dev/null
+  source "$env_sh"
+  set -u
+  export ASCEND_ENV_SH="$env_sh"
+}
+
+verify_python_npu() {
+  log "verify Python/NPU environment with: ${PYTHON_BIN}"
+  "$PYTHON_BIN" - <<'PY'
+import torch
+import torch_npu
+
+print("torch:", torch.__version__)
+print("torch_npu:", torch_npu.__version__)
+print("npu available:", torch.npu.is_available())
+PY
+}
+
 run_worker() {
   local node_rank="${NODE_RANK:-}"
   if [[ -z "$node_rank" ]]; then
@@ -435,16 +479,9 @@ run_worker() {
     exit 1
   fi
 
-  if [[ -f "${ASCEND_TOOLKIT_HOME}/set_env.sh" ]]; then
-    set +u
-    # shellcheck source=/dev/null
-    source "${ASCEND_TOOLKIT_HOME}/set_env.sh"
-    set -u
-  fi
-
   export NNODES NPROC_PER_NODE MASTER_ADDR MASTER_PORT NODE_RANK PYTHON_BIN
   export HCCL_CONNECT_TIMEOUT HCCL_EXEC_TIMEOUT HCCL_WHITELIST_DISABLE
-  export ASCEND_TOOLKIT_HOME ASCEND_HOME_PATH
+  export ASCEND_TOOLKIT_HOME ASCEND_ENV_SH ASCEND_HOME_PATH
   export ASCEND_RT_VISIBLE_DEVICES="$ASCEND_RT_VISIBLE_DEVICES_VALUE"
 
   build_train_args
@@ -473,6 +510,9 @@ run_worker() {
     return 0
   fi
 
+  source_ascend_env
+  verify_python_npu
+
   "${cmd[@]}"
 }
 
@@ -481,7 +521,7 @@ remote_env_assignments() {
   local -a names=(
     NNODES NPROC_PER_NODE MASTER_ADDR MASTER_PORT WORKDIR TRAIN_ENTRY PYTHON_BIN LOG_SUBDIR
     DRY_RUN LOCAL_NODE_RANK ASCEND_RT_VISIBLE_DEVICES_VALUE HCCL_CONNECT_TIMEOUT HCCL_EXEC_TIMEOUT
-    HCCL_WHITELIST_DISABLE ASCEND_TOOLKIT_HOME ASCEND_HOME_PATH
+    HCCL_WHITELIST_DISABLE ASCEND_TOOLKIT_HOME ASCEND_ENV_SH ASCEND_HOME_PATH
     data_path num_of_used_data emb_path config_json out_path batch_size epoch
     gradient_accumulation_steps learning_rate min_lr decay_lr warmup_iters
     warmup_ratio weight_decay save_data_interval beta1 beta2 grad_clip compile

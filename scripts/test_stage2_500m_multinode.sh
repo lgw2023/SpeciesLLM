@@ -101,7 +101,8 @@ ASCEND_RT_VISIBLE_DEVICES_VALUE="${ASCEND_RT_VISIBLE_DEVICES_VALUE:-0,1,2,3,4,5,
 HCCL_CONNECT_TIMEOUT="${HCCL_CONNECT_TIMEOUT:-7200}"
 HCCL_EXEC_TIMEOUT="${HCCL_EXEC_TIMEOUT:-7200}"
 HCCL_WHITELIST_DISABLE="${HCCL_WHITELIST_DISABLE:-1}"
-ASCEND_TOOLKIT_HOME="${ASCEND_TOOLKIT_HOME:-/usr/local/Ascend/ascend-toolkit/latest}"
+ASCEND_TOOLKIT_HOME="${ASCEND_TOOLKIT_HOME:-/usr/local/Ascend/ascend-toolkit}"
+ASCEND_ENV_SH="${ASCEND_ENV_SH:-}"
 ASCEND_HOME_PATH="${ASCEND_HOME_PATH:-$ASCEND_TOOLKIT_HOME}"
 
 usage() {
@@ -170,6 +171,48 @@ print_cmd_multiline() {
       printf "  %q \\\\\n" "${args[$i]}"
     fi
   done
+}
+
+print_runtime_env_check() {
+  cat <<'BASH'
+resolve_ascend_env_sh() {
+  local candidate
+  for candidate in \
+    "${ASCEND_ENV_SH:-}" \
+    "/usr/local/Ascend/ascend-toolkit/set_env.sh" \
+    "${ASCEND_TOOLKIT_HOME}/set_env.sh" \
+    "/usr/local/Ascend/ascend-toolkit/latest/set_env.sh" \
+    "${ASCEND_TOOLKIT_HOME}/latest/set_env.sh"; do
+    if [[ -n "$candidate" && -f "$candidate" ]]; then
+      printf "%s" "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+ascend_env_sh="$(resolve_ascend_env_sh)" || {
+  echo "Missing Ascend environment script. Set ASCEND_ENV_SH=/path/to/set_env.sh" >&2
+  exit 1
+}
+echo "source Ascend environment: ${ascend_env_sh}"
+set +u
+# shellcheck source=/dev/null
+source "$ascend_env_sh"
+set -u
+export ASCEND_ENV_SH="$ascend_env_sh"
+
+echo "verify Python/NPU environment with: ${PYTHON_BIN}"
+"$PYTHON_BIN" - <<'PY'
+import torch
+import torch_npu
+
+print("torch:", torch.__version__)
+print("torch_npu:", torch_npu.__version__)
+print("npu available:", torch.npu.is_available())
+PY
+
+BASH
 }
 
 split_hosts() {
@@ -376,8 +419,10 @@ write_torchrun_script() {
     print_export HCCL_EXEC_TIMEOUT "$HCCL_EXEC_TIMEOUT"
     print_export HCCL_WHITELIST_DISABLE "$HCCL_WHITELIST_DISABLE"
     print_export ASCEND_TOOLKIT_HOME "$ASCEND_TOOLKIT_HOME"
+    print_export ASCEND_ENV_SH "$ASCEND_ENV_SH"
     print_export ASCEND_HOME_PATH "$ASCEND_HOME_PATH"
     echo
+    print_runtime_env_check
     print_cmd_multiline "${cmd[@]}"
   } > "$script_path"
   chmod +x "$script_path"
@@ -430,6 +475,7 @@ write_launcher_script() {
     print_export HCCL_EXEC_TIMEOUT "$HCCL_EXEC_TIMEOUT"
     print_export HCCL_WHITELIST_DISABLE "$HCCL_WHITELIST_DISABLE"
     print_export ASCEND_TOOLKIT_HOME "$ASCEND_TOOLKIT_HOME"
+    print_export ASCEND_ENV_SH "$ASCEND_ENV_SH"
     print_export ASCEND_HOME_PATH "$ASCEND_HOME_PATH"
     echo
     echo 'exec bash scripts/train_multinode.sh'
