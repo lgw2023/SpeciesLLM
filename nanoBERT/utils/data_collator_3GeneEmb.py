@@ -24,6 +24,7 @@ class CustomCollate_3GeneEmb:
     esm_embeddings: np.ndarray = None
     desc_embeddings: np.ndarray = None
     dna_embeddings: np.ndarray = None
+    return_static_inputs: bool = True
 
     def __call__(self, batch_data: List[Dict[str, np.ndarray]]):
         genes = self.genes
@@ -66,33 +67,35 @@ class CustomCollate_3GeneEmb:
 
         batch_size = len(data)
         seq_len = len(gene_ids) + (1 if self.append_cls else 0)
-        esm_embedding_dim = gene_esm_embeddings.shape[1]
-        desc_embedding_dim = gene_desc_embeddings.shape[1]
-        dna_embedding_dim = gene_dna_embeddings.shape[1]
 
-        # Pre-allocate big batch tensors
-        genes_tensor = np.zeros((batch_size, seq_len), dtype=np.int64)
         values_tensor = np.zeros((batch_size, seq_len), dtype=np.float32)
-        esm_tensor = np.zeros((batch_size, seq_len, esm_embedding_dim), dtype=np.float32)
-        desc_tensor = np.zeros((batch_size, seq_len, desc_embedding_dim), dtype=np.float32)
-        dna_tensor = np.zeros((batch_size, seq_len, dna_embedding_dim), dtype=np.float32)
+        if self.return_static_inputs:
+            esm_embedding_dim = gene_esm_embeddings.shape[1]
+            desc_embedding_dim = gene_desc_embeddings.shape[1]
+            dna_embedding_dim = gene_dna_embeddings.shape[1]
+            genes_tensor = np.zeros((batch_size, seq_len), dtype=np.int64)
+            esm_tensor = np.zeros((batch_size, seq_len, esm_embedding_dim), dtype=np.float32)
+            desc_tensor = np.zeros((batch_size, seq_len, desc_embedding_dim), dtype=np.float32)
+            dna_tensor = np.zeros((batch_size, seq_len, dna_embedding_dim), dtype=np.float32)
 
         if self.mode_type is not None:
             mode_types_tensor = np.zeros((batch_size, seq_len), dtype=np.int64)
 
         # Prepare static embeddings
         static_genes = gene_ids
-        static_esm = gene_esm_embeddings
-        static_desc = gene_desc_embeddings
-        static_dna = gene_dna_embeddings
+        if self.return_static_inputs:
+            static_esm = gene_esm_embeddings
+            static_desc = gene_desc_embeddings
+            static_dna = gene_dna_embeddings
         if self.mode_type is not None:
             static_mode_type = self.mode_type
 
         if self.append_cls:
             static_genes = np.concatenate([[cls_id], static_genes])
-            static_esm = np.concatenate([np.zeros((1, esm_embedding_dim)), static_esm])
-            static_desc = np.concatenate([np.zeros((1, desc_embedding_dim)), static_desc])
-            static_dna = np.concatenate([np.zeros((1, dna_embedding_dim)), static_dna])
+            if self.return_static_inputs:
+                static_esm = np.concatenate([np.zeros((1, esm_embedding_dim), dtype=static_esm.dtype), static_esm])
+                static_desc = np.concatenate([np.zeros((1, desc_embedding_dim), dtype=static_desc.dtype), static_desc])
+                static_dna = np.concatenate([np.zeros((1, dna_embedding_dim), dtype=static_dna.dtype), static_dna])
             if self.mode_type is not None:
                 static_mode_type = np.concatenate([[cls_id_mode_type], static_mode_type])
 
@@ -115,11 +118,12 @@ class CustomCollate_3GeneEmb:
                 row_values = np.concatenate([[0], row_values])
 
             # Write to batch tensor
-            genes_tensor[i] = static_genes
             values_tensor[i] = row_values
-            esm_tensor[i] = static_esm
-            desc_tensor[i] = static_desc
-            dna_tensor[i] = static_dna
+            if self.return_static_inputs:
+                genes_tensor[i] = static_genes
+                esm_tensor[i] = static_esm
+                desc_tensor[i] = static_desc
+                dna_tensor[i] = static_dna
             if self.mode_type is not None:
                 mode_types_tensor[i] = static_mode_type
 
@@ -142,12 +146,14 @@ class CustomCollate_3GeneEmb:
                 celltype_labels_list.append(row["celltype_labels"])
 
         # === Post processing ===
-        tokenized_data = {
-            "genes": torch.from_numpy(genes_tensor),
-            "esm_embeddings": torch.from_numpy(esm_tensor),
-            "desc_embeddings": torch.from_numpy(desc_tensor),
-            "dna_embeddings": torch.from_numpy(dna_tensor),
-        }
+        tokenized_data = {}
+        if self.return_static_inputs:
+            tokenized_data.update({
+                "genes": torch.from_numpy(genes_tensor),
+                "esm_embeddings": torch.from_numpy(esm_tensor),
+                "desc_embeddings": torch.from_numpy(desc_tensor),
+                "dna_embeddings": torch.from_numpy(dna_tensor),
+            })
 
         # MLM masking
         expressions = torch.from_numpy(values_tensor)

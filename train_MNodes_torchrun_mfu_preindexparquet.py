@@ -583,6 +583,8 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
 
         model.train()
         total_loss = 0.0
+        total_loss_tensor = torch.zeros((), dtype=torch.float32, device=device)
+        processed_batches = 0
         num_batches = len(data_loader) # 已经处理过 // args.batch_size
 
         # 确保 local_step 是一个 tensor，并且在 GPU 上或 CPU 上与进程环境一致
@@ -603,49 +605,59 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
         for batch_index, batch_data in enumerate(data_loader):
             t_temp_1_lr = 0.0
             t_temp_7_loss_other = 0.0
+            loss_gep = None
+            loss_zero_prob = None
+            loss_gepc = None
+            loss_gepc_zero_prob = None
+            lossf = None
+            loss_gep_value = None
             loss_zero_prob_value = None
             loss_gepc_value = None
             loss_gepc_zero_prob_value = None
 
+            final_step_in_epoch = (batch_index + 1) >= max_batch_index
+            should_step = (
+                (batch_index + 1) % args.gradient_accumulation_steps == 0
+                or final_step_in_epoch
+            )
+            should_log = (iter_num % max(1, args.log_interval) == 0) or final_step_in_epoch
+            should_profile = (
+                args.profile_interval > 0
+                and ((iter_num % args.profile_interval == 0) or final_step_in_epoch)
+            )
+            should_collect_scalars = should_log or should_profile
+            should_nan_check = (
+                args.nan_check_interval > 0
+                and ((iter_num % args.nan_check_interval == 0) or final_step_in_epoch)
+            )
+
             t_temp_3_batchdata = time.time()
-            input_gene_ids = batch_data["genes"].to(device)
-            input_gene_values = batch_data["values"].to(device)
-            input_gene_embeddings = batch_data["esm_embeddings"].to(device)
-            input_gene_desc_embeddings = batch_data["desc_embeddings"].to(device)
-            input_gene_dna_embeddings = batch_data["dna_embeddings"].to(device)
-            target_values = batch_data["target_values"].to(device)
+            input_gene_values = batch_data["values"].to(device, non_blocking=True)
+            target_values = batch_data["target_values"].to(device, non_blocking=True)
             # print(f"rank: {rank} batch done")
             if config.use_batch_labels:
-                input_batch_labels = batch_data["batch_labels"].to(device)
+                input_batch_labels = batch_data["batch_labels"].to(device, non_blocking=True)
             if config.use_species_labels:
-                input_species_labels = batch_data["species_labels"].to(device)
+                input_species_labels = batch_data["species_labels"].to(device, non_blocking=True)
             if config.use_tissue_labels:
-                input_tissue_labels = batch_data["tissue_labels"].to(device)
+                input_tissue_labels = batch_data["tissue_labels"].to(device, non_blocking=True)
             if config.use_seqmethod_labels:
-                input_seqmethod_labels = batch_data["seqmethod_labels"].to(device)
+                input_seqmethod_labels = batch_data["seqmethod_labels"].to(device, non_blocking=True)
             if config.use_disease_labels:
-                input_disease_labels = batch_data["disease_labels"].to(device)
+                input_disease_labels = batch_data["disease_labels"].to(device, non_blocking=True)
             if config.use_sex_labels:
-                input_sex_labels = batch_data["sex_labels"].to(device)
+                input_sex_labels = batch_data["sex_labels"].to(device, non_blocking=True)
             if config.use_age_labels:
-                input_age_labels = batch_data["age_labels"].to(device)
+                input_age_labels = batch_data["age_labels"].to(device, non_blocking=True)
             # print(f"rank: {rank} batch to device done")
             t_temp_3_batchdata = time.time() - t_temp_3_batchdata
             t_temp_3_sum_batchdata += t_temp_3_batchdata
-            # t_temp_4_sync = time.time()
-            # if ddp:
-            #     model.require_backward_grad_sync = ((batch_index + 1) % args.gradient_accumulation_steps == 0)
-            #     print(f"rank: {rank} grad_sync done")
-            # t_temp_4_sync = time.time() - t_temp_4_sync
-            # t_temp_4_sum_sync += t_temp_4_sync
+            if ddp:
+                model.require_backward_grad_sync = should_step
             t_temp_5_forward = time.time()
             with ctx:
                 outputs = model(
-                    src=input_gene_ids,
                     values=input_gene_values,
-                    esm_embeddings=input_gene_embeddings,
-                    desc_embeddings=input_gene_desc_embeddings,
-                    dna_embeddings=input_gene_dna_embeddings,
                     batch_labels=input_batch_labels if config.use_batch_labels else None,
                     species_labels=input_species_labels if config.use_species_labels else None,
                     tissue_labels=input_tissue_labels if config.use_tissue_labels else None,
@@ -655,7 +667,7 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
                     age_labels=input_age_labels if config.use_age_labels else None,
                     CLS=False,
                     MVC=True,
-                    output_hidden_states=True,
+                    output_hidden_states=False,
                     output_attentions=False, # can not both turned on with _attn_implementation of sdpa
                     )
                 # print(f"rank: {rank} outputs done")
@@ -670,20 +682,18 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
                                            target_values,
                                            mask_positions)
                 loss += loss_gep
-                loss_gep_value = loss_gep.item()
                 # print(f"rank: {rank} loss_gep done")
                 t_temp_6_loss_gep = time.time() - t_temp_6_loss_gep
                 t_temp_6_sum_loss_gep += t_temp_6_loss_gep
 
                 t_temp_7_loss_other = time.time()
                 if config.explicit_zero_prob:
-                    if torch.isnan(outputs["model_zero_prob"]).any():
+                    if should_nan_check and torch.isnan(outputs["model_zero_prob"]).any():
                         raise ValueError("There are nan values in zero prob output!")
                     loss_zero_prob = criterion_neg_log_bernoulli(outputs["model_zero_prob"],
                                                                  target_values,
                                                                  mask_positions)
                     loss += loss_zero_prob
-                    loss_zero_prob_value = loss_zero_prob.item()
 
                     # print(f"rank: {rank} loss_zero_prob done")
                 if "mvc_output" in outputs:
@@ -691,7 +701,6 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
                                                 target_values,
                                                 mask_positions)
                     loss += loss_gepc
-                    loss_gepc_value = loss_gepc.item()
 
                     # print(f"rank: {rank} mvc_output done")
                 if "mvc_output" in outputs and config.explicit_zero_prob:
@@ -699,7 +708,6 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
                                                                       target_values,
                                                                       mask_positions)
                     loss += loss_gepc_zero_prob
-                    loss_gepc_zero_prob_value = loss_gepc_zero_prob.item()
 
                     # print(f"rank: {rank} loss_gepc_zero_prob done")
                 loss = loss / args.gradient_accumulation_steps
@@ -718,10 +726,6 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
             #         print(f"WARNING: {name} grad is None! ^^^^^^^^^^^^^^^^^^^^^^")
             t_temp_9_step_update_grad = time.time()
             t_temp_10_sync = 0
-            should_step = (
-                (batch_index + 1) % args.gradient_accumulation_steps == 0
-                or (batch_index + 1) >= max_batch_index
-            )
             if should_step:
                 t_temp_1_lr = time.time()
                 lr = get_lr(update_step,
@@ -737,17 +741,6 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
                 if grad_clip != 0.0:
                     scaler.unscale_(optimizer)
                     torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
-
-                # # to increase the sync ratio
-                t_temp_10_sync = time.time()
-                all_reduce_count = 0
-                for param in model.parameters():
-                    if param.grad is not None:
-                        dist.all_reduce(param.grad.data, op=dist.ReduceOp.SUM)
-                        param.grad.data /= float(world_size)
-                        all_reduce_count += 1
-                t_temp_10_sync = time.time() - t_temp_10_sync
-                t_temp_10_sum_sync += t_temp_10_sync
 
                 scaler.step(optimizer)
                 scaler.update()
@@ -774,7 +767,6 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
             dt = t_temp_1 - t_temp_0
             t_temp_0 = t_temp_1
 
-            lossf = loss.item() * args.gradient_accumulation_steps
             if iter_num % 100 == 0 and iter_num != 0:
                 mfu = raw_model.estimate_mfu(args.batch_size * args.gradient_accumulation_steps, dt)
                 runing_mfu = mfu if runing_mfu == -1.0 else 0.9 * runing_mfu + 0.1 * mfu
@@ -784,8 +776,20 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
             samples_per_s = local_batch_size / dt if dt > 0 else 0.0
             tokens_per_s = local_batch_size * args.seq_len / dt if dt > 0 else 0.0
             mfu_value = None if runing_mfu < 0 else runing_mfu
+            total_loss_tensor += loss.detach() * args.gradient_accumulation_steps
+            processed_batches += 1
+
+            if should_collect_scalars:
+                lossf = loss.item() * args.gradient_accumulation_steps
+                loss_gep_value = loss_gep.item() if loss_gep is not None else None
+                loss_zero_prob_value = loss_zero_prob.item() if loss_zero_prob is not None else None
+                loss_gepc_value = loss_gepc.item() if loss_gepc is not None else None
+                loss_gepc_zero_prob_value = (
+                    loss_gepc_zero_prob.item() if loss_gepc_zero_prob is not None else None
+                )
+
             local_metric_values = {
-                "loss_total": lossf,
+                "loss_total": lossf if lossf is not None else 0.0,
                 "step_ms": step_ms,
                 "data_load_s": t_temp_2_data,
                 "grad_sync_s": t_temp_10_sync,
@@ -793,12 +797,6 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
                 "tokens_per_s": tokens_per_s,
             }
 
-            final_step_in_epoch = (batch_index + 1) >= max_batch_index
-            should_log = (iter_num % max(1, args.log_interval) == 0) or final_step_in_epoch
-            should_profile = (
-                args.profile_interval > 0
-                and ((iter_num % args.profile_interval == 0) or final_step_in_epoch)
-            )
             cluster_summary = distributed_step_summary(local_metric_values, device, world_size) if should_log else {}
 
             metric_row = {
@@ -864,13 +862,12 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
                     t_temp_10_sync,
                 )
 
-            total_loss += lossf
             iter_num += 1
 
             if (batch_index + 1) >= max_batch_index:
                 break
 
-        total_loss = total_loss / num_batches
+        total_loss = (total_loss_tensor / max(1, processed_batches)).item()
         loss_info = f"Node: {NODE_RANK}, Rank: {rank}, Epoch [{epoch + 1}/{args.epoch}], average loss is: {total_loss:.4f} | Learning rate is: {lr}"
         logger.info(loss_info)
         time_checker = (
@@ -1016,7 +1013,8 @@ def main(args):
                                         genes=src,
                                         esm_embeddings=esm_embeddings,
                                         desc_embeddings=desc_embeddings,
-                                        dna_embeddings=dna_embeddings)
+                                        dna_embeddings=dna_embeddings,
+                                        return_static_inputs=False)
     
     out_dir = out_dir.format(hidden_size=config.hidden_size, num_hidden_layers=config.num_hidden_layers,
                              num_attention_heads=config.num_attention_heads, hidden_dropout_prob=config.hidden_dropout_prob,
@@ -1069,6 +1067,15 @@ def main(args):
                                      drop_last=True)
 
     model = BERTForPreTraining(config).to(device)
+    model.set_static_gene_inputs(
+        src,
+        esm_embeddings,
+        desc_embeddings,
+        dna_embeddings,
+        cls_id=vocab["<cls>"],
+        append_cls=True,
+        dtype=torch.float32,
+    )
     # optimizer and initialize a GradSclaer.
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay, betas=(beta1, beta2))
     # NanoGPT's way to initialize optimizer. But using this with turn use_fused = False in model
@@ -1081,7 +1088,7 @@ def main(args):
         unoptimized_model = model
         model = torch.compile(model)  # requires P
     if ddp:
-        model = DDP(model, device_ids=[local_rank], find_unused_parameters=False)
+        model = DDP(model, device_ids=[local_rank], find_unused_parameters=False, broadcast_buffers=False)
 
     ctx = nullcontext() if device_type == 'cpu' else torch.autocast(device_type=device_type, dtype=ptdtype)
     train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelist, train_sampler, device, config, ctx, scaler, grad_clip, out_dir, collate_fn, world_size, logger)
@@ -1180,6 +1187,10 @@ def argumentparser():
                         type=int,
                         default=100,
                         help="Write detailed timing profiles every N local batches. Use 0 to disable.")
+    parser.add_argument('--nan_check_interval',
+                        type=int,
+                        default=0,
+                        help="Check output tensors for NaN every N local batches. Use 0 to disable.")
     parser.add_argument('--metrics_flush_interval',
                         type=int,
                         default=100,

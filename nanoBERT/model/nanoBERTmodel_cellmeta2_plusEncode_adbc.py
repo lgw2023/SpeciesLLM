@@ -709,6 +709,10 @@ class BERTForPreTraining(nn.Module):
         assert config.max_position_embeddings is not None
         self.config = config
         self.gradient_checkpointing = False
+        self.register_buffer("static_src", torch.empty(0, dtype=torch.long), persistent=False)
+        self.register_buffer("static_esm_embeddings", torch.empty(0), persistent=False)
+        self.register_buffer("static_desc_embeddings", torch.empty(0), persistent=False)
+        self.register_buffer("static_dna_embeddings", torch.empty(0), persistent=False)
 
         self.bert = BERTModel(config)
 
@@ -770,6 +774,80 @@ class BERTForPreTraining(nn.Module):
         # report number of parameters
         print("number of parameters: %.2fM" % (self.get_num_params() / 1e6,))
 
+    def set_static_gene_inputs(
+            self,
+            gene_ids: Union[torch.Tensor, Any],
+            esm_embeddings: Union[torch.Tensor, Any],
+            desc_embeddings: Union[torch.Tensor, Any],
+            dna_embeddings: Union[torch.Tensor, Any],
+            cls_id: int = 0,
+            append_cls: bool = True,
+            dtype: torch.dtype = torch.float32,
+    ) -> None:
+        device = next(self.parameters()).device
+        src = torch.as_tensor(gene_ids, dtype=torch.long, device=device)
+        esm = torch.as_tensor(esm_embeddings, dtype=dtype, device=device)
+        desc = torch.as_tensor(desc_embeddings, dtype=dtype, device=device)
+        dna = torch.as_tensor(dna_embeddings, dtype=dtype, device=device)
+
+        if append_cls:
+            src = torch.cat([torch.tensor([cls_id], dtype=torch.long, device=device), src], dim=0)
+            esm = torch.cat([torch.zeros((1, esm.shape[1]), dtype=esm.dtype, device=device), esm], dim=0)
+            desc = torch.cat([torch.zeros((1, desc.shape[1]), dtype=desc.dtype, device=device), desc], dim=0)
+            dna = torch.cat([torch.zeros((1, dna.shape[1]), dtype=dna.dtype, device=device), dna], dim=0)
+
+        self.static_src = src.unsqueeze(0)
+        self.static_esm_embeddings = esm.unsqueeze(0)
+        self.static_desc_embeddings = desc.unsqueeze(0)
+        self.static_dna_embeddings = dna.unsqueeze(0)
+
+    def _static_or_value(self, value: Optional[torch.Tensor], static_value: torch.Tensor, batch_size: int, name: str):
+        if value is not None:
+            return value
+        if static_value.numel() == 0:
+            raise ValueError(f"{name} was not provided and static gene inputs are not initialized")
+        return static_value.expand(batch_size, *static_value.shape[1:])
+
+    def _resolve_gene_inputs(
+            self,
+            src: Optional[torch.Tensor],
+            values: torch.Tensor,
+            esm_embeddings: Optional[torch.Tensor],
+            desc_embeddings: Optional[torch.Tensor],
+            dna_embeddings: Optional[torch.Tensor],
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        batch_size = values.shape[0]
+        src = self._static_or_value(src, self.static_src, batch_size, "src")
+        esm_embeddings = self._static_or_value(
+            esm_embeddings,
+            self.static_esm_embeddings,
+            batch_size,
+            "esm_embeddings",
+        )
+        desc_embeddings = self._static_or_value(
+            desc_embeddings,
+            self.static_desc_embeddings,
+            batch_size,
+            "desc_embeddings",
+        )
+        dna_embeddings = self._static_or_value(
+            dna_embeddings,
+            self.static_dna_embeddings,
+            batch_size,
+            "dna_embeddings",
+        )
+
+        if src.shape[1] != values.shape[1]:
+            raise ValueError(f"src seq_len {src.shape[1]} does not match values seq_len {values.shape[1]}")
+        for name, tensor in (
+                ("esm_embeddings", esm_embeddings),
+                ("desc_embeddings", desc_embeddings),
+                ("dna_embeddings", dna_embeddings),
+        ):
+            if tensor.shape[1] != values.shape[1]:
+                raise ValueError(f"{name} seq_len {tensor.shape[1]} does not match values seq_len {values.shape[1]}")
+        return src, esm_embeddings, desc_embeddings, dna_embeddings
+
     def _init_weights(self, module):
         if isinstance(module,
                       nn.Linear):
@@ -829,12 +907,22 @@ class BERTForPreTraining(nn.Module):
     def set_output_embeddings(self, new_embeddings):
         self.decoder.fc[-1] = new_embeddings
 
-    def _encode(self, src: torch.Tensor, values: torch.Tensor, esm_embeddings: torch.Tensor,
-            desc_embeddings: torch.Tensor, dna_embeddings: torch.Tensor, batch_labels: Optional[torch.Tensor] = None,
+    def _encode(self, src: Optional[torch.Tensor] = None, values: Optional[torch.Tensor] = None,
+            esm_embeddings: Optional[torch.Tensor] = None, desc_embeddings: Optional[torch.Tensor] = None,
+            dna_embeddings: Optional[torch.Tensor] = None, batch_labels: Optional[torch.Tensor] = None,
             species_labels: Optional[torch.Tensor] = None, tissue_labels: Optional[torch.Tensor] = None,
             seqmethod_labels: Optional[torch.Tensor] = None, disease_labels: Optional[torch.Tensor] = None,
             sex_labels: Optional[torch.Tensor] = None, age_labels: Optional[torch.Tensor] = None,
             output_attentions: Optional[bool] = None, output_hidden_states: Optional[bool] = None, ) -> torch.Tensor:
+        if values is None:
+            raise ValueError("values must be provided")
+        src, esm_embeddings, desc_embeddings, dna_embeddings = self._resolve_gene_inputs(
+            src,
+            values,
+            esm_embeddings,
+            desc_embeddings,
+            dna_embeddings,
+        )
         sequence_output, bert_hidden_states, bert_attentions = self.bert(src,
             values,
             esm_embeddings,
@@ -883,8 +971,9 @@ class BERTForPreTraining(nn.Module):
 
         return x, cell_emb, bert_hidden_states, bert_attentions  # (batch, seq_len, embsize), (batch, embsize)
 
-    def forward(self, src: torch.Tensor, values: torch.Tensor, esm_embeddings: torch.Tensor,
-            desc_embeddings: torch.Tensor, dna_embeddings: torch.Tensor, batch_labels: Optional[torch.Tensor] = None,
+    def forward(self, src: Optional[torch.Tensor] = None, values: Optional[torch.Tensor] = None,
+            esm_embeddings: Optional[torch.Tensor] = None, desc_embeddings: Optional[torch.Tensor] = None,
+            dna_embeddings: Optional[torch.Tensor] = None, batch_labels: Optional[torch.Tensor] = None,
             species_labels: Optional[torch.Tensor] = None, tissue_labels: Optional[torch.Tensor] = None,
             seqmethod_labels: Optional[torch.Tensor] = None, disease_labels: Optional[torch.Tensor] = None,
             sex_labels: Optional[torch.Tensor] = None, age_labels: Optional[torch.Tensor] = None, CLS: bool = False,
