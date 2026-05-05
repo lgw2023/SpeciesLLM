@@ -81,6 +81,7 @@ SSH_EXTRA_OPTS="${SSH_EXTRA_OPTS:-}"
 # embeddings, and the scripts/ directory after optional SYNC_SELF.
 WORKDIR="${WORKDIR:-$PROJECT_ROOT}"
 TRAIN_ENTRY="${TRAIN_ENTRY:-train_MNodes_torchrun_mfu_preindexparquet.py}"
+PYTHON_BIN="${PYTHON_BIN:-/data/miniconda3/bin/python}"
 
 LOG_SUBDIR="${LOG_SUBDIR:-torchrun_logs}"
 SYNC_SELF="${SYNC_SELF:-1}"
@@ -429,7 +430,19 @@ run_worker() {
   cd "$WORKDIR"
   mkdir -p "$LOG_SUBDIR"
 
-  export NNODES NPROC_PER_NODE MASTER_ADDR MASTER_PORT NODE_RANK
+  if [[ ! -x "$PYTHON_BIN" ]]; then
+    echo "PYTHON_BIN is not executable: $PYTHON_BIN"
+    exit 1
+  fi
+
+  if [[ -f "${ASCEND_TOOLKIT_HOME}/set_env.sh" ]]; then
+    set +u
+    # shellcheck source=/dev/null
+    source "${ASCEND_TOOLKIT_HOME}/set_env.sh"
+    set -u
+  fi
+
+  export NNODES NPROC_PER_NODE MASTER_ADDR MASTER_PORT NODE_RANK PYTHON_BIN
   export HCCL_CONNECT_TIMEOUT HCCL_EXEC_TIMEOUT HCCL_WHITELIST_DISABLE
   export ASCEND_TOOLKIT_HOME ASCEND_HOME_PATH
   export ASCEND_RT_VISIBLE_DEVICES="$ASCEND_RT_VISIBLE_DEVICES_VALUE"
@@ -437,7 +450,9 @@ run_worker() {
   build_train_args
 
   local -a cmd=(
-    torchrun
+    "$PYTHON_BIN"
+    -m
+    torch.distributed.run
     "--nproc_per_node=${NPROC_PER_NODE}"
     "--nnodes=${NNODES}"
     "--node_rank=${node_rank}"
@@ -464,7 +479,7 @@ run_worker() {
 remote_env_assignments() {
   local rank="$1"
   local -a names=(
-    NNODES NPROC_PER_NODE MASTER_ADDR MASTER_PORT WORKDIR TRAIN_ENTRY LOG_SUBDIR
+    NNODES NPROC_PER_NODE MASTER_ADDR MASTER_PORT WORKDIR TRAIN_ENTRY PYTHON_BIN LOG_SUBDIR
     DRY_RUN LOCAL_NODE_RANK ASCEND_RT_VISIBLE_DEVICES_VALUE HCCL_CONNECT_TIMEOUT HCCL_EXEC_TIMEOUT
     HCCL_WHITELIST_DISABLE ASCEND_TOOLKIT_HOME ASCEND_HOME_PATH
     data_path num_of_used_data emb_path config_json out_path batch_size epoch

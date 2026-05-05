@@ -348,7 +348,9 @@ write_torchrun_script() {
   local script_path="$3"
   train_args
   local cmd=(
-    torchrun
+    "$PYTHON_BIN"
+    -m
+    torch.distributed.run
     "--nproc_per_node=${NPROC_PER_NODE}"
     "--nnodes=${NNODES}"
     "--node_rank=${node_rank}"
@@ -363,6 +365,7 @@ write_torchrun_script() {
     echo "set -euo pipefail"
     echo "# Run this on host ${host} (node_rank=${node_rank})."
     printf "cd %q\n" "$WORKDIR"
+    print_export PYTHON_BIN "$PYTHON_BIN"
     print_export NNODES "$NNODES"
     print_export NPROC_PER_NODE "$NPROC_PER_NODE"
     print_export NODE_RANK "$node_rank"
@@ -394,6 +397,7 @@ write_launcher_script() {
     print_export MASTER_PORT "$MASTER_PORT"
     print_export WORKDIR "$WORKDIR"
     print_export TRAIN_ENTRY "$TRAIN_ENTRY"
+    print_export PYTHON_BIN "$PYTHON_BIN"
     print_export LOG_SUBDIR "$LOG_SUBDIR"
     print_export TRAIN_DATASET "$TRAIN_DATASET"
     print_export DATA_ROOT "$STAGE2_ROOT"
