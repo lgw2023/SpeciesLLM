@@ -510,10 +510,10 @@ def build_bertconfig(vocab, seq_len, args):
 def setup_ddp(backend='hccl', device_type='npu'):
     ddp = int(os.environ.get('RANK', -1)) != -1
     if True:
-        torch.distributed.init_process_group(backend=backend)
         rank = int(os.environ['RANK'])
         local_rank = int(os.environ.get('LOCAL_RANK', 0))
         torch_npu.npu.set_device(local_rank)
+        torch.distributed.init_process_group(backend=backend)
         master_process = (rank == 0 and local_rank == 0)
         world_size = int(os.environ['WORLD_SIZE']) if int(os.environ['WORLD_SIZE']) else int(os.environ['NNODES']) * int(os.environ['NPROC_PER_NODE'])
     else:
