@@ -223,11 +223,15 @@ log "preflight NPROC_PER_NODE=${NPROC_PER_NODE} ASCEND_RT_VISIBLE_DEVICES_VALUE=
 [[ -d "$EMB_PATH" ]] || die "Missing EMB_PATH: ${EMB_PATH}"
 [[ -f "$MODEL_CONFIG_JSON" ]] || die "Missing MODEL_CONFIG_JSON: ${MODEL_CONFIG_JSON}"
 
-find "$DATA_PATH" -maxdepth 1 -type f -name '*.parquet' | sort | head -n "$NUM_OF_USED_DATA" \
-  > "${EXPERIMENT_ROOT}/selected_first_${NUM_OF_USED_DATA}_files.txt"
+all_files_path="${EXPERIMENT_ROOT}/all_parquet_files.txt"
+selected_files_path="${EXPERIMENT_ROOT}/selected_first_${NUM_OF_USED_DATA}_files.txt"
+find "$DATA_PATH" -maxdepth 1 -type f -name '*.parquet' | sort > "$all_files_path"
+sed -n "1,${NUM_OF_USED_DATA}p" "$all_files_path" > "$selected_files_path"
 
-selected_count="$(wc -l < "${EXPERIMENT_ROOT}/selected_first_${NUM_OF_USED_DATA}_files.txt" | tr -d '[:space:]')"
+selected_count="$(wc -l < "$selected_files_path" | tr -d '[:space:]')"
 [[ "$selected_count" -gt 0 ]] || die "No parquet files found under ${DATA_PATH}"
+log "available parquet files: $(wc -l < "$all_files_path" | tr -d '[:space:]')"
+log "selected parquet files: ${selected_count}"
 
 if (( NUM_OF_USED_DATA % NPROC_PER_NODE != 0 )); then
   log "warning: NUM_OF_USED_DATA=${NUM_OF_USED_DATA} is not divisible by NPROC_PER_NODE=${NPROC_PER_NODE}; current sampler may drop or pad files"
@@ -237,7 +241,7 @@ printf 'case\tstatus\tout_dir\n' > "${EXPERIMENT_ROOT}/case_status.tsv"
 write_record_header "${EXPERIMENT_ROOT}/analysis_record.md"
 
 log "experiment root: ${EXPERIMENT_ROOT}"
-log "selected files listed in ${EXPERIMENT_ROOT}/selected_first_${NUM_OF_USED_DATA}_files.txt"
+log "selected files listed in ${selected_files_path}"
 
 run_case 00_baseline_current "current defaults" \
   RUNTIME_ATTN_IMPLEMENTATION= \
