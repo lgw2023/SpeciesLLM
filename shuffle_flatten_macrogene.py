@@ -126,12 +126,23 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--shuffle-mode",
-        choices=["in-memory", "external"],
+        choices=["in-memory", "external", "batch"],
         default="in-memory",
         help=(
             "Shuffle implementation. in-memory preserves the original pandas "
             "full-load behavior. external uses a disk-backed random-key bucket "
-            "shuffle for full datasets that do not fit in RAM. Default: in-memory"
+            "shuffle for full datasets that do not fit in RAM. batch randomizes "
+            "input file order, loads file batches in parallel, shuffles each "
+            "batch in memory, and streams output chunks. Default: in-memory"
+        ),
+    )
+    parser.add_argument(
+        "--batch-files",
+        type=int,
+        default=2048,
+        help=(
+            "Number of input parquet files to load per batch for "
+            "--shuffle-mode batch. Increase on high-RAM nodes. Default: 2048"
         ),
     )
     parser.add_argument(
@@ -507,6 +518,121 @@ def write_external_shuffled_chunks(
     log_step("Write external shuffled parquet chunks", start)
 
 
+def write_batch_shuffled_chunks(
+    files: List[Path],
+    output_dir: Path,
+    rows_per_file: int,
+    output_prefix: str,
+    compression: str,
+    manifest_name: str,
+    drop_remainder: bool,
+    seed: int,
+    workers: int,
+    batch_files: int,
+) -> None:
+    if batch_files <= 0:
+        raise ValueError("--batch-files must be positive")
+
+    start = time.time()
+    rng = np.random.default_rng(seed)
+    file_indices = rng.permutation(len(files)).tolist()
+    shuffled_files = [files[i] for i in file_indices]
+
+    output_index = 0
+    rows_seen = 0
+    rows_written = 0
+    manifest_rows: List[dict] = []
+    pending = pd.DataFrame(columns=SCHEMA_COLUMNS)
+    num_batches = math.ceil(len(shuffled_files) / batch_files)
+
+    print(
+        f"[INFO] Batch shuffle: input files={len(files)}, batch_files={batch_files}, "
+        f"batches={num_batches}, workers={workers}, seed={seed}",
+        flush=True,
+    )
+
+    for batch_index in range(num_batches):
+        batch_start = batch_index * batch_files
+        batch_end = min(batch_start + batch_files, len(shuffled_files))
+        batch_paths = shuffled_files[batch_start:batch_end]
+
+        batch_timer = time.time()
+        print(
+            f"[INFO] Batch {batch_index + 1}/{num_batches}: "
+            f"reading files {batch_start}:{batch_end}",
+            flush=True,
+        )
+        df = read_all_data(batch_paths, workers)
+        rows_seen += len(df)
+
+        shuffle_seed = int((seed + batch_index) % (2**32 - 1))
+        print(
+            f"[INFO] Batch {batch_index + 1}/{num_batches}: "
+            f"shuffling rows={len(df)} seed={shuffle_seed}",
+            flush=True,
+        )
+        df = df.sample(frac=1, random_state=shuffle_seed).reset_index(drop=True)
+
+        if not pending.empty:
+            df = pd.concat([pending, df], ignore_index=True, copy=False)
+            pending = pd.DataFrame(columns=SCHEMA_COLUMNS)
+
+        full_rows = (len(df) // rows_per_file) * rows_per_file
+        iterator = range(0, full_rows, rows_per_file)
+        if tqdm is not None:
+            iterator = tqdm(iterator, desc=f"write batch {batch_index + 1}", unit="chunk")
+        for start_row in iterator:
+            end_row = start_row + rows_per_file
+            chunk = df.iloc[start_row:end_row]
+            output_name = write_output_chunk(
+                chunk=chunk,
+                output_dir=output_dir,
+                output_prefix=output_prefix,
+                output_index=output_index,
+                compression=compression,
+            )
+            manifest_rows.append({
+                "output_file": output_name,
+                "start_row": rows_written,
+                "end_row_exclusive": rows_written + len(chunk),
+                "num_rows": len(chunk),
+            })
+            rows_written += len(chunk)
+            output_index += 1
+
+        if full_rows < len(df):
+            pending = df.iloc[full_rows:].copy()
+
+        del df
+        log_step(f"Batch {batch_index + 1}/{num_batches}", batch_timer)
+
+    dropped_rows = len(pending) if drop_remainder else 0
+    if not drop_remainder and not pending.empty:
+        output_name = write_output_chunk(
+            chunk=pending,
+            output_dir=output_dir,
+            output_prefix=output_prefix,
+            output_index=output_index,
+            compression=compression,
+        )
+        manifest_rows.append({
+            "output_file": output_name,
+            "start_row": rows_written,
+            "end_row_exclusive": rows_written + len(pending),
+            "num_rows": len(pending),
+        })
+        rows_written += len(pending)
+        output_index += 1
+
+    print(
+        f"[INFO] total rows={rows_seen}, usable rows={rows_written}, "
+        f"dropped rows={dropped_rows}, output files={output_index}",
+        flush=True,
+    )
+    write_manifest(output_dir / manifest_name, manifest_rows)
+    log_step("Write batch shuffled parquet chunks", start)
+
+
 def external_shuffle(
     files: List[Path],
     output_dir: Path,
@@ -584,7 +710,20 @@ def main() -> None:
 
     prepare_output_dir(output_dir, args.output_prefix, args.overwrite)
 
-    if args.shuffle_mode == "external":
+    if args.shuffle_mode == "batch":
+        write_batch_shuffled_chunks(
+            files=files,
+            output_dir=output_dir,
+            rows_per_file=args.rows_per_file,
+            output_prefix=args.output_prefix,
+            compression=args.compression,
+            manifest_name=args.manifest_name,
+            drop_remainder=args.drop_remainder,
+            seed=args.seed,
+            workers=args.workers,
+            batch_files=args.batch_files,
+        )
+    elif args.shuffle_mode == "external":
         temp_dir = (
             Path(args.temp_dir).expanduser().resolve()
             if args.temp_dir is not None

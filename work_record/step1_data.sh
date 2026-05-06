@@ -18,7 +18,8 @@ export FLAT_DIR=${STAGE2_ROOT}/all_flatten_data_full_no_1st_human_mouse_${RUN_ID
 export WORKERS=16
 export ROWS_PER_FILE=16384
 export SHUFFLE_SEED=42
-export SHUFFLE_MODE=${SHUFFLE_MODE:-external}
+export SHUFFLE_MODE=${SHUFFLE_MODE:-batch}
+export BATCH_FILES=${BATCH_FILES:-4096}
 export SHUFFLE_BUCKETS=${SHUFFLE_BUCKETS:-512}
 export SKIP_MERGE=${SKIP_MERGE:-0}
 export SKIP_FLATTEN=${SKIP_FLATTEN:-0}
@@ -191,6 +192,8 @@ flatten_cmd=(
   shuffle_manifest.csv
   --shuffle-mode
   "$SHUFFLE_MODE"
+  --batch-files
+  "$BATCH_FILES"
   --shuffle-buckets
   "$SHUFFLE_BUCKETS"
   --temp-dir
