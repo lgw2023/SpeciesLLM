@@ -290,6 +290,118 @@ def value_or_default(value, default):
     return value if value is not None else default
 
 
+def resolve_torch_dtype(name, amp_dtype=None):
+    if name == "amp":
+        if amp_dtype is None:
+            raise ValueError("amp_dtype is required when dtype is 'amp'")
+        return amp_dtype
+    try:
+        return {
+            "float32": torch.float32,
+            "bfloat16": torch.bfloat16,
+            "float16": torch.float16,
+        }[name]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported dtype: {name}") from exc
+
+
+def apply_runtime_overrides(config, args, logger=None):
+    overrides = {}
+
+    if args.runtime_attn_implementation is not None:
+        config._attn_implementation = args.runtime_attn_implementation
+        overrides["_attn_implementation"] = config._attn_implementation
+    if args.runtime_explicit_zero_prob is not None:
+        config.explicit_zero_prob = str2bool(args.runtime_explicit_zero_prob)
+        overrides["explicit_zero_prob"] = config.explicit_zero_prob
+    if args.runtime_do_mvc is not None:
+        config.do_mvc = str2bool(args.runtime_do_mvc)
+        overrides["do_mvc"] = config.do_mvc
+    if args.runtime_chunk_size_feed_forward is not None:
+        config.chunk_size_feed_forward = int(args.runtime_chunk_size_feed_forward)
+        overrides["chunk_size_feed_forward"] = config.chunk_size_feed_forward
+
+    if logger is not None and overrides:
+        logger.info("runtime_config_overrides=%s", json.dumps(overrides, sort_keys=True))
+    return overrides
+
+
+def resolve_amp_dtype(args):
+    if args.amp_dtype == "auto":
+        dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16'
+    else:
+        dtype = args.amp_dtype
+    return dtype, resolve_torch_dtype(dtype)
+
+
+def npu_memory_stats_gib():
+    stats = {}
+    for name, func_name in (
+            ("allocated_gib", "memory_allocated"),
+            ("reserved_gib", "memory_reserved"),
+            ("max_allocated_gib", "max_memory_allocated"),
+            ("max_reserved_gib", "max_memory_reserved"),
+    ):
+        func = getattr(torch_npu.npu, func_name, None)
+        if func is None:
+            stats[name] = None
+            continue
+        try:
+            stats[name] = float(func()) / (1024 ** 3)
+        except Exception:
+            stats[name] = None
+    return stats
+
+
+def reset_npu_peak_memory_stats(logger=None, tag=None):
+    func = getattr(torch_npu.npu, "reset_peak_memory_stats", None)
+    if func is None:
+        return
+    try:
+        func()
+    except Exception as exc:
+        if logger is not None:
+            logger.warning("memory_reset_failed tag=%s error=%s", tag, exc)
+
+
+def log_npu_memory(logger, tag, rank=None, extra=None):
+    if logger is None:
+        return
+    stats = npu_memory_stats_gib()
+    parts = []
+    if rank is not None:
+        parts.append(f"rank={rank}")
+    parts.append(f"tag={tag}")
+    for key in ("allocated_gib", "reserved_gib", "max_allocated_gib", "max_reserved_gib"):
+        value = stats.get(key)
+        value_text = "NA" if value is None else f"{value:.4f}"
+        parts.append(f"{key}={value_text}")
+    if extra:
+        for key, value in extra.items():
+            parts.append(f"{key}={value}")
+    logger.info("MEMORY %s", " ".join(parts))
+
+
+def should_trace_step(interval, batch_index, should_step=False, final_step=False):
+    if interval is None or int(interval) <= 0:
+        return False
+    interval = int(interval)
+    step_number = batch_index + 1
+    return step_number == 1 or step_number % interval == 0 or bool(should_step) or bool(final_step)
+
+
+def tensor_shape_summary(mapping):
+    result = {}
+    for key, value in mapping.items():
+        if torch.is_tensor(value):
+            result[key] = {
+                "shape": list(value.shape),
+                "dtype": str(value.dtype),
+                "device": str(value.device),
+            }
+    return result
+
+
 def resolve_output_dir(out_path):
     path = Path(out_path).expanduser()
     if not path.is_absolute():
@@ -630,6 +742,25 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
                 args.nan_check_interval > 0
                 and ((iter_num % args.nan_check_interval == 0) or final_step_in_epoch)
             )
+            should_log_memory = should_trace_step(
+                args.memory_log_interval,
+                batch_index,
+                should_step=should_step,
+                final_step=final_step_in_epoch,
+            )
+            should_log_shapes = should_trace_step(
+                args.tensor_shape_log_interval,
+                batch_index,
+                should_step=should_step,
+                final_step=final_step_in_epoch,
+            )
+            if should_log_memory:
+                log_npu_memory(
+                    logger,
+                    "before_to_device",
+                    rank=rank,
+                    extra={"epoch": epoch + 1, "batch": batch_index + 1},
+                )
 
             t_temp_3_batchdata = time.time()
             input_gene_values = batch_data["values"].to(device, non_blocking=True)
@@ -652,10 +783,25 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
             # print(f"rank: {rank} batch to device done")
             t_temp_3_batchdata = time.time() - t_temp_3_batchdata
             t_temp_3_sum_batchdata += t_temp_3_batchdata
+            if should_log_memory:
+                log_npu_memory(
+                    logger,
+                    "after_to_device",
+                    rank=rank,
+                    extra={"epoch": epoch + 1, "batch": batch_index + 1},
+                )
             if ddp:
                 model.require_backward_grad_sync = should_step
             t_temp_5_forward = time.time()
+            if should_log_memory:
+                log_npu_memory(
+                    logger,
+                    "before_forward",
+                    rank=rank,
+                    extra={"epoch": epoch + 1, "batch": batch_index + 1},
+                )
             with ctx:
+                run_mvc = bool(args.train_mvc and config.do_mvc)
                 outputs = model(
                     values=input_gene_values,
                     batch_labels=input_batch_labels if config.use_batch_labels else None,
@@ -666,11 +812,25 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
                     sex_labels=input_sex_labels if config.use_sex_labels else None,
                     age_labels=input_age_labels if config.use_age_labels else None,
                     CLS=False,
-                    MVC=True,
+                    MVC=run_mvc,
                     output_hidden_states=False,
                     output_attentions=False, # can not both turned on with _attn_implementation of sdpa
                     )
                 # print(f"rank: {rank} outputs done")
+                if should_log_shapes:
+                    logger.info(
+                        "TENSOR_SHAPES epoch=%s batch=%s %s",
+                        epoch + 1,
+                        batch_index + 1,
+                        json.dumps(tensor_shape_summary(outputs), sort_keys=True),
+                    )
+                if should_log_memory:
+                    log_npu_memory(
+                        logger,
+                        "after_forward",
+                        rank=rank,
+                        extra={"epoch": epoch + 1, "batch": batch_index + 1},
+                    )
                 mask_positions = input_gene_values.eq(-1)
                 t_temp_5_forward = time.time() - t_temp_5_forward
                 t_temp_5_sum_forward += t_temp_5_forward
@@ -713,6 +873,13 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
                 loss = loss / args.gradient_accumulation_steps
                 t_temp_7_loss_other = time.time() - t_temp_7_loss_other
                 t_temp_7_sum_loss_gep_zero_prob += t_temp_7_loss_other
+                if should_log_memory:
+                    log_npu_memory(
+                        logger,
+                        "after_loss",
+                        rank=rank,
+                        extra={"epoch": epoch + 1, "batch": batch_index + 1},
+                    )
 
             # backward and optimization
             t_temp_8_backward = time.time()
@@ -720,6 +887,13 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
             # print(f"rank: {rank} scaler backward done")
             t_temp_8_backward = time.time() - t_temp_8_backward
             t_temp_8_sum_backward += t_temp_8_backward
+            if should_log_memory:
+                log_npu_memory(
+                    logger,
+                    "after_backward",
+                    rank=rank,
+                    extra={"epoch": epoch + 1, "batch": batch_index + 1},
+                )
 
             # for name, param in model.named_parameters():
             #     if param.grad is None:
@@ -747,6 +921,13 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
                 optimizer.zero_grad()
                 update_step += 1
                 # print(f"rank: {rank} step update zero_grad done")
+                if should_log_memory:
+                    log_npu_memory(
+                        logger,
+                        "after_optimizer_step",
+                        rank=rank,
+                        extra={"epoch": epoch + 1, "batch": batch_index + 1},
+                    )
 
                 if (batch_index + 1) % save_step_interval == 0:
                     lossf = loss.item() * args.gradient_accumulation_steps
@@ -864,6 +1045,10 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
 
             iter_num += 1
 
+            if args.max_train_steps > 0 and iter_num >= args.max_train_steps:
+                logger.info("max_train_steps_reached=%s", args.max_train_steps)
+                break
+
             if (batch_index + 1) >= max_batch_index:
                 break
 
@@ -885,12 +1070,16 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
                         f"10_sync {t_temp_10_sum_sync:.4f}")
         logger.info(time_checker)
         total_loss = 0
+        if args.max_train_steps > 0 and iter_num >= args.max_train_steps:
+            break
 
     metrics_writer.close()
     save_log_to_s3(args, out_dir, NODE_RANK, rank, logger=logger)
 
     NODE_RANK = get_node_rank()
-    if ddp:
+    if args.skip_final_save:
+        logger.info("skip_final_save=true")
+    elif ddp:
         save_model(model.module, optimizer, args.epoch+1, 0, 0, out_dir, rank, NODE_RANK, s3_remote_dir_path=args.s3_remote_dir_path, logger=logger)
     else:
         save_model(model, optimizer, args.epoch+1, 0, 0, out_dir, rank, NODE_RANK, s3_remote_dir_path=args.s3_remote_dir_path, logger=logger)
@@ -986,9 +1175,7 @@ def main(args):
     device = args.device
     device_type = args.device_type
 
-    dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16'
-    ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[
-        dtype]  # note: float16 data type will automatically use a GradScaler
+    dtype, ptdtype = resolve_amp_dtype(args)  # note: float16 data type will automatically use a GradScaler
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
 
@@ -1009,6 +1196,7 @@ def main(args):
     combined_vocab = cls_token + gene_ids + special_tokens
     vocab = {token: idx for idx, token in enumerate(combined_vocab)}
     config = build_bertconfig(vocab, seq_len, args)
+    runtime_overrides = apply_runtime_overrides(config, args)
     collate_fn = CustomCollate_3GeneEmb(config=config,
                                         genes=src,
                                         esm_embeddings=esm_embeddings,
@@ -1045,7 +1233,22 @@ def main(args):
     )
     logger.info("sys.argv=%s", sys.argv)
     logger.info("args=%s", json.dumps(vars(args), ensure_ascii=False, indent=2, default=json_default))
+    logger.info("runtime_config_overrides=%s", json.dumps(runtime_overrides, sort_keys=True))
     logger.info("model_config=%s", config)
+    logger.info(
+        "experiment_controls amp_dtype=%s static_gene_dtype=%s train_mvc=%s gradient_checkpointing=%s "
+        "memory_log_interval=%s tensor_shape_log_interval=%s max_train_steps=%s skip_final_save=%s "
+        "ddp_find_unused_parameters=%s",
+        dtype,
+        args.static_gene_dtype,
+        args.train_mvc,
+        args.gradient_checkpointing,
+        args.memory_log_interval,
+        args.tensor_shape_log_interval,
+        args.max_train_steps,
+        args.skip_final_save,
+        args.ddp_find_unused_parameters,
+    )
     logger.info("output_dir=%s remote_output_dir=%s", os.path.abspath(out_dir), args.s3_remote_dir_path)
     logger.info(
         "ddp=%s rank=%s local_rank=%s world_size=%s master_process=%s device=%s tokens_per_epoch=%s",
@@ -1067,6 +1270,12 @@ def main(args):
                                      drop_last=True)
 
     model = BERTForPreTraining(config).to(device)
+    if args.gradient_checkpointing:
+        model.gradient_checkpointing = True
+        model.bert.gradient_checkpointing = True
+    if args.memory_log_interval > 0:
+        reset_npu_peak_memory_stats(logger, "after_model_to")
+        log_npu_memory(logger, "after_model_to", rank=rank)
     model.set_static_gene_inputs(
         src,
         esm_embeddings,
@@ -1074,10 +1283,14 @@ def main(args):
         dna_embeddings,
         cls_id=vocab["<cls>"],
         append_cls=True,
-        dtype=torch.float32,
+        dtype=resolve_torch_dtype(args.static_gene_dtype, ptdtype),
     )
+    if args.memory_log_interval > 0:
+        log_npu_memory(logger, "after_static_gene_inputs", rank=rank)
     # optimizer and initialize a GradSclaer.
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay, betas=(beta1, beta2))
+    if args.memory_log_interval > 0:
+        log_npu_memory(logger, "after_optimizer_init", rank=rank)
     # NanoGPT's way to initialize optimizer. But using this with turn use_fused = False in model
     # optimizer = model.configure_optimizers(weight_decay, learning_rate, (beta1, beta2), device_type)
     scaler = GradScaler(enabled=(dtype == 'float16'))
@@ -1088,9 +1301,16 @@ def main(args):
         unoptimized_model = model
         model = torch.compile(model)  # requires P
     if ddp:
-        model = DDP(model, device_ids=[local_rank], find_unused_parameters=False, broadcast_buffers=False)
+        model = DDP(
+            model,
+            device_ids=[local_rank],
+            find_unused_parameters=args.ddp_find_unused_parameters,
+            broadcast_buffers=False,
+        )
+    if args.memory_log_interval > 0:
+        log_npu_memory(logger, "after_ddp_wrap", rank=rank)
 
-    ctx = nullcontext() if device_type == 'cpu' else torch.autocast(device_type=device_type, dtype=ptdtype)
+    ctx = nullcontext() if device_type == 'cpu' or dtype == 'float32' else torch.autocast(device_type=device_type, dtype=ptdtype)
     train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelist, train_sampler, device, config, ctx, scaler, grad_clip, out_dir, collate_fn, world_size, logger)
 
     t1 = time.time()
@@ -1202,6 +1422,61 @@ def argumentparser():
                         type=str2bool,
                         default=False,
                         help="If true, all ranks also write summaries to stdout; otherwise only global rank 0 does.")
+    parser.add_argument('--amp_dtype',
+                        type=str,
+                        choices=["auto", "float16", "bfloat16", "float32"],
+                        default="auto",
+                        help="Autocast dtype. Default auto preserves the current cuda-based float16/bfloat16 selection.")
+    parser.add_argument('--static_gene_dtype',
+                        type=str,
+                        choices=["float32", "float16", "bfloat16", "amp"],
+                        default="float32",
+                        help="dtype for static gene embedding buffers. Default float32 preserves current behavior.")
+    parser.add_argument('--runtime_attn_implementation',
+                        type=str,
+                        choices=["eager", "sdpa"],
+                        default=None,
+                        help="Optional runtime override for config._attn_implementation.")
+    parser.add_argument('--runtime_explicit_zero_prob',
+                        type=str,
+                        default=None,
+                        help="Optional runtime override for config.explicit_zero_prob.")
+    parser.add_argument('--runtime_do_mvc',
+                        type=str,
+                        default=None,
+                        help="Optional runtime override for config.do_mvc before model construction.")
+    parser.add_argument('--runtime_chunk_size_feed_forward',
+                        type=int,
+                        default=None,
+                        help="Optional runtime override for config.chunk_size_feed_forward.")
+    parser.add_argument('--train_mvc',
+                        type=str2bool,
+                        default=True,
+                        help="Whether to execute the MVC forward/loss branch. Default true preserves current behavior.")
+    parser.add_argument('--gradient_checkpointing',
+                        type=str2bool,
+                        default=False,
+                        help="Enable transformer layer activation checkpointing. Default false preserves current behavior.")
+    parser.add_argument('--memory_log_interval',
+                        type=int,
+                        default=0,
+                        help="Log torch-npu allocated/reserved memory every N local batches. 0 disables.")
+    parser.add_argument('--tensor_shape_log_interval',
+                        type=int,
+                        default=0,
+                        help="Log output tensor shapes every N local batches. 0 disables.")
+    parser.add_argument('--max_train_steps',
+                        type=int,
+                        default=0,
+                        help="Stop after N local batches per rank. 0 runs the full epoch.")
+    parser.add_argument('--skip_final_save',
+                        type=str2bool,
+                        default=False,
+                        help="Skip final checkpoint save. Default false preserves current behavior.")
+    parser.add_argument('--ddp_find_unused_parameters',
+                        type=str2bool,
+                        default=False,
+                        help="DDP find_unused_parameters. Default false preserves current behavior.")
     parser.add_argument('--hidden_size',
         type=int,
         default=None)

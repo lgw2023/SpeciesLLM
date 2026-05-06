@@ -16,6 +16,7 @@ from packaging import version
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
+from torch.utils.checkpoint import checkpoint
 from transformers.activations import ACT2FN
 from transformers.utils import get_torch_version, ModelOutput
 from transformers.modeling_outputs import MaskedLMOutput
@@ -678,10 +679,10 @@ class BERTModel(nn.Module):
                 all_hidden_states = all_hidden_states + (x,)
 
             if self.gradient_checkpointing and self.training:
-                layer_outputs = self._gradient_checkpointing_func(block.__call__,
-                    x,
-                    attention_mask,
-                    output_attentions, )
+                def custom_forward(hidden_states):
+                    return block(hidden_states, attention_mask, output_attentions)
+
+                layer_outputs = checkpoint(custom_forward, x, use_reentrant=False)
             else:
                 layer_outputs = block(x,
                     attention_mask,
