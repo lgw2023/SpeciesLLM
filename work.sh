@@ -25,6 +25,7 @@ Examples:
   bash work.sh PREP_ACTION=all
   bash work.sh RUN_TRAINING=0
   bash work.sh COLLECT_ONLY=1
+  bash work.sh COLLECT_ONLY=1 TRAIN_OUT_DIR=/data/disk1/SpeciesLLM/training_output
   bash work.sh SSH_PASSWORD='your-password' PREP_ACTION=commands
   bash work.sh SSH_KEY=/path/to/id_ed25519 PREP_ACTION=commands
   bash work.sh BATCH_SIZE=16 PREP_ACTION=commands SKIP_DATA_SYNC=1
@@ -44,7 +45,7 @@ is_allowed_cli_var() {
     ENV_FILE|COLLECT_ONLY|PREP_ACTION|RUN_TRAINING|SKIP_DATA_SYNC|SSH_USER|SSH_KEY|\
     SSH_PASSWORD|SSH_EXTRA_OPTS|PYTHON_BIN|PROJECT_ROOT|STAGE2_CHECKS_PY|\
     STAGE2_ROOT|INPUT_1ST|INPUT_2ND|INPUT_3SC|MERGED_TEST_DIR|FLAT_TEST_DIR|\
-    COMMAND_DIR|WORKDIR|TRAIN_ENTRY|LOG_SUBDIR|TRAIN_OUTPUT_ROOT|EMB_ROOT|\
+    COMMAND_DIR|WORKDIR|TRAIN_ENTRY|LOG_SUBDIR|TRAIN_OUTPUT_ROOT|TRAIN_OUT_DIR|NODE_LOG_DIR|EMB_ROOT|\
     EMB_PATH|MODEL_CONFIG_JSON|NNODES|NPROC_PER_NODE|HOSTS|MASTER_ADDR|\
     MASTER_PORT|TRAIN_DATASET|DATA_PATH|NUM_OF_USED_DATA|OUT_PATH|WORKERS|\
     FLATTEN_WORKERS|ROWS_PER_FILE|SHUFFLE_SEED|FLATTEN_DROP_REMAINDER|\
@@ -219,6 +220,8 @@ set_default WORKDIR /data/disk1/SpeciesLLM
 set_default TRAIN_ENTRY train_MNodes_torchrun_mfu_preindexparquet.py
 set_default LOG_SUBDIR torchrun_logs
 set_default TRAIN_OUTPUT_ROOT training_output
+set_default TRAIN_OUT_DIR ""
+set_default NODE_LOG_DIR ""
 
 set_default EMB_ROOT /data/disk1/SpeciesLLM
 set_default EMB_PATH /data/disk1/SpeciesLLM/Stage2_macrogene_embeddings
@@ -326,6 +329,23 @@ rsync_from_host() {
   else
     rsync -e "$(rsync_ssh_cmd)" "$@" "${SSH_USER}@${host}:$source_path" "$target_path"
   fi
+}
+
+shell_quote() {
+  local value="$1"
+  printf "'%s'" "$(printf "%s" "$value" | sed "s/'/'\\\\''/g")"
+}
+
+resolve_workdir_path() {
+  local path="$1"
+  case "$path" in
+    /*)
+      printf "%s\n" "$path"
+      ;;
+    *)
+      printf "%s/%s\n" "${WORKDIR%/}" "$path"
+      ;;
+  esac
 }
 
 split_hosts() {
@@ -496,25 +516,67 @@ check_remote_paths() {
   done
 }
 
+resolve_train_out_dir() {
+  if [[ -n "$TRAIN_OUT_DIR" ]]; then
+    resolve_workdir_path "$TRAIN_OUT_DIR"
+    return 0
+  fi
+
+  [[ -f "$STAGE2_CHECKS_PY" ]] || die "Missing Stage 2 training helper: $STAGE2_CHECKS_PY"
+  [[ -f "$MODEL_CONFIG_JSON" ]] || die "Missing model config for output path resolution: $MODEL_CONFIG_JSON"
+
+  "$PYTHON_BIN" "$STAGE2_CHECKS_PY" resolve-out-dir \
+    --out-path "$OUT_PATH" \
+    --workdir "$WORKDIR" \
+    --config-json "$MODEL_CONFIG_JSON" \
+    --learning-rate "$LEARNING_RATE" \
+    --min-lr "$MIN_LR" \
+    --weight-decay "$WEIGHT_DECAY" \
+    --warmup-ratio "$WARMUP_RATIO"
+}
+
 collect_training_outputs() {
   split_hosts
 
-  local host
+  local train_out_dir node_log_dir host quoted_path
+  train_out_dir="$(resolve_train_out_dir)"
+  if [[ -n "$NODE_LOG_DIR" ]]; then
+    node_log_dir="$(resolve_workdir_path "$NODE_LOG_DIR")"
+  else
+    node_log_dir="${WORKDIR%/}/${LOG_SUBDIR}"
+  fi
+
+  export TRAIN_OUT_DIR="$train_out_dir"
+  export NODE_LOG_DIR="$node_log_dir"
+
+  mkdir -p "$train_out_dir" "$node_log_dir"
+
+  echo "[COLLECT] training output dir: ${train_out_dir}"
+  echo "[COLLECT] launcher log dir: ${node_log_dir}"
+
   for host in "${HOSTS_ARR[@]}"; do
     echo "[COLLECT] ${host}"
-    if ssh_run "$host" "test -d '${WORKDIR%/}/training_output'"; then
+
+    quoted_path="$(shell_quote "$train_out_dir")"
+    if ssh_run "$host" "test -d ${quoted_path}"; then
       rsync_from_host \
         "$host" \
-        "${WORKDIR%/}/training_output/" \
-        "${WORKDIR%/}/training_output/" \
+        "${train_out_dir%/}/" \
+        "${train_out_dir%/}/" \
         -aH
+    else
+      echo "[WARN] missing training output dir on ${host}: ${train_out_dir}"
     fi
-    if ssh_run "$host" "test -d '${WORKDIR%/}/${LOG_SUBDIR}'"; then
+
+    quoted_path="$(shell_quote "$node_log_dir")"
+    if ssh_run "$host" "test -d ${quoted_path}"; then
       rsync_from_host \
         "$host" \
-        "${WORKDIR%/}/${LOG_SUBDIR}/" \
-        "${WORKDIR%/}/${LOG_SUBDIR}/" \
+        "${node_log_dir%/}/" \
+        "${node_log_dir%/}/" \
         -aH
+    else
+      echo "[WARN] missing launcher log dir on ${host}: ${node_log_dir}"
     fi
   done
 }
