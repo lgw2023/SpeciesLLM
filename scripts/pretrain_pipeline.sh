@@ -325,6 +325,8 @@ generate_flat() {
   )
   if [[ "$FLATTEN_DROP_REMAINDER" == "1" ]]; then
     flatten_cmd+=(--drop-remainder)
+  else
+    flatten_cmd+=(--keep-remainder)
   fi
 
   log "merge test-mode command:"

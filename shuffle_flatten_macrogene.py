@@ -133,11 +133,19 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--drop-remainder",
+        dest="drop_remainder",
         action="store_true",
+        default=True,
         help=(
             "Drop trailing rows that do not fill a complete --rows-per-file output "
-            "parquet file. By default the final partial file is kept."
+            "parquet file. This is the default behavior."
         ),
+    )
+    parser.add_argument(
+        "--keep-remainder",
+        dest="drop_remainder",
+        action="store_false",
+        help="Keep the final partial output parquet file instead of dropping it.",
     )
     parser.add_argument(
         "--dry-run",
