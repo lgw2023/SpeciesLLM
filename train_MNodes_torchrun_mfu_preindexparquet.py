@@ -41,9 +41,9 @@ from nanoBERT.utils import masked_mse_loss, masked_relative_error, criterion_neg
 from nanoBERT.model.nanoBERTmodel_cellmeta2_plusEncode_adbc import BERTConfig, BERTForPreTraining
 
 try:
-    from scripts.stage2_training_config import load_model_config
+    from scripts.pretrain_config import load_model_config
 except ModuleNotFoundError:
-    from stage2_training_config import load_model_config
+    from pretrain_config import load_model_config
 
 import dask
 import dask.dataframe as dd

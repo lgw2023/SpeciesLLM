@@ -142,14 +142,16 @@ SpeciesLLM/
 ├── train_MNodes_torchrun_mfu_preindexparquet.py   # Main training script
 ├── scripts/
 │   ├── generate_test_data.sh                       # Test-data generation command
-│   ├── train_multinode.sh                          # Multi-node training launcher
-│   ├── train_singlenode.sh                         # Single-node training command
+│   ├── pretrain_pipeline.sh                        # Reusable pretraining data/check/command pipeline
+│   ├── smoke_500m_3node.sh                         # 500M three-node smoke-test orchestrator
+│   ├── launch_multinode_torchrun.sh                # Multi-node torchrun launcher
+│   ├── launch_singlenode_torchrun.sh               # Single-node torchrun launcher
 │   ├── train_modelarts.sh                          # ModelArts training wrapper
 │   └── create_env_modelarts.sh                     # ModelArts environment setup
 ├── get_embedding.py                                # Embedding extraction
 ├── shuffle_species.py                              # Legacy data flattening/shuffling
-├── shuffle_macrogene_rounds_parallel.py            # Flatten species folders into training chunks
-├── merge_macrogene_rounds_parallel.py              # Multi-round macrogene data merging
+├── shuffle_flatten_macrogene.py                    # Flatten species folders into training chunks
+├── merge_macrogene_rounds.py                       # Multi-round macrogene data merging
 ├── nanoBERT/
 │   ├── model/
 │   │   ├── nanoBERTmodel_cellmeta2_plusEncode_adbc.py  # Core model

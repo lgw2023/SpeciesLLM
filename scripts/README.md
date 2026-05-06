@@ -40,13 +40,13 @@ The final training-ready dataset defaults to:
 Stage2_SpeciesLLMData/all_flatten_data_test
 ```
 
-## Stage 2 training checks
+## Pretraining checks
 
-Reusable Stage 2 checks live in:
+Reusable pretraining checks live in:
 
 ```text
-scripts/stage2_training_config.py
-scripts/stage2_training_checks.py
+scripts/pretrain_config.py
+scripts/pretrain_checks.py
 ```
 
 They provide strict model JSON loading, seq_len derivation, source parquet
@@ -62,24 +62,24 @@ Stage2_macrogene_embeddings/args_2nd_run.json
 Missing model structure fields, label switches, label counts, or inconsistent
 `vocab_size` / `max_position_embeddings` fail fast.
 
-## Stage 2 500M three-node smoke test
+## 500M three-node smoke test
 
 ```bash
-bash scripts/test_stage2_500m_multinode.sh all
+bash scripts/pretrain_pipeline.sh all
 ```
 
 This server-oriented script uses
-`merge_macrogene_rounds_parallel.py --test-mode`, flattens the small merged
+`merge_macrogene_rounds.py --test-mode`, flattens the small merged
 sample, validates parquet schema / label ranges / macrogene embedding shapes,
 writes a 24-rank file distribution plan, and generates 500M three-node training
-commands under `Stage2_SpeciesLLMData/stage2_500m_test_commands`.
+commands under `Stage2_SpeciesLLMData/pretrain_500m_test_commands`.
 
 Model structure and label parameters are read strictly from
 `Stage2_macrogene_embeddings/args_2nd_run.json`; if a required JSON field is
 missing, the script exits instead of falling back to shell defaults.
 
 The shell wrapper only orchestrates commands. It calls
-`scripts/stage2_training_checks.py` for reusable checks and passes
+`scripts/pretrain_checks.py` for reusable checks and passes
 `--config_json` to the training entry instead of expanding model structure or
 label parameters in shell.
 
@@ -89,13 +89,20 @@ Typical server invocation:
 STAGE2_ROOT=/data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData \
 WORKDIR=/path/to/SpeciesLLM \
 HOSTS=host0,host1,host2 MASTER_ADDR=host0 \
-bash scripts/test_stage2_500m_multinode.sh all
+bash scripts/pretrain_pipeline.sh all
+```
+
+For the existing end-to-end 500M three-node smoke orchestration, including
+remote sync, path checks, dry-run, and optional launch, use:
+
+```bash
+bash scripts/smoke_500m_3node.sh
 ```
 
 After the distributed job finishes:
 
 ```bash
-bash scripts/test_stage2_500m_multinode.sh check-training
+bash scripts/pretrain_pipeline.sh check-training
 ```
 
 ## Train
@@ -103,7 +110,7 @@ bash scripts/test_stage2_500m_multinode.sh check-training
 Multi-node launcher:
 
 ```bash
-bash scripts/train_multinode.sh
+bash scripts/launch_multinode_torchrun.sh
 ```
 
 The launcher reads model structure and label configuration from
@@ -119,7 +126,7 @@ Run multi-node training on the test dataset:
 TRAIN_DATASET=test \
 DATA_ROOT=/data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData \
 EMB_ROOT=/data/disk1/SpeciesLLM \
-bash scripts/train_multinode.sh
+bash scripts/launch_multinode_torchrun.sh
 ```
 
 For server runs, copy the root env template and edit only server/cluster
@@ -137,7 +144,7 @@ while embeddings live under `/data/disk1/SpeciesLLM/Stage2_macrogene_embeddings`
 Single-node command:
 
 ```bash
-bash scripts/train_singlenode.sh
+bash scripts/launch_singlenode_torchrun.sh
 ```
 
 ModelArts command:

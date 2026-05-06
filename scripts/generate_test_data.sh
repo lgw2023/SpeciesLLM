@@ -46,7 +46,7 @@ run_command() {
 
 merge_cmd=(
   "$PYTHON_BIN"
-  "${PROJECT_ROOT}/merge_macrogene_rounds_parallel.py"
+  "${PROJECT_ROOT}/merge_macrogene_rounds.py"
   --batch-dirs
   "${BATCH_ROOT}/1st_pretrain_data_preprocessed_step4"
   "${BATCH_ROOT}/2nd_pretrain_data_preprocessed_step4"
@@ -78,7 +78,7 @@ merge_cmd+=("$@")
 
 flatten_cmd=(
   "$PYTHON_BIN"
-  "${PROJECT_ROOT}/shuffle_macrogene_rounds_parallel.py"
+  "${PROJECT_ROOT}/shuffle_flatten_macrogene.py"
   --input-dir
   "$OUTPUT_DIR"
   --output-dir
