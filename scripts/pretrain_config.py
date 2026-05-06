@@ -86,6 +86,16 @@ def load_model_config(config_path: Path) -> dict[str, Any]:
     for json_key in MODEL_CONFIG_FIELD_MAP.values():
         if json_key not in config or config[json_key] is None:
             raise SystemExit(f"{config_path}: missing required field: {json_key}")
+
+    hidden_size = int(config["hidden_size"])
+    num_attention_heads = int(config["num_attention_heads"])
+    if num_attention_heads <= 0:
+        raise SystemExit(f"{config_path}: num_attention_heads must be > 0")
+    if hidden_size % num_attention_heads != 0:
+        raise SystemExit(
+            f"{config_path}: hidden_size ({hidden_size}) must be divisible by "
+            f"num_attention_heads ({num_attention_heads})"
+        )
     return config
 
 

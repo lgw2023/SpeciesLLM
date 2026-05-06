@@ -104,7 +104,7 @@ Workdir: ${WORKDIR}
 Data path: ${DATA_PATH}
 Embedding path: ${EMB_PATH}
 Model config: ${MODEL_CONFIG_JSON}
-First parquet files requested: ${NUM_OF_USED_DATA}
+Parquet files requested: ${NUM_OF_USED_DATA} (0 means all)
 NPROC_PER_NODE: ${NPROC_PER_NODE}
 ASCEND_RT_VISIBLE_DEVICES_VALUE: ${ASCEND_RT_VISIBLE_DEVICES_VALUE}
 Batch size per rank: ${BATCH_SIZE}
@@ -224,17 +224,26 @@ log "preflight NPROC_PER_NODE=${NPROC_PER_NODE} ASCEND_RT_VISIBLE_DEVICES_VALUE=
 [[ -f "$MODEL_CONFIG_JSON" ]] || die "Missing MODEL_CONFIG_JSON: ${MODEL_CONFIG_JSON}"
 
 all_files_path="${EXPERIMENT_ROOT}/all_parquet_files.txt"
-selected_files_path="${EXPERIMENT_ROOT}/selected_first_${NUM_OF_USED_DATA}_files.txt"
+if (( NUM_OF_USED_DATA == 0 )); then
+  selected_files_path="${EXPERIMENT_ROOT}/selected_all_files.txt"
+else
+  selected_files_path="${EXPERIMENT_ROOT}/selected_first_${NUM_OF_USED_DATA}_files.txt"
+fi
 find "$DATA_PATH" -maxdepth 1 -type f -name '*.parquet' | sort > "$all_files_path"
-sed -n "1,${NUM_OF_USED_DATA}p" "$all_files_path" > "$selected_files_path"
+available_count="$(wc -l < "$all_files_path" | tr -d '[:space:]')"
+if (( NUM_OF_USED_DATA == 0 )); then
+  cp "$all_files_path" "$selected_files_path"
+else
+  sed -n "1,${NUM_OF_USED_DATA}p" "$all_files_path" > "$selected_files_path"
+fi
 
 selected_count="$(wc -l < "$selected_files_path" | tr -d '[:space:]')"
 [[ "$selected_count" -gt 0 ]] || die "No parquet files found under ${DATA_PATH}"
-log "available parquet files: $(wc -l < "$all_files_path" | tr -d '[:space:]')"
+log "available parquet files: ${available_count}"
 log "selected parquet files: ${selected_count}"
 
-if (( NUM_OF_USED_DATA % NPROC_PER_NODE != 0 )); then
-  log "warning: NUM_OF_USED_DATA=${NUM_OF_USED_DATA} is not divisible by NPROC_PER_NODE=${NPROC_PER_NODE}; current sampler may drop or pad files"
+if (( selected_count % NPROC_PER_NODE != 0 )); then
+  log "warning: selected parquet files=${selected_count} is not divisible by NPROC_PER_NODE=${NPROC_PER_NODE}; current sampler may drop files because drop_last=true"
 fi
 
 printf 'case\tstatus\tout_dir\n' > "${EXPERIMENT_ROOT}/case_status.tsv"

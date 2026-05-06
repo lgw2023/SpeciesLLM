@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ###############################################################################
-# Pretraining data + 500M three-node training helper.
+# Pretraining data + model-scale three-node training helper.
 #
 # This script intentionally uses merge_macrogene_rounds.py --test-mode
 # for the small sample. It does not create synthetic parquet inputs.
@@ -26,9 +26,11 @@ INPUT_1ST="${INPUT_1ST:-${STAGE2_ROOT}/1st_pretrain_data_preprocessed_step4}"
 INPUT_2ND="${INPUT_2ND:-${STAGE2_ROOT}/2nd_pretrain_data_preprocessed_step4}"
 INPUT_3SC="${INPUT_3SC:-${STAGE2_ROOT}/3scbasecount_pretrain_data_preprocessed_step4}"
 
-MERGED_TEST_DIR="${MERGED_TEST_DIR:-${STAGE2_ROOT}/all_shuffled_test_500m}"
-FLAT_TEST_DIR="${FLAT_TEST_DIR:-${STAGE2_ROOT}/all_flatten_data_test_500m}"
-COMMAND_DIR="${COMMAND_DIR:-${STAGE2_ROOT}/pretrain_500m_test_commands}"
+MODEL_SCALE="${MODEL_SCALE:-500m}"
+
+MERGED_TEST_DIR="${MERGED_TEST_DIR:-${STAGE2_ROOT}/all_shuffled_test_${MODEL_SCALE}}"
+FLAT_TEST_DIR="${FLAT_TEST_DIR:-${STAGE2_ROOT}/all_flatten_data_test_${MODEL_SCALE}}"
+COMMAND_DIR="${COMMAND_DIR:-${STAGE2_ROOT}/pretrain_${MODEL_SCALE}_test_commands}"
 TRAIN_OUTPUT_ROOT="${TRAIN_OUTPUT_ROOT:-training_output}"
 
 NNODES="${NNODES:-3}"
@@ -45,7 +47,17 @@ EMB_ROOT="${EMB_ROOT:-$WORKDIR}"
 EMB_PATH="${EMB_PATH:-${EMB_ROOT}/Stage2_macrogene_embeddings}"
 # 固定模型配置文件。与训练入口参数同名/同义的模型结构、label 开关、label 数量都从这里读取；
 # 后续如果要改 100M/500M/1B 或 label 规模，只改这个 JSON，不需要改本脚本。
-MODEL_CONFIG_JSON="${MODEL_CONFIG_JSON:-${EMB_PATH}/args_2nd_run.json}"
+MODEL_CONFIG_JSON_DEFAULT="${EMB_PATH}/args_2nd_run.json"
+MODEL_SCALE_LC="$(printf '%s' "$MODEL_SCALE" | tr '[:upper:]' '[:lower:]')"
+case "$MODEL_SCALE_LC" in
+  100m)
+    MODEL_CONFIG_JSON_DEFAULT="${EMB_PATH}/args_2nd_run_100m.json"
+    ;;
+  1b)
+    MODEL_CONFIG_JSON_DEFAULT="${EMB_PATH}/args_2nd_run_1b.json"
+    ;;
+esac
+MODEL_CONFIG_JSON="${MODEL_CONFIG_JSON:-$MODEL_CONFIG_JSON_DEFAULT}"
 
 WORKERS="${WORKERS:-16}"
 FLATTEN_WORKERS="${FLATTEN_WORKERS:-$WORKERS}"
@@ -70,7 +82,7 @@ REQUIRE_EMBEDDINGS="${REQUIRE_EMBEDDINGS:-1}"
 
 # 传给 scripts/launch_multinode_torchrun.sh 的数据集标识；这里默认使用测试扁平化数据，而不是 full 全量数据。
 TRAIN_DATASET="${TRAIN_DATASET:-test}"
-# 训练脚本实际读取的扁平化 parquet 目录，默认就是本脚本生成的 all_flatten_data_test_500m。
+# 训练脚本实际读取的扁平化 parquet 目录，默认就是本脚本生成的 all_flatten_data_test_${MODEL_SCALE}。
 DATA_PATH="${DATA_PATH:-$FLAT_TEST_DIR}"
 # 限制训练使用前 N 个 parquet 文件；0 表示使用 DATA_PATH 下所有 parquet 文件。
 NUM_OF_USED_DATA="${NUM_OF_USED_DATA:-0}"
@@ -127,12 +139,14 @@ Usage:
 
 Typical server run:
   STAGE2_ROOT=/data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData \\
+  MODEL_SCALE=500m \\
   WORKDIR=/path/to/SpeciesLLM \\
   HOSTS=host0,host1,host2 MASTER_ADDR=host0 \\
   bash scripts/$(basename "$0") all
 
 Notes:
   - generate-flat uses merge_macrogene_rounds.py --test-mode.
+  - MODEL_SCALE can be 100m, 500m, or 1b.
   - model/training-entry parameters are loaded from MODEL_CONFIG_JSON.
   - missing required fields in MODEL_CONFIG_JSON fail fast; no shell defaults are used for them.
   - all runs preflight, generate-flat, validate-data, and commands.
@@ -240,7 +254,7 @@ safe_clean_dir() {
   local path="$1"
   [[ -n "$path" && "$path" != "/" ]] || die "Refuse to clean unsafe path: $path"
   case "$path" in
-    */all_shuffled_test_500m|*/all_flatten_data_test_500m)
+    "$MERGED_TEST_DIR"|"$FLAT_TEST_DIR")
       log "clean $path"
       rm -rf "$path"
       ;;
@@ -260,7 +274,7 @@ preflight() {
   log "input dirs: ${BATCH_DIRS[*]}"
   log "merged test dir: $MERGED_TEST_DIR"
   log "flat test dir: $FLAT_TEST_DIR"
-  log "500M config: hidden_size=$HIDDEN_SIZE layers=$NUM_HIDDEN_LAYERS heads=$NUM_ATTENTION_HEADS intermediate_size=$INTERMEDIATE_SIZE"
+  log "${MODEL_SCALE} config: hidden_size=$HIDDEN_SIZE layers=$NUM_HIDDEN_LAYERS heads=$NUM_ATTENTION_HEADS intermediate_size=$INTERMEDIATE_SIZE"
   "$PYTHON_BIN" "$PRETRAIN_CHECKS_PY" preflight \
     --seq-len "$SEQ_LEN" \
     --files-per-batch "$SOURCE_PREFLIGHT_FILES_PER_BATCH" \
@@ -515,7 +529,7 @@ generate_commands() {
   split_hosts
   mkdir -p "$COMMAND_DIR"
 
-  local launcher="${COMMAND_DIR}/launch_500m_3nodes.sh"
+  local launcher="${COMMAND_DIR}/launch_${MODEL_SCALE}_3nodes.sh"
   write_launcher_script "$launcher"
 
   local rank host script_path
@@ -527,7 +541,7 @@ generate_commands() {
 
   local summary="${COMMAND_DIR}/README.txt"
   {
-    echo "500M three-node pretraining commands"
+    echo "${MODEL_SCALE} three-node pretraining commands"
     echo
     echo "Data path:"
     echo "  $DATA_PATH"
@@ -549,7 +563,7 @@ generate_commands() {
     echo "  bash scripts/$(basename "$0") check-training"
   } > "$summary"
 
-  local dry_run="${COMMAND_DIR}/train_multinode_500m_dry_run.txt"
+  local dry_run="${COMMAND_DIR}/train_multinode_${MODEL_SCALE}_dry_run.txt"
   if command -v ssh >/dev/null 2>&1 && command -v scp >/dev/null 2>&1; then
     DRY_RUN=1 bash "$launcher" > "$dry_run" 2>&1 || true
   else
@@ -564,7 +578,7 @@ generate_commands() {
 launch_training() {
   generate_commands
   log "launch distributed training through scripts/launch_multinode_torchrun.sh"
-  bash "${COMMAND_DIR}/launch_500m_3nodes.sh"
+  bash "${COMMAND_DIR}/launch_${MODEL_SCALE}_3nodes.sh"
 }
 
 resolve_train_out_dir() {

@@ -29,6 +29,8 @@ Examples:
   bash scripts/smoke_500m_3node.sh SSH_PASSWORD='your-password' PREP_ACTION=commands
   bash scripts/smoke_500m_3node.sh SSH_KEY=/path/to/id_ed25519 PREP_ACTION=commands
   bash scripts/smoke_500m_3node.sh BATCH_SIZE=16 PREP_ACTION=commands SKIP_DATA_SYNC=1
+  bash scripts/smoke_500m_3node.sh MODEL_SCALE=100m PREP_ACTION=all
+  bash scripts/smoke_500m_3node.sh MODEL_SCALE=1b PREP_ACTION=all
 
 Notes:
   - The script re-execs itself with env -i, so exported shell variables are ignored.
@@ -42,7 +44,7 @@ USAGE
 
 is_allowed_cli_var() {
   case "$1" in
-    ENV_FILE|COLLECT_ONLY|PREP_ACTION|RUN_TRAINING|SKIP_DATA_SYNC|SSH_USER|SSH_KEY|\
+    ENV_FILE|COLLECT_ONLY|PREP_ACTION|RUN_TRAINING|SKIP_DATA_SYNC|MODEL_SCALE|SSH_USER|SSH_KEY|\
     SSH_PASSWORD|SSH_EXTRA_OPTS|PYTHON_BIN|PROJECT_ROOT|PRETRAIN_CHECKS_PY|STAGE2_CHECKS_PY|\
     STAGE2_ROOT|INPUT_1ST|INPUT_2ND|INPUT_3SC|MERGED_TEST_DIR|FLAT_TEST_DIR|\
     COMMAND_DIR|WORKDIR|TRAIN_ENTRY|LOG_SUBDIR|TRAIN_OUTPUT_ROOT|TRAIN_OUT_DIR|NODE_LOG_DIR|EMB_ROOT|\
@@ -186,6 +188,7 @@ set_default COLLECT_ONLY 0
 set_default PREP_ACTION commands
 set_default RUN_TRAINING 1
 set_default SKIP_DATA_SYNC 0
+set_default MODEL_SCALE 500m
 
 set_default SSH_USER root
 set_default SSH_KEY ""
@@ -220,9 +223,9 @@ set_default INPUT_1ST "${STAGE2_ROOT}/1st_pretrain_data_preprocessed_step4"
 set_default INPUT_2ND "${STAGE2_ROOT}/2nd_pretrain_data_preprocessed_step4"
 set_default INPUT_3SC "${STAGE2_ROOT}/3scbasecount_pretrain_data_preprocessed_step4"
 
-set_default MERGED_TEST_DIR "${STAGE2_ROOT}/all_shuffled_test_500m"
-set_default FLAT_TEST_DIR "${STAGE2_ROOT}/all_flatten_data_test_500m"
-set_default COMMAND_DIR "${STAGE2_ROOT}/pretrain_500m_test_commands"
+set_default MERGED_TEST_DIR "${STAGE2_ROOT}/all_shuffled_test_${MODEL_SCALE}"
+set_default FLAT_TEST_DIR "${STAGE2_ROOT}/all_flatten_data_test_${MODEL_SCALE}"
+set_default COMMAND_DIR "${STAGE2_ROOT}/pretrain_${MODEL_SCALE}_test_commands"
 
 set_default WORKDIR /data/disk1/SpeciesLLM
 set_default TRAIN_ENTRY train_MNodes_torchrun_mfu_preindexparquet.py
@@ -233,7 +236,17 @@ set_default NODE_LOG_DIR ""
 
 set_default EMB_ROOT /data/disk1/SpeciesLLM
 set_default EMB_PATH /data/disk1/SpeciesLLM/Stage2_macrogene_embeddings
-set_default MODEL_CONFIG_JSON /data/disk1/SpeciesLLM/Stage2_macrogene_embeddings/args_2nd_run.json
+MODEL_CONFIG_JSON_DEFAULT="${EMB_PATH}/args_2nd_run.json"
+MODEL_SCALE_LC="$(printf '%s' "$MODEL_SCALE" | tr '[:upper:]' '[:lower:]')"
+case "$MODEL_SCALE_LC" in
+  100m)
+    MODEL_CONFIG_JSON_DEFAULT="${EMB_PATH}/args_2nd_run_100m.json"
+    ;;
+  1b)
+    MODEL_CONFIG_JSON_DEFAULT="${EMB_PATH}/args_2nd_run_1b.json"
+    ;;
+esac
+set_default MODEL_CONFIG_JSON "$MODEL_CONFIG_JSON_DEFAULT"
 
 set_default NNODES 3
 set_default NPROC_PER_NODE 8
@@ -608,15 +621,18 @@ local_mkdirs
 sync_code_and_data_to_workers
 check_remote_paths
 
+LAUNCH_SCRIPT="${COMMAND_DIR}/launch_${MODEL_SCALE}_3nodes.sh"
+[[ -f "$LAUNCH_SCRIPT" ]] || die "Missing generated launcher: $LAUNCH_SCRIPT"
+
 # 检查 dry-run，确认每个节点都会使用自己的 /data/disk1 路径。
-DRY_RUN=1 bash "${COMMAND_DIR}/launch_500m_3nodes.sh"
+DRY_RUN=1 bash "$LAUNCH_SCRIPT"
 
 if [[ "$RUN_TRAINING" != "1" ]]; then
   echo "[INFO] RUN_TRAINING is not 1; stop after sync, path check, and dry-run."
   exit 0
 fi
 
-bash "${COMMAND_DIR}/launch_500m_3nodes.sh"
+bash "$LAUNCH_SCRIPT"
 
 echo "[INFO] Training has been launched through nohup on remote nodes."
 echo "[INFO] Monitor logs under each node: ${WORKDIR}/${LOG_SUBDIR}/node_rank*.log"

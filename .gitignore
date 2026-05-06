@@ -35,7 +35,11 @@ env/
 
 # Embeddings
 Stage1_macrogene_embeddings/
-Stage2_macrogene_embeddings/
+Stage2_macrogene_embeddings/*
+!Stage2_macrogene_embeddings/
+!Stage2_macrogene_embeddings/args_2nd_run.json
+!Stage2_macrogene_embeddings/args_2nd_run_100m.json
+!Stage2_macrogene_embeddings/args_2nd_run_1b.json
 
 # Processed data directories
 Stage2_SpeciesLLMData/
