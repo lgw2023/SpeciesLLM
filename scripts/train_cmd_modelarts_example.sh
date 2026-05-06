@@ -18,7 +18,7 @@ exec torchrun \
   --emb_path=./macrogene_embeddings \
   --seq_len=862 \
   --out_path=training_output \
-  --batch_size=32 \
+  --batch_size=16 \
   --epoch=10 \
   --gradient_accumulation_steps=8 \
   --learning_rate=0.00001 \

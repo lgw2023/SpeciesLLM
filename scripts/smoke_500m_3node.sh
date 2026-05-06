@@ -248,7 +248,7 @@ set_default OUT_PATH training_output
 
 set_default WORKERS 16
 set_default FLATTEN_WORKERS "$WORKERS"
-set_default ROWS_PER_FILE 1024
+set_default ROWS_PER_FILE 16384
 set_default SHUFFLE_SEED 42
 set_default FLATTEN_DROP_REMAINDER 1
 set_default RESET_TEST_OUTPUT 0
@@ -259,7 +259,7 @@ set_default MAX_VALIDATE_ROWS_PER_FILE 16
 set_default MAX_VALIDATE_FILES 0
 set_default REQUIRE_EMBEDDINGS 1
 
-set_default BATCH_SIZE 64
+set_default BATCH_SIZE 16
 set_default EPOCH 1
 set_default GRADIENT_ACCUMULATION_STEPS 4
 set_default LEARNING_RATE 0.00001

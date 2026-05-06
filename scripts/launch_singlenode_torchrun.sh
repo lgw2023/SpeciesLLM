@@ -53,10 +53,10 @@ MODEL_CONFIG_JSON="${MODEL_CONFIG_JSON:-${EMB_PATH}/args_2nd_run.json}"
 OUT_PATH="${OUT_PATH:-training_output}"
 
 # ---------- training parameters ----------
-# scripts/smoke_500m_3node.sh uses 3 nodes * 8 ranks, batch_size=64, grad_accum=4.
+# scripts/smoke_500m_3node.sh uses 3 nodes * 8 ranks, batch_size=16, grad_accum=4.
 # On one node, grad_accum=12 preserves the same effective global batch:
-# 8 * 64 * 12 == 24 * 64 * 4.
-BATCH_SIZE="${BATCH_SIZE:-64}"
+# 8 * 16 * 12 == 24 * 16 * 4.
+BATCH_SIZE="${BATCH_SIZE:-16}"
 EPOCH="${EPOCH:-1}"
 GRADIENT_ACCUMULATION_STEPS="${GRADIENT_ACCUMULATION_STEPS:-12}"
 LEARNING_RATE="${LEARNING_RATE:-0.00001}"

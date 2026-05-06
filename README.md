@@ -97,7 +97,7 @@ torchrun \
   --data_path=./Stage2_SpeciesLLMData/all_flatten_data \
   --emb_path=./Stage2_macrogene_embeddings \
   --seq_len=640 \
-  --batch_size=32 \
+  --batch_size=16 \
   --epoch=10 \
   --gradient_accumulation_steps=8 \
   --learning_rate=1e-5 \
