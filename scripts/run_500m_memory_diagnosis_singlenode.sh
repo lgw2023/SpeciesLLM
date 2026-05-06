@@ -24,6 +24,7 @@ DATA_PATH="${DATA_PATH:-${STAGE2_ROOT}/all_flatten_data_test_500m}"
 EMB_PATH="${EMB_PATH:-${WORKDIR}/Stage2_macrogene_embeddings}"
 MODEL_CONFIG_JSON="${MODEL_CONFIG_JSON:-${EMB_PATH}/args_2nd_run.json}"
 EXPERIMENT_ROOT="${EXPERIMENT_ROOT:-${WORKDIR}/training_output/memory_diagnosis_500m_${timestamp}}"
+RUNNER_LOG="${RUNNER_LOG:-${EXPERIMENT_ROOT}/runner.log}"
 
 NUM_OF_USED_DATA="${NUM_OF_USED_DATA:-10}"
 NPROC_PER_NODE="${NPROC_PER_NODE:-5}"
@@ -54,6 +55,10 @@ fi
 # to run a subset.
 RUNS="${RUNS:-all}"
 RUN_BF16="${RUN_BF16:-0}"
+
+mkdir -p "$EXPERIMENT_ROOT"
+touch "$RUNNER_LOG"
+exec > >(tee -a "$RUNNER_LOG") 2>&1
 
 log() {
   echo "[$(date '+%F %T')] $*"
@@ -205,13 +210,19 @@ run_case() {
   fi
 }
 
+log "runner log: ${RUNNER_LOG}"
+log "preflight WORKDIR=${WORKDIR}"
+log "preflight DATA_PATH=${DATA_PATH}"
+log "preflight EMB_PATH=${EMB_PATH}"
+log "preflight MODEL_CONFIG_JSON=${MODEL_CONFIG_JSON}"
+log "preflight NPROC_PER_NODE=${NPROC_PER_NODE} ASCEND_RT_VISIBLE_DEVICES_VALUE=${ASCEND_RT_VISIBLE_DEVICES_VALUE}"
+
 [[ -d "$WORKDIR" ]] || die "Missing WORKDIR: ${WORKDIR}"
 [[ -f "${WORKDIR}/train_MNodes_torchrun_mfu_preindexparquet.py" ]] || die "Missing training entry under ${WORKDIR}"
 [[ -d "$DATA_PATH" ]] || die "Missing DATA_PATH: ${DATA_PATH}"
 [[ -d "$EMB_PATH" ]] || die "Missing EMB_PATH: ${EMB_PATH}"
 [[ -f "$MODEL_CONFIG_JSON" ]] || die "Missing MODEL_CONFIG_JSON: ${MODEL_CONFIG_JSON}"
 
-mkdir -p "$EXPERIMENT_ROOT"
 find "$DATA_PATH" -maxdepth 1 -type f -name '*.parquet' | sort | head -n "$NUM_OF_USED_DATA" \
   > "${EXPERIMENT_ROOT}/selected_first_${NUM_OF_USED_DATA}_files.txt"
 
