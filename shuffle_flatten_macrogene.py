@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import gc
 import math
 import os
 import shutil
@@ -69,6 +70,14 @@ def log_step(step_name: str, start_time: float) -> None:
     mem_mb = psutil.Process(os.getpid()).memory_info().rss / (1024 ** 2)
     elapsed = time.time() - start_time
     print(f"[{step_name}] elapsed={elapsed:.2f}s memory={mem_mb:.2f}MB", flush=True)
+
+
+def release_unused_memory() -> None:
+    gc.collect()
+    try:
+        pa.default_memory_pool().release_unused()
+    except Exception:
+        pass
 
 
 def parse_args() -> argparse.Namespace:
@@ -583,7 +592,7 @@ def write_batch_shuffled_chunks(
             iterator = tqdm(iterator, desc=f"write batch {batch_index + 1}", unit="chunk")
         for start_row in iterator:
             end_row = start_row + rows_per_file
-            chunk = df.iloc[start_row:end_row]
+            chunk = df.iloc[start_row:end_row].copy()
             output_name = write_output_chunk(
                 chunk=chunk,
                 output_dir=output_dir,
@@ -599,11 +608,13 @@ def write_batch_shuffled_chunks(
             })
             rows_written += len(chunk)
             output_index += 1
+            del chunk
 
         if full_rows < len(df):
             pending = df.iloc[full_rows:].copy()
 
         del df
+        release_unused_memory()
         log_step(f"Batch {batch_index + 1}/{num_batches}", batch_timer)
 
     dropped_rows = len(pending) if drop_remainder else 0

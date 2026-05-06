@@ -15,11 +15,11 @@ export FIRST_VIEW=${STAGE2_ROOT}/views/1st_no_human_mouse_${RUN_ID}
 export MERGED_DIR=${STAGE2_ROOT}/all_merged_full_no_1st_human_mouse_${RUN_ID}
 export FLAT_DIR=${STAGE2_ROOT}/all_flatten_data_full_no_1st_human_mouse_${RUN_ID}
 
-export WORKERS=16
-export ROWS_PER_FILE=16384
-export SHUFFLE_SEED=42
+export WORKERS=${WORKERS:-16}
+export ROWS_PER_FILE=${ROWS_PER_FILE:-16384}
+export SHUFFLE_SEED=${SHUFFLE_SEED:-42}
 export SHUFFLE_MODE=${SHUFFLE_MODE:-batch}
-export BATCH_FILES=${BATCH_FILES:-4096}
+export BATCH_FILES=${BATCH_FILES:-2048}
 export SHUFFLE_BUCKETS=${SHUFFLE_BUCKETS:-512}
 export SKIP_MERGE=${SKIP_MERGE:-0}
 export SKIP_FLATTEN=${SKIP_FLATTEN:-0}
