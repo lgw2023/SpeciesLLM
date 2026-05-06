@@ -136,6 +136,7 @@ out_path="${out_path:-${OUT_PATH:-$DEFAULT_OUT_PATH}}"
 batch_size="${batch_size:-${BATCH_SIZE:-16}}"
 epoch="${epoch:-${EPOCH:-10}}"
 gradient_accumulation_steps="${gradient_accumulation_steps:-${GRADIENT_ACCUMULATION_STEPS:-8}}"
+gradient_checkpointing="${gradient_checkpointing:-${GRADIENT_CHECKPOINTING:-true}}"
 learning_rate="${learning_rate:-${LEARNING_RATE:-0.00001}}"
 min_lr="${min_lr:-${MIN_LR:-0.000001}}"
 decay_lr="${decay_lr:-${DECAY_LR:-true}}"
@@ -402,6 +403,7 @@ build_train_args() {
     "--batch_size=${batch_size}"
     "--epoch=${epoch}"
     "--gradient_accumulation_steps=${gradient_accumulation_steps}"
+    "--gradient_checkpointing=${gradient_checkpointing}"
     "--learning_rate=${learning_rate}"
     "--min_lr=${min_lr}"
     "--decay_lr=$(bool_arg_value "$decay_lr")"
@@ -538,7 +540,7 @@ remote_env_assignments() {
     DRY_RUN LOCAL_NODE_RANK ASCEND_RT_VISIBLE_DEVICES_VALUE HCCL_CONNECT_TIMEOUT HCCL_EXEC_TIMEOUT
     HCCL_WHITELIST_DISABLE ASCEND_TOOLKIT_HOME ASCEND_ENV_SH ASCEND_HOME_PATH
     data_path num_of_used_data emb_path config_json out_path batch_size epoch
-    gradient_accumulation_steps learning_rate min_lr decay_lr warmup_iters
+    gradient_accumulation_steps gradient_checkpointing learning_rate min_lr decay_lr warmup_iters
     warmup_ratio weight_decay save_data_interval beta1 beta2 grad_clip compile
     backend device device_type s3_remote_dir_path
     log_interval profile_interval nan_check_interval metrics_flush_interval log_level log_all_ranks

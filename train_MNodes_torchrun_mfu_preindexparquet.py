@@ -1455,8 +1455,8 @@ def argumentparser():
                         help="Whether to execute the MVC forward/loss branch. Default true preserves current behavior.")
     parser.add_argument('--gradient_checkpointing',
                         type=str2bool,
-                        default=False,
-                        help="Enable transformer layer activation checkpointing. Default false preserves current behavior.")
+                        default=True,
+                        help="Enable transformer layer activation checkpointing. Default true reduces activation memory.")
     parser.add_argument('--memory_log_interval',
                         type=int,
                         default=0,
