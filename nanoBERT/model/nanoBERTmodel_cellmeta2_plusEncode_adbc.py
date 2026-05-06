@@ -20,7 +20,6 @@ from torch.utils.checkpoint import checkpoint
 from transformers.activations import ACT2FN
 from transformers.utils import get_torch_version, ModelOutput
 from transformers.modeling_outputs import MaskedLMOutput
-from transformers.pytorch_utils import apply_chunking_to_forward
 
 from .util import grad_reverse
 from .util import DomainSpecificBatchNorm1d
@@ -248,6 +247,22 @@ BERT_SELF_ATTENTION_CLASSES = {
     }
 
 
+def apply_chunking_to_forward_allow_remainder(forward_fn, chunk_size, chunk_dim, *input_tensors):
+    if chunk_size is None or chunk_size <= 0:
+        return forward_fn(*input_tensors)
+    if not input_tensors:
+        raise ValueError("input_tensors has to be a non-empty tuple")
+
+    tensor_shape = input_tensors[0].shape[chunk_dim]
+    for input_tensor in input_tensors:
+        if input_tensor.shape[chunk_dim] != tensor_shape:
+            raise ValueError("All input tensors need the same shape on the chunk dimension")
+
+    input_chunks = tuple(input_tensor.split(chunk_size, dim=chunk_dim) for input_tensor in input_tensors)
+    output_chunks = [forward_fn(*chunk_inputs) for chunk_inputs in zip(*input_chunks)]
+    return torch.cat(output_chunks, dim=chunk_dim)
+
+
 class BertAttention(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -315,7 +330,7 @@ class BertLayer(nn.Module):
         attention_output = self_attention_outputs[0]
         outputs = self_attention_outputs[1:]
 
-        layer_output = apply_chunking_to_forward(self.feed_forward_chunk,
+        layer_output = apply_chunking_to_forward_allow_remainder(self.feed_forward_chunk,
             self.chunk_size_feed_forward,
             self.seq_len_dim,
             attention_output)

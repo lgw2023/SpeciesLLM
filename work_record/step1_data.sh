@@ -10,7 +10,7 @@ export INPUT_1ST=${STAGE2_ROOT}/1st_pretrain_data_preprocessed_step4
 export INPUT_2ND=${STAGE2_ROOT}/2nd_pretrain_data_preprocessed_step4
 export INPUT_3SC=${STAGE2_ROOT}/3scbasecount_pretrain_data_preprocessed_step4
 
-export RUN_ID=$(date +%Y%m%d_%H%M%S)
+export RUN_ID=${RUN_ID:-$(date +%Y%m%d_%H%M%S)}
 export FIRST_VIEW=${STAGE2_ROOT}/views/1st_no_human_mouse_${RUN_ID}
 export MERGED_DIR=${STAGE2_ROOT}/all_merged_full_no_1st_human_mouse_${RUN_ID}
 export FLAT_DIR=${STAGE2_ROOT}/all_flatten_data_full_no_1st_human_mouse_${RUN_ID}
@@ -18,6 +18,11 @@ export FLAT_DIR=${STAGE2_ROOT}/all_flatten_data_full_no_1st_human_mouse_${RUN_ID
 export WORKERS=16
 export ROWS_PER_FILE=16384
 export SHUFFLE_SEED=42
+export SHUFFLE_MODE=${SHUFFLE_MODE:-external}
+export SHUFFLE_BUCKETS=${SHUFFLE_BUCKETS:-512}
+export SKIP_MERGE=${SKIP_MERGE:-0}
+export SKIP_FLATTEN=${SKIP_FLATTEN:-0}
+export SKIP_EXISTING=${SKIP_EXISTING:-0}
 
 # Multi-node data sync. Run this script on the first host in HOSTS.
 export HOSTS=${HOSTS:-7.150.12.45,7.150.15.14,7.150.14.170}
@@ -130,14 +135,16 @@ sync_flat_dir_to_workers() {
 
 mkdir -p "$FIRST_VIEW" "$MERGED_DIR" "$FLAT_DIR"
 
-for d in "$INPUT_1ST"/*; do
-  [ -d "$d" ] || continue
-  species="$(basename "$d")"
-  case "$species" in
-    Homo_sapiens|Mus_musculus) continue ;;
-  esac
-  ln -s "$d" "$FIRST_VIEW/$species"
-done
+if [[ "$SKIP_MERGE" != "1" ]]; then
+  for d in "$INPUT_1ST"/*; do
+    [ -d "$d" ] || continue
+    species="$(basename "$d")"
+    case "$species" in
+      Homo_sapiens|Mus_musculus) continue ;;
+    esac
+    ln -sfn "$d" "$FIRST_VIEW/$species"
+  done
+fi
 
 merge_cmd=(
   "$PYTHON_BIN"
@@ -159,6 +166,9 @@ merge_cmd=(
   --manifest-name
   merge_manifest.csv
 )
+if [[ "$SKIP_EXISTING" == "1" ]]; then
+  merge_cmd+=(--skip-existing)
+fi
 
 flatten_cmd=(
   "$PYTHON_BIN"
@@ -179,15 +189,30 @@ flatten_cmd=(
   snappy
   --manifest-name
   shuffle_manifest.csv
+  --shuffle-mode
+  "$SHUFFLE_MODE"
+  --shuffle-buckets
+  "$SHUFFLE_BUCKETS"
+  --temp-dir
+  "${FLAT_DIR}/_shuffle_tmp"
+  --overwrite
   --validate-all-schemas
   --keep-remainder
 )
 
-print_command "merge command" "${merge_cmd[@]}"
-"${merge_cmd[@]}"
+if [[ "$SKIP_MERGE" == "1" ]]; then
+  echo "[INFO] SKIP_MERGE=1, reuse merged data: ${MERGED_DIR}"
+else
+  print_command "merge command" "${merge_cmd[@]}"
+  "${merge_cmd[@]}"
+fi
 
-print_command "flatten command" "${flatten_cmd[@]}"
-"${flatten_cmd[@]}"
+if [[ "$SKIP_FLATTEN" == "1" ]]; then
+  echo "[INFO] SKIP_FLATTEN=1, skip flatten data generation."
+else
+  print_command "flatten command" "${flatten_cmd[@]}"
+  "${flatten_cmd[@]}"
+fi
 
 update_local_data_path_link
 sync_flat_dir_to_workers

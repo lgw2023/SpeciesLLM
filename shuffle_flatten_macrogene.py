@@ -28,11 +28,13 @@ import argparse
 import csv
 import math
 import os
+import shutil
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Iterable, List
 
+import numpy as np
 import pandas as pd
 import psutil
 import pyarrow as pa
@@ -59,6 +61,8 @@ SCHEMA = pa.schema([
     ("idx", pa.int64()),
 ])
 SCHEMA_COLUMNS = [field.name for field in SCHEMA]
+SHUFFLE_KEY_COLUMN = "__shuffle_key"
+TEMP_SCHEMA = SCHEMA.append(pa.field(SHUFFLE_KEY_COLUMN, pa.float64()))
 
 
 def log_step(step_name: str, start_time: float) -> None:
@@ -119,6 +123,35 @@ def parse_args() -> argparse.Namespace:
         "--manifest-name",
         default="shuffle_manifest.csv",
         help="Output manifest CSV filename. Default: shuffle_manifest.csv",
+    )
+    parser.add_argument(
+        "--shuffle-mode",
+        choices=["in-memory", "external"],
+        default="in-memory",
+        help=(
+            "Shuffle implementation. in-memory preserves the original pandas "
+            "full-load behavior. external uses a disk-backed random-key bucket "
+            "shuffle for full datasets that do not fit in RAM. Default: in-memory"
+        ),
+    )
+    parser.add_argument(
+        "--shuffle-buckets",
+        type=int,
+        default=512,
+        help="Number of disk buckets for --shuffle-mode external. Default: 512",
+    )
+    parser.add_argument(
+        "--temp-dir",
+        default=None,
+        help=(
+            "Temporary directory for --shuffle-mode external. Default: "
+            "<output-dir>/_shuffle_tmp"
+        ),
+    )
+    parser.add_argument(
+        "--keep-temp",
+        action="store_true",
+        help="Keep external-shuffle temporary bucket files after success.",
     )
     parser.add_argument(
         "--max-files",
@@ -254,6 +287,17 @@ def prepare_output_dir(output_dir: Path, output_prefix: str, overwrite: bool) ->
             path.unlink()
 
 
+def prepare_temp_dir(temp_dir: Path, overwrite: bool) -> None:
+    if temp_dir.exists():
+        if not overwrite:
+            raise FileExistsError(
+                f"Temporary directory already exists: {temp_dir}\n"
+                "Use --overwrite or choose a fresh --temp-dir."
+            )
+        shutil.rmtree(temp_dir)
+    temp_dir.mkdir(parents=True, exist_ok=True)
+
+
 def write_manifest(manifest_path: Path, rows: List[dict]) -> None:
     with manifest_path.open("w", newline="", encoding="utf-8") as csvfile:
         writer = csv.DictWriter(
@@ -320,6 +364,190 @@ def write_shuffled_chunks(
     log_step("Write shuffled parquet chunks", start)
 
 
+def write_output_chunk(
+    chunk: pd.DataFrame,
+    output_dir: Path,
+    output_prefix: str,
+    output_index: int,
+    compression: str,
+) -> str:
+    output_name = f"{output_prefix}{output_index}.parquet"
+    output_path = output_dir / output_name
+    chunk = chunk[SCHEMA_COLUMNS]
+    table = pa.Table.from_pandas(chunk, schema=SCHEMA, preserve_index=False)
+    pq.write_table(table, output_path, compression=compression)
+    return output_name
+
+
+def partition_external_shuffle_buckets(
+    files: List[Path],
+    temp_dir: Path,
+    buckets: int,
+    seed: int,
+) -> None:
+    start = time.time()
+    rng = np.random.default_rng(seed)
+    writers: dict[int, pq.ParquetWriter] = {}
+
+    iterator = enumerate(files)
+    if tqdm is not None:
+        iterator = tqdm(iterator, total=len(files), desc="partition shuffle buckets", unit="file")
+
+    try:
+        for _, file_path in iterator:
+            df = read_parquet_file(file_path)
+            if df.empty:
+                continue
+
+            keys = rng.random(len(df), dtype=np.float64)
+            bucket_ids = np.minimum((keys * buckets).astype(np.int64), buckets - 1)
+            df[SHUFFLE_KEY_COLUMN] = keys
+            df["_bucket_id"] = bucket_ids
+
+            for bucket_id, group in df.groupby("_bucket_id", sort=False):
+                bucket_id = int(bucket_id)
+                group = group.drop(columns=["_bucket_id"])
+                writer = writers.get(bucket_id)
+                if writer is None:
+                    bucket_path = temp_dir / f"bucket_{bucket_id:05d}.parquet"
+                    writer = pq.ParquetWriter(bucket_path, TEMP_SCHEMA, compression="snappy")
+                    writers[bucket_id] = writer
+                table = pa.Table.from_pandas(group, schema=TEMP_SCHEMA, preserve_index=False)
+                writer.write_table(table)
+    finally:
+        for writer in writers.values():
+            writer.close()
+
+    log_step("Partition external shuffle buckets", start)
+
+
+def write_external_shuffled_chunks(
+    temp_dir: Path,
+    output_dir: Path,
+    rows_per_file: int,
+    output_prefix: str,
+    compression: str,
+    manifest_name: str,
+    drop_remainder: bool,
+    buckets: int,
+) -> None:
+    start = time.time()
+    output_index = 0
+    rows_seen = 0
+    rows_written = 0
+    manifest_rows: List[dict] = []
+    pending = pd.DataFrame(columns=SCHEMA_COLUMNS)
+
+    iterator = range(buckets)
+    if tqdm is not None:
+        iterator = tqdm(iterator, desc="write shuffled buckets", unit="bucket")
+
+    for bucket_id in iterator:
+        bucket_path = temp_dir / f"bucket_{bucket_id:05d}.parquet"
+        if not bucket_path.exists():
+            continue
+
+        df = pd.read_parquet(bucket_path, engine="pyarrow")
+        if df.empty:
+            continue
+        df = df.sort_values(SHUFFLE_KEY_COLUMN, kind="mergesort").drop(columns=[SHUFFLE_KEY_COLUMN])
+        rows_seen += len(df)
+
+        if not pending.empty:
+            df = pd.concat([pending, df], ignore_index=True, copy=False)
+            pending = pd.DataFrame(columns=SCHEMA_COLUMNS)
+
+        full_rows = (len(df) // rows_per_file) * rows_per_file
+        for start_row in range(0, full_rows, rows_per_file):
+            end_row = start_row + rows_per_file
+            chunk = df.iloc[start_row:end_row]
+            output_name = write_output_chunk(
+                chunk=chunk,
+                output_dir=output_dir,
+                output_prefix=output_prefix,
+                output_index=output_index,
+                compression=compression,
+            )
+            manifest_rows.append({
+                "output_file": output_name,
+                "start_row": rows_written,
+                "end_row_exclusive": rows_written + len(chunk),
+                "num_rows": len(chunk),
+            })
+            rows_written += len(chunk)
+            output_index += 1
+
+        if full_rows < len(df):
+            pending = df.iloc[full_rows:].copy()
+
+    dropped_rows = len(pending) if drop_remainder else 0
+    if not drop_remainder and not pending.empty:
+        output_name = write_output_chunk(
+            chunk=pending,
+            output_dir=output_dir,
+            output_prefix=output_prefix,
+            output_index=output_index,
+            compression=compression,
+        )
+        manifest_rows.append({
+            "output_file": output_name,
+            "start_row": rows_written,
+            "end_row_exclusive": rows_written + len(pending),
+            "num_rows": len(pending),
+        })
+        rows_written += len(pending)
+        output_index += 1
+
+    print(
+        f"[INFO] total rows={rows_seen}, usable rows={rows_written}, "
+        f"dropped rows={dropped_rows}, output files={output_index}",
+        flush=True,
+    )
+    write_manifest(output_dir / manifest_name, manifest_rows)
+    log_step("Write external shuffled parquet chunks", start)
+
+
+def external_shuffle(
+    files: List[Path],
+    output_dir: Path,
+    rows_per_file: int,
+    output_prefix: str,
+    compression: str,
+    manifest_name: str,
+    drop_remainder: bool,
+    seed: int,
+    buckets: int,
+    temp_dir: Path,
+    keep_temp: bool,
+    overwrite: bool,
+) -> None:
+    if buckets <= 0:
+        raise ValueError("--shuffle-buckets must be positive")
+    prepare_temp_dir(temp_dir, overwrite=overwrite)
+    print(
+        f"[INFO] External shuffle: buckets={buckets}, temp_dir={temp_dir}, seed={seed}",
+        flush=True,
+    )
+    partition_external_shuffle_buckets(
+        files=files,
+        temp_dir=temp_dir,
+        buckets=buckets,
+        seed=seed,
+    )
+    write_external_shuffled_chunks(
+        temp_dir=temp_dir,
+        output_dir=output_dir,
+        rows_per_file=rows_per_file,
+        output_prefix=output_prefix,
+        compression=compression,
+        manifest_name=manifest_name,
+        drop_remainder=drop_remainder,
+        buckets=buckets,
+    )
+    if not keep_temp:
+        shutil.rmtree(temp_dir)
+
+
 def main() -> None:
     args = parse_args()
     if args.rows_per_file <= 0:
@@ -356,22 +584,43 @@ def main() -> None:
 
     prepare_output_dir(output_dir, args.output_prefix, args.overwrite)
 
-    df = read_all_data(files, args.workers)
+    if args.shuffle_mode == "external":
+        temp_dir = (
+            Path(args.temp_dir).expanduser().resolve()
+            if args.temp_dir is not None
+            else output_dir / "_shuffle_tmp"
+        )
+        external_shuffle(
+            files=files,
+            output_dir=output_dir,
+            rows_per_file=args.rows_per_file,
+            output_prefix=args.output_prefix,
+            compression=args.compression,
+            manifest_name=args.manifest_name,
+            drop_remainder=args.drop_remainder,
+            seed=args.seed,
+            buckets=args.shuffle_buckets,
+            temp_dir=temp_dir,
+            keep_temp=args.keep_temp,
+            overwrite=args.overwrite,
+        )
+    else:
+        df = read_all_data(files, args.workers)
 
-    shuffle_start = time.time()
-    print(f"[INFO] Shuffling rows with seed={args.seed}", flush=True)
-    df = df.sample(frac=1, random_state=args.seed).reset_index(drop=True)
-    log_step("Shuffle rows", shuffle_start)
+        shuffle_start = time.time()
+        print(f"[INFO] Shuffling rows with seed={args.seed}", flush=True)
+        df = df.sample(frac=1, random_state=args.seed).reset_index(drop=True)
+        log_step("Shuffle rows", shuffle_start)
 
-    write_shuffled_chunks(
-        df=df,
-        output_dir=output_dir,
-        rows_per_file=args.rows_per_file,
-        output_prefix=args.output_prefix,
-        compression=args.compression,
-        manifest_name=args.manifest_name,
-        drop_remainder=args.drop_remainder,
-    )
+        write_shuffled_chunks(
+            df=df,
+            output_dir=output_dir,
+            rows_per_file=args.rows_per_file,
+            output_prefix=args.output_prefix,
+            compression=args.compression,
+            manifest_name=args.manifest_name,
+            drop_remainder=args.drop_remainder,
+        )
     print(f"[DONE] Shuffled data written to: {output_dir}", flush=True)
 
 
