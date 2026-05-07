@@ -3,6 +3,8 @@ set -euo pipefail
 
 cd /data/disk1/SpeciesLLM
 
+set -a; source .env; set +a
+
 export PYTHON_BIN=/data/miniconda3/bin/python
 export STAGE2_ROOT=/data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData
 
