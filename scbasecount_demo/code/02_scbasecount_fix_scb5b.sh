@@ -11,7 +11,7 @@ export DEFAULT_SAVE_ROOT="/data/node2_disk2/SpeciesLLM_obs/scbasecount_2026-01-1
 export HUMAN_SAVE_ROOT="/data/node2_disk2/SpeciesLLM_obs/scbasecount_2026-01-12/scbasecount_processed_02"
 export MOUSE_SAVE_ROOT="/data/node2_disk2/SpeciesLLM_obs/scbasecount_2026-01-12/scbasecount_processed_02"
 
-cd /data/disk1/SpeciesLLM_obs/scbasecount_demo/code
+cd /data/disk1/SpeciesLLM/scbasecount_demo/code
 mkdir -p log_scbasecount_2026-01-12/02_scbasecount_fix
 uv run python 02_scbasecount_fix.py --species Homo_sapiens &> log_scbasecount_2026-01-12/02_scbasecount_fix/Homo_sapiens &
 uv run python 02_scbasecount_fix.py --species Mus_musculus &> log_scbasecount_2026-01-12/02_scbasecount_fix/Mus_musculus &

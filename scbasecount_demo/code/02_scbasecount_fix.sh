@@ -1,3 +1,9 @@
+#!/usr/bin/env bash
+set -e
+
+cd /data/disk1/SpeciesLLM/scbasecount_demo/code
+mkdir -p log/02_scbasecount_fix
+
 uv run python 02_scbasecount_fix.py --species Homo_sapiens &> log/02_scbasecount_fix/Homo_sapiens &
 uv run python 02_scbasecount_fix.py --species Mus_musculus &> log/02_scbasecount_fix/Mus_musculus &
 uv run python 02_scbasecount_fix.py --exclude-species Homo_sapiens Mus_musculus &> log/02_scbasecount_fix/exclude-species &

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-cd /data/disk1/SpeciesLLM_obs/scbasecount_demo/code
+cd /data/disk1/SpeciesLLM/scbasecount_demo/code
 mkdir -p log_scbasecount_2026-01-12/0_scbasecount_filter
 
 uv run python 0_scbasecount_filter.py \
