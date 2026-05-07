@@ -7,13 +7,12 @@ export PYTHON_BIN=/data/miniconda3/bin/python
 export STAGE2_ROOT=/data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData
 
 export INPUT_1ST=${STAGE2_ROOT}/1st_pretrain_data_preprocessed_step4
-export INPUT_2ND=${STAGE2_ROOT}/2nd_pretrain_data_preprocessed_step4
 export INPUT_3SC=${STAGE2_ROOT}/3scbasecount_pretrain_data_preprocessed_step4
 
 export RUN_ID=${RUN_ID:-$(date +%Y%m%d_%H%M%S)}
-export FIRST_VIEW=${STAGE2_ROOT}/views/1st_no_human_mouse_${RUN_ID}
-export MERGED_DIR=${STAGE2_ROOT}/all_merged_full_no_1st_human_mouse_${RUN_ID}
-export FLAT_DIR=${STAGE2_ROOT}/all_flatten_data_full_no_1st_human_mouse_${RUN_ID}
+export FIRST_VIEW=${STAGE2_ROOT}/views_1_3/1st_no_human_mouse_${RUN_ID}
+export MERGED_DIR=${STAGE2_ROOT}/data_1_3_merged_full_no_1st_human_mouse_${RUN_ID}
+export FLAT_DIR=${STAGE2_ROOT}/data_1_3_flatten_data_full_no_1st_human_mouse_${RUN_ID}
 
 export WORKERS=${WORKERS:-16}
 export ROWS_PER_FILE=${ROWS_PER_FILE:-16384}
@@ -152,11 +151,9 @@ merge_cmd=(
   merge_macrogene_rounds.py
   --batch-dirs
   "$FIRST_VIEW"
-  "$INPUT_2ND"
   "$INPUT_3SC"
   --batch-names
   1st
-  2nd
   3scbasecount
   --output-dir
   "$MERGED_DIR"
@@ -222,3 +219,7 @@ sync_flat_dir_to_workers
 
 echo "[DONE] flatten data: ${FLAT_DIR}"
 echo "[DONE] training DATA_PATH_LINK: ${DATA_PATH_LINK}"
+
+
+# usage:
+# BATCH_FILES=2048 WORKERS=32 bash work_record/step1_data_1_3.sh
