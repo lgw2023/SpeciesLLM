@@ -156,124 +156,125 @@ uv run python 0_scbasecount_filter.py \
 /usr/bin/python3 /root/s3_uploader.py --region cn-east-4 --app_token 806279e3-a95e-494d-81e7-12f9ccd57710 --bucket_name bucket-3028 \
     --bucket_path public/SpeciesLLM/scbasecount_2026-01-12/scbasecount_processed/ \
     --lfap /data/node2_disk1/SpeciesLLM_obs/scbasecount_2026-01-12/scbasecount_processed/Arabidopsis_thaliana
-rm -rf /data/disk3/scbasecount_2026-01-12/h5ad/Gene/Arabidopsis_thaliana/*
+# rm -rf /data/disk3/scbasecount_2026-01-12/h5ad/Gene/Arabidopsis_thaliana/*
 
 ## 上传  这会产生 bucket-3028/public/SpeciesLLM/scbasecount_2026-01-12/scbasecount_processed/Bos_taurus 的远程文件夹
 /usr/bin/python3 /root/s3_uploader.py --region cn-east-4 --app_token 806279e3-a95e-494d-81e7-12f9ccd57710 --bucket_name bucket-3028 \
     --bucket_path public/SpeciesLLM/scbasecount_2026-01-12/scbasecount_processed/ \
     --lfap /data/node2_disk1/SpeciesLLM_obs/scbasecount_2026-01-12/scbasecount_processed/Bos_taurus
-rm -rf /data/disk3/scbasecount_2026-01-12/h5ad/Gene/Bos_taurus/*
+# rm -rf /data/disk3/scbasecount_2026-01-12/h5ad/Gene/Bos_taurus/*
 
 ## 上传  这会产生 bucket-3028/public/SpeciesLLM/scbasecount_2026-01-12/scbasecount_processed/Caenorhabditis_elegans 的远程文件夹
 /usr/bin/python3 /root/s3_uploader.py --region cn-east-4 --app_token 806279e3-a95e-494d-81e7-12f9ccd57710 --bucket_name bucket-3028 \
     --bucket_path public/SpeciesLLM/scbasecount_2026-01-12/scbasecount_processed/ \
     --lfap /data/node2_disk1/SpeciesLLM_obs/scbasecount_2026-01-12/scbasecount_processed/Caenorhabditis_elegans
-rm -rf /data/disk3/scbasecount_2026-01-12/h5ad/Gene/Caenorhabditis_elegans/*
+# rm -rf /data/disk3/scbasecount_2026-01-12/h5ad/Gene/Caenorhabditis_elegans/*
 
 ## 上传  这会产生 bucket-3028/public/SpeciesLLM/scbasecount_2026-01-12/scbasecount_processed/Callithrix_jacchus 的远程文件夹
 /usr/bin/python3 /root/s3_uploader.py --region cn-east-4 --app_token 806279e3-a95e-494d-81e7-12f9ccd57710 --bucket_name bucket-3028 \
     --bucket_path public/SpeciesLLM/scbasecount_2026-01-12/scbasecount_processed/ \
     --lfap /data/node2_disk1/SpeciesLLM_obs/scbasecount_2026-01-12/scbasecount_processed/Callithrix_jacchus
-rm -rf /data/disk3/scbasecount_2026-01-12/h5ad/Gene/Callithrix_jacchus/*
+# rm -rf /data/disk3/scbasecount_2026-01-12/h5ad/Gene/Callithrix_jacchus/*
 
 ## 上传  这会产生 bucket-3028/public/SpeciesLLM/scbasecount_2026-01-12/scbasecount_processed/Danio_rerio 的远程文件夹
 /usr/bin/python3 /root/s3_uploader.py --region cn-east-4 --app_token 806279e3-a95e-494d-81e7-12f9ccd57710 --bucket_name bucket-3028 \
     --bucket_path public/SpeciesLLM/scbasecount_2026-01-12/scbasecount_processed/ \
     --lfap /data/node2_disk1/SpeciesLLM_obs/scbasecount_2026-01-12/scbasecount_processed/Danio_rerio
-rm -rf /data/disk3/scbasecount_2026-01-12/h5ad/Gene/Danio_rerio/*
+# rm -rf /data/disk3/scbasecount_2026-01-12/h5ad/Gene/Danio_rerio/*
 
 ## 上传  这会产生 bucket-3028/public/SpeciesLLM/scbasecount_2026-01-12/scbasecount_processed/Drosophila_melanogaster 的远程文件夹
 /usr/bin/python3 /root/s3_uploader.py --region cn-east-4 --app_token 806279e3-a95e-494d-81e7-12f9ccd57710 --bucket_name bucket-3028 \
     --bucket_path public/SpeciesLLM/scbasecount_2026-01-12/scbasecount_processed/ \
     --lfap /data/node2_disk1/SpeciesLLM_obs/scbasecount_2026-01-12/scbasecount_processed/Drosophila_melanogaster
-rm -rf /data/disk3/scbasecount_2026-01-12/h5ad/Gene/Drosophila_melanogaster/*
+# rm -rf /data/disk3/scbasecount_2026-01-12/h5ad/Gene/Drosophila_melanogaster/*
 
 ## 上传  这会产生 bucket-3028/public/SpeciesLLM/scbasecount_2026-01-12/scbasecount_processed/Equus_caballus 的远程文件夹
 /usr/bin/python3 /root/s3_uploader.py --region cn-east-4 --app_token 806279e3-a95e-494d-81e7-12f9ccd57710 --bucket_name bucket-3028 \
     --bucket_path public/SpeciesLLM/scbasecount_2026-01-12/scbasecount_processed/ \
     --lfap /data/node2_disk1/SpeciesLLM_obs/scbasecount_2026-01-12/scbasecount_processed/Equus_caballus
-rm -rf /data/disk3/scbasecount_2026-01-12/h5ad/Gene/Equus_caballus/*
+# rm -rf /data/disk3/scbasecount_2026-01-12/h5ad/Gene/Equus_caballus/*
 
 ## 上传  这会产生 bucket-3028/public/SpeciesLLM/scbasecount_2026-01-12/scbasecount_processed/Gallus_gallus 的远程文件夹
 /usr/bin/python3 /root/s3_uploader.py --region cn-east-4 --app_token 806279e3-a95e-494d-81e7-12f9ccd57710 --bucket_name bucket-3028 \
     --bucket_path public/SpeciesLLM/scbasecount_2026-01-12/scbasecount_processed/ \
     --lfap /data/node2_disk1/SpeciesLLM_obs/scbasecount_2026-01-12/scbasecount_processed/Gallus_gallus
-rm -rf /data/disk3/scbasecount_2026-01-12/h5ad/Gene/Gallus_gallus/*
+# rm -rf /data/disk3/scbasecount_2026-01-12/h5ad/Gene/Gallus_gallus/*
 
 ## 上传  这会产生 bucket-3028/public/SpeciesLLM/scbasecount_2026-01-12/scbasecount_processed/Gorilla_gorilla 的远程文件夹
 /usr/bin/python3 /root/s3_uploader.py --region cn-east-4 --app_token 806279e3-a95e-494d-81e7-12f9ccd57710 --bucket_name bucket-3028 \
     --bucket_path public/SpeciesLLM/scbasecount_2026-01-12/scbasecount_processed/ \
     --lfap /data/node2_disk1/SpeciesLLM_obs/scbasecount_2026-01-12/scbasecount_processed/Gorilla_gorilla
-rm -rf /data/disk3/scbasecount_2026-01-12/h5ad/Gene/Gorilla_gorilla/*
+# rm -rf /data/disk3/scbasecount_2026-01-12/h5ad/Gene/Gorilla_gorilla/*
 
 ## 上传  这会产生 bucket-3028/public/SpeciesLLM/scbasecount_2026-01-12/scbasecount_processed/Heterocephalus_glaber 的远程文件夹
 /usr/bin/python3 /root/s3_uploader.py --region cn-east-4 --app_token 806279e3-a95e-494d-81e7-12f9ccd57710 --bucket_name bucket-3028 \
     --bucket_path public/SpeciesLLM/scbasecount_2026-01-12/scbasecount_processed/ \
     --lfap /data/node2_disk1/SpeciesLLM_obs/scbasecount_2026-01-12/scbasecount_processed/Heterocephalus_glaber
-rm -rf /data/disk3/scbasecount_2026-01-12/h5ad/Gene/Heterocephalus_glaber/*
+# rm -rf /data/disk3/scbasecount_2026-01-12/h5ad/Gene/Heterocephalus_glaber/*
 
 ## 上传  这会产生 bucket-3028/public/SpeciesLLM/scbasecount_2026-01-12/scbasecount_processed/Macaca_mulatta 的远程文件夹
 /usr/bin/python3 /root/s3_uploader.py --region cn-east-4 --app_token 806279e3-a95e-494d-81e7-12f9ccd57710 --bucket_name bucket-3028 \
     --bucket_path public/SpeciesLLM/scbasecount_2026-01-12/scbasecount_processed/ \
     --lfap /data/node2_disk1/SpeciesLLM_obs/scbasecount_2026-01-12/scbasecount_processed/Macaca_mulatta
-rm -rf /data/disk3/scbasecount_2026-01-12/h5ad/Gene/Macaca_mulatta/*
+# rm -rf /data/disk3/scbasecount_2026-01-12/h5ad/Gene/Macaca_mulatta/*
 
 ## 上传  这会产生 bucket-3028/public/SpeciesLLM/scbasecount_2026-01-12/scbasecount_processed/Oryctolagus_cuniculus 的远程文件夹
 /usr/bin/python3 /root/s3_uploader.py --region cn-east-4 --app_token 806279e3-a95e-494d-81e7-12f9ccd57710 --bucket_name bucket-3028 \
     --bucket_path public/SpeciesLLM/scbasecount_2026-01-12/scbasecount_processed/ \
     --lfap /data/node2_disk1/SpeciesLLM_obs/scbasecount_2026-01-12/scbasecount_processed/Oryctolagus_cuniculus
-rm -rf /data/disk3/scbasecount_2026-01-12/h5ad/Gene/Oryctolagus_cuniculus/*
+# rm -rf /data/disk3/scbasecount_2026-01-12/h5ad/Gene/Oryctolagus_cuniculus/*
 
 ## 上传  这会产生 bucket-3028/public/SpeciesLLM/scbasecount_2026-01-12/scbasecount_processed/Oryza_sativa 的远程文件夹
 /usr/bin/python3 /root/s3_uploader.py --region cn-east-4 --app_token 806279e3-a95e-494d-81e7-12f9ccd57710 --bucket_name bucket-3028 \
     --bucket_path public/SpeciesLLM/scbasecount_2026-01-12/scbasecount_processed/ \
     --lfap /data/node2_disk1/SpeciesLLM_obs/scbasecount_2026-01-12/scbasecount_processed/Oryza_sativa
-rm -rf /data/disk3/scbasecount_2026-01-12/h5ad/Gene/Oryza_sativa/*
+# rm -rf /data/disk3/scbasecount_2026-01-12/h5ad/Gene/Oryza_sativa/*
 
 ## 上传  这会产生 bucket-3028/public/SpeciesLLM/scbasecount_2026-01-12/scbasecount_processed/Ovis_aries 的远程文件夹
 /usr/bin/python3 /root/s3_uploader.py --region cn-east-4 --app_token 806279e3-a95e-494d-81e7-12f9ccd57710 --bucket_name bucket-3028 \
     --bucket_path public/SpeciesLLM/scbasecount_2026-01-12/scbasecount_processed/ \
     --lfap /data/node2_disk1/SpeciesLLM_obs/scbasecount_2026-01-12/scbasecount_processed/Ovis_aries
-rm -rf /data/disk3/scbasecount_2026-01-12/h5ad/Gene/Ovis_aries/*
+# rm -rf /data/disk3/scbasecount_2026-01-12/h5ad/Gene/Ovis_aries/*
 
 ## 上传  这会产生 bucket-3028/public/SpeciesLLM/scbasecount_2026-01-12/scbasecount_processed/Pan_troglodytes 的远程文件夹
 /usr/bin/python3 /root/s3_uploader.py --region cn-east-4 --app_token 806279e3-a95e-494d-81e7-12f9ccd57710 --bucket_name bucket-3028 \
     --bucket_path public/SpeciesLLM/scbasecount_2026-01-12/scbasecount_processed/ \
     --lfap /data/node2_disk1/SpeciesLLM_obs/scbasecount_2026-01-12/scbasecount_processed/Pan_troglodytes
-rm -rf /data/disk3/scbasecount_2026-01-12/h5ad/Gene/Pan_troglodytes/*
+# rm -rf /data/disk3/scbasecount_2026-01-12/h5ad/Gene/Pan_troglodytes/*
 
 ## 上传  这会产生 bucket-3028/public/SpeciesLLM/scbasecount_2026-01-12/scbasecount_processed/Schistosoma_mansoni 的远程文件夹
 /usr/bin/python3 /root/s3_uploader.py --region cn-east-4 --app_token 806279e3-a95e-494d-81e7-12f9ccd57710 --bucket_name bucket-3028 \
     --bucket_path public/SpeciesLLM/scbasecount_2026-01-12/scbasecount_processed/ \
     --lfap /data/node2_disk1/SpeciesLLM_obs/scbasecount_2026-01-12/scbasecount_processed/Schistosoma_mansoni
-rm -rf /data/disk3/scbasecount_2026-01-12/h5ad/Gene/Schistosoma_mansoni/*
+# rm -rf /data/disk3/scbasecount_2026-01-12/h5ad/Gene/Schistosoma_mansoni/*
 
 ## 上传  这会产生 bucket-3028/public/SpeciesLLM/scbasecount_2026-01-12/scbasecount_processed/Solanum_lycopersicum 的远程文件夹
 /usr/bin/python3 /root/s3_uploader.py --region cn-east-4 --app_token 806279e3-a95e-494d-81e7-12f9ccd57710 --bucket_name bucket-3028 \
     --bucket_path public/SpeciesLLM/scbasecount_2026-01-12/scbasecount_processed/ \
     --lfap /data/node2_disk1/SpeciesLLM_obs/scbasecount_2026-01-12/scbasecount_processed/Solanum_lycopersicum
-rm -rf /data/disk3/scbasecount_2026-01-12/h5ad/Gene/Solanum_lycopersicum/*
+# rm -rf /data/disk3/scbasecount_2026-01-12/h5ad/Gene/Solanum_lycopersicum/*
 
 ## 上传  这会产生 bucket-3028/public/SpeciesLLM/scbasecount_2026-01-12/scbasecount_processed/Sus_scrofa 的远程文件夹
 /usr/bin/python3 /root/s3_uploader.py --region cn-east-4 --app_token 806279e3-a95e-494d-81e7-12f9ccd57710 --bucket_name bucket-3028 \
     --bucket_path public/SpeciesLLM/scbasecount_2026-01-12/scbasecount_processed/ \
     --lfap /data/node2_disk1/SpeciesLLM_obs/scbasecount_2026-01-12/scbasecount_processed/Sus_scrofa
-rm -rf /data/disk3/scbasecount_2026-01-12/h5ad/Gene/Sus_scrofa/*
+# rm -rf /data/disk3/scbasecount_2026-01-12/h5ad/Gene/Sus_scrofa/*
 
 ## 上传  这会产生 bucket-3028/public/SpeciesLLM/scbasecount_2026-01-12/scbasecount_processed/Zea_mays 的远程文件夹
 /usr/bin/python3 /root/s3_uploader.py --region cn-east-4 --app_token 806279e3-a95e-494d-81e7-12f9ccd57710 --bucket_name bucket-3028 \
     --bucket_path public/SpeciesLLM/scbasecount_2026-01-12/scbasecount_processed/ \
     --lfap /data/node2_disk1/SpeciesLLM_obs/scbasecount_2026-01-12/scbasecount_processed/Zea_mays
-rm -rf /data/disk3/scbasecount_2026-01-12/h5ad/Gene/Zea_mays/*
+# rm -rf /data/disk3/scbasecount_2026-01-12/h5ad/Gene/Zea_mays/*
 
 ## 上传  这会产生 bucket-3028/public/SpeciesLLM/scbasecount_2026-01-12/scbasecount_processed/Homo_sapiens 的远程文件夹
 /usr/bin/python3 /root/s3_uploader.py --region cn-east-4 --app_token 806279e3-a95e-494d-81e7-12f9ccd57710 --bucket_name bucket-3028 \
     --bucket_path public/SpeciesLLM/scbasecount_2026-01-12/scbasecount_processed/ \
     --lfap /data/node2_disk1/SpeciesLLM_obs/scbasecount_2026-01-12/scbasecount_processed/Homo_sapiens
-rm -rf /data/disk3/scbasecount_2026-01-12/h5ad/Gene/Homo_sapiens/*
+# rm -rf /data/disk3/scbasecount_2026-01-12/h5ad/Gene/Homo_sapiens/*
 
 ## 上传  这会产生 bucket-3028/public/SpeciesLLM/scbasecount_2026-01-12/scbasecount_processed/Mus_musculus 的远程文件夹
 /usr/bin/python3 /root/s3_uploader.py --region cn-east-4 --app_token 806279e3-a95e-494d-81e7-12f9ccd57710 --bucket_name bucket-3028 \
     --bucket_path public/SpeciesLLM/scbasecount_2026-01-12/scbasecount_processed/ \
     --lfap /data/node2_disk1/SpeciesLLM_obs/scbasecount_2026-01-12/scbasecount_processed/Mus_musculus
-rm -rf /data/disk3/scbasecount_2026-01-12/h5ad/Gene/Mus_musculus/*
+# rm -rf /data/disk3/scbasecount_2026-01-12/h5ad/Gene/Mus_musculus/*
+
