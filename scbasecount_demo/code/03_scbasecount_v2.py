@@ -25,10 +25,10 @@ from sklearn.utils import sparsefuncs
 # DEFAULT_OLD_LOOKUP_DIR = "/ibex/project/c2307/datasets/2nd_pretrain_data_preprocessed_step3/LOOKUP_categories_unified/"
 # DEFAULT_NEW_LOOKUP_DIR_NAME = "LOOKUP_categories_unified"
 # 当前机器中的路径，直接替换
-DEFAULT_INPUT_ROOT = "/data/disk1/SpeciesLLM_obs/scbasecount_demo/scbasecount_processed_02"
-DEFAULT_OUTPUT_BASE = "/data/disk1/SpeciesLLM_obs/scbasecount_demo/scbasecount_processed_03_v2"
-DEFAULT_OLD_LOOKUP_DIR = "/data/disk1/SpeciesLLM_obs/scbasecount_demo/data/LOOKUP_categories_unified"
-DEFAULT_NEW_LOOKUP_DIR_NAME = "LOOKUP_categories_unified"
+DEFAULT_INPUT_ROOT = os.environ.get("DEFAULT_INPUT_ROOT", "/data/disk1/SpeciesLLM_obs/scbasecount_demo/scbasecount_processed_02")
+DEFAULT_OUTPUT_BASE = os.environ.get("DEFAULT_OUTPUT_BASE", "/data/disk1/SpeciesLLM_obs/scbasecount_demo/scbasecount_processed_03_v2")
+DEFAULT_OLD_LOOKUP_DIR = os.environ.get("DEFAULT_OLD_LOOKUP_DIR", "/data/disk1/SpeciesLLM_obs/scbasecount_demo/data/LOOKUP_categories_unified")
+DEFAULT_NEW_LOOKUP_DIR_NAME = os.environ.get("DEFAULT_NEW_LOOKUP_DIR_NAME", "LOOKUP_categories_unified")
 
 DEFAULT_NORMALIZATION = "sf-log1p"  # or "raw"
 DEFAULT_CHUNK_SIZE = 16384

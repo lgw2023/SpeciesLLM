@@ -31,10 +31,10 @@ COLUMNS_OF_INTEREST = [
 
 DEFAULT_CHUNK_SIZE = 16384
 DEFAULT_X_READ_CHUNK_SIZE = 2048
-DEFAULT_BASE_PATH = "/data/disk1/SpeciesLLM_obs/scbasecount_demo/scbasecount_processed"
-DEFAULT_SAVE_ROOT = "/data/disk1/SpeciesLLM_obs/scbasecount_demo/scbasecount_processed_02"
-HUMAN_SAVE_ROOT = "/data/disk2/SpeciesLLM_obs/scbasecount_demo/scbasecount_processed_02"
-MOUSE_SAVE_ROOT = "/data/disk3/SpeciesLLM_obs/scbasecount_demo/scbasecount_processed_02"
+DEFAULT_BASE_PATH = os.environ.get("DEFAULT_BASE_PATH", "/data/disk1/SpeciesLLM_obs/scbasecount_demo/scbasecount_processed")
+DEFAULT_SAVE_ROOT = os.environ.get("DEFAULT_SAVE_ROOT", "/data/disk1/SpeciesLLM_obs/scbasecount_demo/scbasecount_processed_02")
+HUMAN_SAVE_ROOT = os.environ.get("HUMAN_SAVE_ROOT", "/data/disk2/SpeciesLLM_obs/scbasecount_demo/scbasecount_processed_02")
+MOUSE_SAVE_ROOT = os.environ.get("MOUSE_SAVE_ROOT", "/data/disk3/SpeciesLLM_obs/scbasecount_demo/scbasecount_processed_02")
 
 DEFAULT_ZARR_COMPRESSOR = numcodecs.Blosc(
     cname="lz4",
