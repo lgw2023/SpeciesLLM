@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-Verify shuffle quality of flatten data across species, batches, and files.
+Verify shuffle quality of flatten data using statistical tests that account
+for imbalanced species distributions.
 
 Usage:
   python verify_shuffle.py /path/to/all_flatten_data_full_no_1st_human_mouse_xxx
@@ -11,10 +12,58 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 from collections import Counter
+from scipy import stats as sp_stats
+
+
+def expected_change_ratio(probs: np.ndarray) -> float:
+    """Under perfect random shuffle, P(adjacent rows have different species)."""
+    return float(1.0 - np.sum(probs ** 2))
+
+
+def expected_mean_run(probs: np.ndarray) -> float:
+    """Expected mean run length for a random sequence with given proportions.
+
+    For species i with proportion p_i, the expected run length is 1/(1-p_i)
+    in a random sequence. Overall mean = weighted average.
+    """
+    total = 0.0
+    for p in probs:
+        if p < 1.0:
+            total += p / (1.0 - p)
+    return float(total)
+
+
+def runs_test_binary(seq: np.ndarray, species_a: int, species_b: int):
+    """Wald-Wolfowitz runs test for two species. Returns z-score and p-value."""
+    mask_a = (seq == species_a)
+    mask_b = (seq == species_b)
+    ab_seq = seq[mask_a | mask_b]
+
+    n_a = np.sum(mask_a)
+    n_b = np.sum(mask_b)
+
+    if n_a < 2 or n_b < 2:
+        return 0.0, 1.0  # too few samples
+
+    # Count runs
+    runs = 1 + np.sum(ab_seq[1:] != ab_seq[:-1])
+
+    # Expected runs and std
+    expected = (2.0 * n_a * n_b) / (n_a + n_b) + 1.0
+    std = np.sqrt(
+        (2.0 * n_a * n_b * (2.0 * n_a * n_b - n_a - n_b)) /
+        ((n_a + n_b) ** 2 * (n_a + n_b - 1.0))
+    )
+
+    if std < 1e-10:
+        return 0.0, 1.0
+
+    z = (runs - expected) / std
+    p_value = 2.0 * sp_stats.norm.sf(abs(z))
+    return float(z), float(p_value)
 
 
 def analyze_shuffle_quality(flat_dir: str, sample_files: int = 10):
-    """Analyze species mixing quality in flatten parquet files."""
     flat_path = Path(flat_dir)
     parquet_files = sorted(flat_path.glob("all_flatten_part_*.parquet"))
 
@@ -22,7 +71,6 @@ def analyze_shuffle_quality(flat_dir: str, sample_files: int = 10):
         print(f"[ERROR] No all_flatten_part_*.parquet files found in {flat_dir}")
         return
 
-    # Sample evenly across the file list
     n = len(parquet_files)
     if n <= sample_files:
         sampled = parquet_files
@@ -44,15 +92,15 @@ def analyze_shuffle_quality(flat_dir: str, sample_files: int = 10):
         if n_rows == 0:
             continue
 
-        # Species distribution in this file
         species_counts = Counter(species_col.tolist())
         global_species_counts.update(species_counts)
 
-        # Adjacency analysis: how often does species change between consecutive rows?
-        changes = np.sum(species_col[1:] != species_col[:-1])
-        change_ratio = changes / (n_rows - 1) if n_rows > 1 else 0
+        probs = np.array(list(species_counts.values())) / n_rows
 
-        # Run-length analysis: longest consecutive run of same species
+        # Observed metrics
+        changes = np.sum(species_col[1:] != species_col[:-1])
+        obs_change = changes / (n_rows - 1) if n_rows > 1 else 0
+
         run_lengths = []
         current_run = 1
         for i in range(1, n_rows):
@@ -62,70 +110,103 @@ def analyze_shuffle_quality(flat_dir: str, sample_files: int = 10):
                 run_lengths.append(current_run)
                 current_run = 1
         run_lengths.append(current_run)
-        max_run = max(run_lengths) if run_lengths else 0
-        mean_run = np.mean(run_lengths) if run_lengths else 0
+        obs_max_run = max(run_lengths) if run_lengths else 0
+        obs_mean_run = np.mean(run_lengths) if run_lengths else 0
 
-        # Entropy: higher = more even species mix
-        total = sum(species_counts.values())
-        probs = np.array(list(species_counts.values())) / total
-        entropy = -np.sum(probs * np.log(probs)) if len(probs) > 0 else 0
-        max_entropy = np.log(len(species_counts)) if len(species_counts) > 0 else 1
-        normalized_entropy = entropy / max_entropy if max_entropy > 0 else 0
+        # Expected metrics under random shuffle (given this file's distribution)
+        exp_change = expected_change_ratio(probs)
+        exp_mean_run = expected_mean_run(probs)
+
+        # Runs test on top 2 species
+        top2 = [sp for sp, _ in species_counts.most_common(2)]
+        if len(top2) >= 2:
+            z_score, p_value = runs_test_binary(species_col, top2[0], top2[1])
+        else:
+            z_score, p_value = 0.0, 1.0
 
         file_stats.append({
             "file": fpath.name,
             "rows": n_rows,
             "unique_species": len(species_counts),
-            "change_ratio": change_ratio,
-            "max_run": max_run,
-            "mean_run": mean_run,
-            "normalized_entropy": normalized_entropy,
+            "obs_change": obs_change,
+            "exp_change": exp_change,
+            "obs_mean_run": obs_mean_run,
+            "exp_mean_run": exp_mean_run,
+            "obs_max_run": obs_max_run,
+            "z_score": z_score,
+            "p_value": p_value,
             "species_counts": species_counts,
         })
 
         print(f"--- {fpath.name} ---")
-        print(f"  Rows: {n_rows:,}")
-        print(f"  Unique species: {len(species_counts)}")
-        print(f"  Normalized entropy: {normalized_entropy:.4f}  (1.0 = perfectly even)")
-        print(f"  Adjacent-species change ratio: {change_ratio:.4f}  (higher = better mixed)")
-        print(f"  Max same-species run: {max_run} rows")
-        print(f"  Mean same-species run: {mean_run:.2f} rows")
-        # Top 5 species
-        top5 = species_counts.most_common(5)
-        print(f"  Top species: {top5}")
+        print(f"  Rows: {n_rows:,}  |  Unique species: {len(species_counts)}")
+        print(f"  Change ratio:  observed={obs_change:.4f}  expected={exp_change:.4f}  "
+              f"delta={obs_change - exp_change:+.4f}")
+        print(f"  Mean run len:  observed={obs_mean_run:.2f}  expected={exp_mean_run:.2f}  "
+              f"delta={obs_mean_run - exp_mean_run:+.3f}")
+        print(f"  Max run len:   {obs_max_run}")
+        print(f"  Runs test (top2 species): z={z_score:+.3f}  p={p_value:.4f}  "
+              f"({'significant clustering' if p_value < 0.01 else 'pass'})")
+        print(f"  Top species: {species_counts.most_common(5)}")
         print()
 
-    # Global summary
+    # --- Per-file summary ---
+    deltas_change = [s["obs_change"] - s["exp_change"] for s in file_stats]
+    p_values = [s["p_value"] for s in file_stats]
+    mean_delta = np.mean(deltas_change)
+    significant_count = sum(1 for p in p_values if p < 0.01)
+
     print("=" * 60)
-    print("GLOBAL SUMMARY")
+    print("PER-FILE SHUFFLE QUALITY")
     print("=" * 60)
-    print(f"Total unique species across sampled files: {len(global_species_counts)}")
-    print(f"Global species distribution (top 20):")
-    for sp, cnt in global_species_counts.most_common(20):
-        print(f"  species_id={sp}: {cnt:,} rows")
+    print(f"  Mean (observed - expected) change ratio: {mean_delta:+.5f}")
+    print(f"  Files with significant clustering (p<0.01): {significant_count}/{len(file_stats)}")
 
-    # Aggregate metrics
-    avg_change = np.mean([s["change_ratio"] for s in file_stats])
-    avg_entropy = np.mean([s["normalized_entropy"] for s in file_stats])
-    avg_max_run = np.mean([s["max_run"] for s in file_stats])
-    avg_unique = np.mean([s["unique_species"] for s in file_stats])
+    # --- Rare species distribution across output files ---
+    print(f"\n{'=' * 60}")
+    print("RARE SPECIES DISTRIBUTION ACROSS FILES")
+    print("=" * 60)
+    print("Verifies that rare species aren't all clustered in a few output files.\n")
 
-    print(f"\nAggregate metrics across sampled files:")
-    print(f"  Avg unique species per file: {avg_unique:.1f}")
-    print(f"  Avg normalized entropy: {avg_entropy:.4f}")
-    print(f"  Avg adjacent change ratio: {avg_change:.4f}")
-    print(f"  Avg max same-species run length: {avg_max_run:.1f}")
+    rare_threshold = 5
+    # Identify rare species (occur ≤rare_threshold times in sampled files)
+    rare_species = [
+        sp for sp, cnt in global_species_counts.items()
+        if cnt <= rare_threshold * len(sampled)
+    ]
 
-    # Interpretation
-    print(f"\nInterpretation:")
-    if avg_change > 0.8 and avg_entropy > 0.7 and avg_max_run < 10:
-        print("  Good shuffle: species are well-mixed within each output file.")
-    elif avg_change > 0.5 and avg_entropy > 0.4:
-        print("  Acceptable shuffle: reasonable mixing, some clustering present.")
-        print("  Consider reducing BATCH_FILES or switching to --shuffle-mode external/in-memory.")
+    if rare_species:
+        # For each rare species, count how many sampled files contain it
+        for sp in sorted(rare_species, key=lambda x: global_species_counts[x], reverse=True):
+            files_with_sp = sum(
+                1 for s in file_stats if sp in s["species_counts"]
+            )
+            total_occurrences = global_species_counts[sp]
+            print(f"  species_id={sp}: {total_occurrences} rows across "
+                  f"{files_with_sp}/{len(file_stats)} files  "
+                  f"({'suspicious: all rows in 1 file' if total_occurrences > 3 and files_with_sp == 1 else 'ok'})")
     else:
-        print("  Poor shuffle: data appears clustered by species.")
-        print("  Reduce BATCH_FILES or check input file organization.")
+        print("  No rare species found in sampled files (all species appear frequently).")
+
+    # --- Global interpretation ---
+    print(f"\n{'=' * 60}")
+    print("INTERPRETATION")
+    print("=" * 60)
+    print(f"  Species 5+8 make up {global_species_counts[5] + global_species_counts[8]:,} / "
+          f"{sum(global_species_counts.values()):,} rows "
+          f"({(global_species_counts[5] + global_species_counts[8]) / sum(global_species_counts.values()) * 100:.1f}%).")
+    print(f"  With this imbalance, expected change_ratio ≈ {file_stats[0]['exp_change']:.4f} in a perfectly random shuffle.")
+
+    if abs(mean_delta) < 0.02 and significant_count <= len(file_stats) * 0.2:
+        print(f"\n  ✓ Shuffle looks correct.")
+        print(f"    Observed change_ratio matches random expectation (delta={mean_delta:+.4f}).")
+        print(f"    No evidence of species clustering within output files.")
+    elif mean_delta < -0.05 or significant_count > len(file_stats) * 0.5:
+        print(f"\n  ✗ Possible clustering detected.")
+        print(f"    Observed change_ratio is lower than expected.")
+        print(f"    Reduce BATCH_FILES or use --shuffle-mode external.")
+    else:
+        print(f"\n  ~ Marginal. Check rare species distribution above for clustering.")
 
 
 if __name__ == "__main__":
