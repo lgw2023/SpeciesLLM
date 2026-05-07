@@ -683,13 +683,28 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
                 NODE_RANK,
                 logger=logger)
             logger.info(f"Node: {NODE_RANK}, Rank: {rank}, Epoch: {epoch}, Data: {[x.split('/')[-1] for x in file_paths]}")
-            data_loader = DataLoader(dataset=ParquetDataset(data_pt),
+            nw = max(0, int(args.num_workers))
+            dl_kw = dict(
+                dataset=ParquetDataset(data_pt),
                 batch_size=args.batch_size,
                 collate_fn=collate_fn,
                 shuffle=False,
                 drop_last=False,
-                num_workers=min(len(os.sched_getaffinity(0)), args.batch_size // 2),
-                pin_memory=True)
+                num_workers=nw,
+                pin_memory=args.pin_memory,
+            )
+            if nw > 0:
+                dl_kw["prefetch_factor"] = max(1, int(args.prefetch_factor))
+                dl_kw["persistent_workers"] = bool(args.persistent_workers)
+            logger.info(
+                "DataLoader rank=%s num_workers=%s prefetch_factor=%s persistent_workers=%s pin_memory=%s",
+                rank,
+                nw,
+                dl_kw.get("prefetch_factor", "n/a"),
+                dl_kw.get("persistent_workers", False),
+                dl_kw["pin_memory"],
+            )
+            data_loader = DataLoader(**dl_kw)
         t_temp_2_data = time.time() - t_temp_2_data
         t_temp_2_sum_data += t_temp_2_data
 
@@ -1415,6 +1430,30 @@ def argumentparser():
                         type=int,
                         default=100,
                         help="Flush JSONL/CSV metric files every N rows.")
+    parser.add_argument(
+        '--num_workers',
+        type=int,
+        default=8,
+        help="DataLoader workers per rank. Lower values reduce host RAM from worker processes and prefetch buffers.",
+    )
+    parser.add_argument(
+        '--prefetch_factor',
+        type=int,
+        default=1,
+        help="Batches prefetched per worker when num_workers>0. Default 1 lowers RAM vs PyTorch default 2.",
+    )
+    parser.add_argument(
+        '--persistent_workers',
+        type=str2bool,
+        default=True,
+        help="When num_workers>0, keep worker processes across epochs (recommended). Ignored if num_workers is 0.",
+    )
+    parser.add_argument(
+        '--pin_memory',
+        type=str2bool,
+        default=True,
+        help="DataLoader pin_memory (pinned CPU pages for faster H2D-style copies). Default True.",
+    )
     parser.add_argument('--log_level',
                         type=str,
                         default="INFO")

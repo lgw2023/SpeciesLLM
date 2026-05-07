@@ -158,6 +158,10 @@ nan_check_interval="${nan_check_interval:-${NAN_CHECK_INTERVAL:-0}}"
 metrics_flush_interval="${metrics_flush_interval:-${METRICS_FLUSH_INTERVAL:-100}}"
 log_level="${log_level:-${LOG_LEVEL:-INFO}}"
 log_all_ranks="${log_all_ranks:-${LOG_ALL_RANKS:-false}}"
+num_workers="${num_workers:-${NUM_WORKERS:-8}}"
+prefetch_factor="${prefetch_factor:-${PREFETCH_FACTOR:-1}}"
+persistent_workers="${persistent_workers:-${PERSISTENT_WORKERS:-true}}"
+pin_memory="${pin_memory:-${PIN_MEMORY:-true}}"
 
 WORKER_MODE=0
 if [[ "${1:-}" == "--worker" ]]; then
@@ -194,6 +198,8 @@ Important environment variables:
   TRAIN_DATASET=full|test
   DATA_ROOT, EMB_ROOT, DATA_PATH/data_path, EMB_PATH/emb_path
   MODEL_CONFIG_JSON/config_json, BATCH_SIZE/batch_size
+  NUM_WORKERS/num_workers, PREFETCH_FACTOR/prefetch_factor,
+  PERSISTENT_WORKERS/persistent_workers, PIN_MEMORY/pin_memory
 USAGE
 }
 
@@ -424,6 +430,10 @@ build_train_args() {
     "--metrics_flush_interval=${metrics_flush_interval}"
     "--log_level=${log_level}"
     "--log_all_ranks=${log_all_ranks}"
+    "--num_workers=${num_workers}"
+    "--prefetch_factor=${prefetch_factor}"
+    "--persistent_workers=${persistent_workers}"
+    "--pin_memory=${pin_memory}"
   )
 
   if [[ -n "$s3_remote_dir_path" ]]; then
@@ -544,6 +554,7 @@ remote_env_assignments() {
     warmup_ratio weight_decay save_data_interval beta1 beta2 grad_clip compile
     backend device device_type s3_remote_dir_path
     log_interval profile_interval nan_check_interval metrics_flush_interval log_level log_all_ranks
+    num_workers prefetch_factor persistent_workers pin_memory
   )
 
   printf "NODE_RANK=%s " "$(shell_quote "$rank")"
