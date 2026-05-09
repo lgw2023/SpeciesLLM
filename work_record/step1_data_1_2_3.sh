@@ -225,5 +225,13 @@ sync_flat_dir_to_workers
 echo "[DONE] flatten data: ${FLAT_DIR}"
 echo "[DONE] training DATA_PATH_LINK: ${DATA_PATH_LINK}"
 
-# usage:
+
+# 第一次生成全量数据
 # BATCH_FILES=2048 WORKERS=32 bash work_record/step1_data_1_2_3.sh
+
+# 第二次生成全量数据
+# RUN_ID=20260506_165244 \
+# SKIP_MERGE=1 SKIP_SYNC=1 UPDATE_DATA_PATH_LINK=0 \
+# FLAT_DIR=/data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData/all_flatten_data_full_no_1st_human_mouse_20260506_165244_external \
+# SHUFFLE_MODE=external SHUFFLE_BUCKETS=256 WORKERS=32 \
+# bash work_record/step1_data_1_2_3.sh
