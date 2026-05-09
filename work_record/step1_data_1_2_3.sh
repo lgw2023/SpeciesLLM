@@ -22,7 +22,7 @@ export ROWS_PER_FILE=${ROWS_PER_FILE:-16384}
 export SHUFFLE_SEED=${SHUFFLE_SEED:-42}
 export SHUFFLE_MODE=${SHUFFLE_MODE:-batch}
 export BATCH_FILES=${BATCH_FILES:-2048}
-export SHUFFLE_BUCKETS=${SHUFFLE_BUCKETS:-512}
+export SHUFFLE_BUCKETS=${SHUFFLE_BUCKETS:-16}
 export SKIP_MERGE=${SKIP_MERGE:-0}
 export SKIP_FLATTEN=${SKIP_FLATTEN:-0}
 export SKIP_EXISTING=${SKIP_EXISTING:-0}
@@ -229,9 +229,10 @@ echo "[DONE] training DATA_PATH_LINK: ${DATA_PATH_LINK}"
 # 第一次生成全量数据
 # BATCH_FILES=2048 WORKERS=32 bash work_record/step1_data_1_2_3.sh
 
-# 第二次生成全量数据
+# 第二次生成全量数据（external 全局打乱，桶数默认 16；ProcessPool 并行 partition）
+# 先用 --max-files 200 跑 smoke test：在脚本里加 SHUFFLE_EXTRA_ARGS 或临时改 flatten_cmd
 # RUN_ID=20260506_165244 \
 # SKIP_MERGE=1 SKIP_SYNC=1 UPDATE_DATA_PATH_LINK=0 \
 # FLAT_DIR=/data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData/all_flatten_data_full_no_1st_human_mouse_20260506_165244_external \
-# SHUFFLE_MODE=external SHUFFLE_BUCKETS=256 WORKERS=32 \
+# SHUFFLE_MODE=external WORKERS=32 \
 # bash work_record/step1_data_1_2_3.sh
