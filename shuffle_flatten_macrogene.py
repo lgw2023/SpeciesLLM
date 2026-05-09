@@ -33,7 +33,7 @@ import shutil
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Iterable, List
+from typing import Iterable, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -399,46 +399,125 @@ def write_output_chunk(
     return output_name
 
 
+def _partition_one_file_for_external(
+    file_path: Path,
+    file_index: int,
+    seed: int,
+    buckets: int,
+) -> List[Tuple[int, "pa.Table"]]:
+    df = read_parquet_file(file_path)
+    if df.empty:
+        return []
+    file_rng = np.random.default_rng([seed, file_index])
+    keys = file_rng.random(len(df), dtype=np.float64)
+    bucket_ids = np.minimum((keys * buckets).astype(np.int64), buckets - 1)
+    df[SHUFFLE_KEY_COLUMN] = keys
+    df["_bucket_id"] = bucket_ids
+    out: List[Tuple[int, pa.Table]] = []
+    for bucket_id, group in df.groupby("_bucket_id", sort=False):
+        bucket_id = int(bucket_id)
+        group = group.drop(columns=["_bucket_id"])
+        table = pa.Table.from_pandas(group, schema=TEMP_SCHEMA, preserve_index=False)
+        out.append((bucket_id, table))
+    return out
+
+
 def partition_external_shuffle_buckets(
     files: List[Path],
     temp_dir: Path,
     buckets: int,
     seed: int,
+    workers: int = 1,
 ) -> None:
     start = time.time()
-    rng = np.random.default_rng(seed)
     writers: dict[int, pq.ParquetWriter] = {}
 
-    iterator = enumerate(files)
-    if tqdm is not None:
-        iterator = tqdm(iterator, total=len(files), desc="partition shuffle buckets", unit="file")
+    print(
+        f"[INFO] External partition: files={len(files)} buckets={buckets} workers={workers}",
+        flush=True,
+    )
+
+    def _route(groups: List[Tuple[int, "pa.Table"]]) -> None:
+        for bucket_id, table in groups:
+            writer = writers.get(bucket_id)
+            if writer is None:
+                bucket_path = temp_dir / f"bucket_{bucket_id:05d}.parquet"
+                writer = pq.ParquetWriter(bucket_path, TEMP_SCHEMA, compression="snappy")
+                writers[bucket_id] = writer
+            writer.write_table(table)
 
     try:
-        for _, file_path in iterator:
-            df = read_parquet_file(file_path)
-            if df.empty:
-                continue
-
-            keys = rng.random(len(df), dtype=np.float64)
-            bucket_ids = np.minimum((keys * buckets).astype(np.int64), buckets - 1)
-            df[SHUFFLE_KEY_COLUMN] = keys
-            df["_bucket_id"] = bucket_ids
-
-            for bucket_id, group in df.groupby("_bucket_id", sort=False):
-                bucket_id = int(bucket_id)
-                group = group.drop(columns=["_bucket_id"])
-                writer = writers.get(bucket_id)
-                if writer is None:
-                    bucket_path = temp_dir / f"bucket_{bucket_id:05d}.parquet"
-                    writer = pq.ParquetWriter(bucket_path, TEMP_SCHEMA, compression="snappy")
-                    writers[bucket_id] = writer
-                table = pa.Table.from_pandas(group, schema=TEMP_SCHEMA, preserve_index=False)
-                writer.write_table(table)
+        if workers <= 1:
+            iterator = enumerate(files)
+            if tqdm is not None:
+                iterator = tqdm(
+                    iterator, total=len(files), desc="partition shuffle buckets", unit="file"
+                )
+            for file_index, file_path in iterator:
+                _route(
+                    _partition_one_file_for_external(file_path, file_index, seed, buckets)
+                )
+        else:
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                futures = [
+                    executor.submit(
+                        _partition_one_file_for_external, fp, i, seed, buckets
+                    )
+                    for i, fp in enumerate(files)
+                ]
+                completed_iter = as_completed(futures)
+                if tqdm is not None:
+                    completed_iter = tqdm(
+                        completed_iter,
+                        total=len(files),
+                        desc="partition shuffle buckets",
+                        unit="file",
+                    )
+                for future in completed_iter:
+                    _route(future.result())
     finally:
         for writer in writers.values():
             writer.close()
 
     log_step("Partition external shuffle buckets", start)
+
+
+def _read_sort_bucket(bucket_path: Path) -> Optional[pd.DataFrame]:
+    df = pd.read_parquet(bucket_path, engine="pyarrow")
+    if df.empty:
+        return None
+    return df.sort_values(SHUFFLE_KEY_COLUMN, kind="mergesort").drop(columns=[SHUFFLE_KEY_COLUMN])
+
+
+def _iter_sorted_buckets(
+    bucket_paths: List[Tuple[int, Path]],
+    workers: int,
+) -> Iterable[Tuple[int, Optional[pd.DataFrame]]]:
+    """Yield (bucket_id, sorted_df) in bucket_id order. Prefetches in parallel when workers>1."""
+    if workers <= 1:
+        for bid, bp in bucket_paths:
+            yield bid, _read_sort_bucket(bp)
+        return
+
+    prefetch = max(2, min(workers * 2, len(bucket_paths)))
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {}
+        path_iter = iter(bucket_paths)
+        for _ in range(prefetch):
+            try:
+                bid, bp = next(path_iter)
+                futures[bid] = executor.submit(_read_sort_bucket, bp)
+            except StopIteration:
+                break
+
+        for bid, _ in bucket_paths:
+            future = futures.pop(bid)
+            try:
+                next_bid, next_bp = next(path_iter)
+                futures[next_bid] = executor.submit(_read_sort_bucket, next_bp)
+            except StopIteration:
+                pass
+            yield bid, future.result()
 
 
 def write_external_shuffled_chunks(
@@ -450,6 +529,7 @@ def write_external_shuffled_chunks(
     manifest_name: str,
     drop_remainder: bool,
     buckets: int,
+    workers: int = 1,
 ) -> None:
     start = time.time()
     output_index = 0
@@ -458,19 +538,25 @@ def write_external_shuffled_chunks(
     manifest_rows: List[dict] = []
     pending = pd.DataFrame(columns=SCHEMA_COLUMNS)
 
-    iterator = range(buckets)
+    bucket_paths: List[Tuple[int, Path]] = [
+        (bid, temp_dir / f"bucket_{bid:05d}.parquet") for bid in range(buckets)
+    ]
+    bucket_paths = [(bid, p) for bid, p in bucket_paths if p.exists()]
+
+    print(
+        f"[INFO] External write: buckets={len(bucket_paths)} workers={workers}",
+        flush=True,
+    )
+
+    iterator = _iter_sorted_buckets(bucket_paths, workers)
     if tqdm is not None:
-        iterator = tqdm(iterator, desc="write shuffled buckets", unit="bucket")
+        iterator = tqdm(
+            iterator, total=len(bucket_paths), desc="write shuffled buckets", unit="bucket"
+        )
 
-    for bucket_id in iterator:
-        bucket_path = temp_dir / f"bucket_{bucket_id:05d}.parquet"
-        if not bucket_path.exists():
+    for bucket_id, df in iterator:
+        if df is None:
             continue
-
-        df = pd.read_parquet(bucket_path, engine="pyarrow")
-        if df.empty:
-            continue
-        df = df.sort_values(SHUFFLE_KEY_COLUMN, kind="mergesort").drop(columns=[SHUFFLE_KEY_COLUMN])
         rows_seen += len(df)
 
         if not pending.empty:
@@ -657,12 +743,13 @@ def external_shuffle(
     temp_dir: Path,
     keep_temp: bool,
     overwrite: bool,
+    workers: int = 1,
 ) -> None:
     if buckets <= 0:
         raise ValueError("--shuffle-buckets must be positive")
     prepare_temp_dir(temp_dir, overwrite=overwrite)
     print(
-        f"[INFO] External shuffle: buckets={buckets}, temp_dir={temp_dir}, seed={seed}",
+        f"[INFO] External shuffle: buckets={buckets}, temp_dir={temp_dir}, seed={seed}, workers={workers}",
         flush=True,
     )
     partition_external_shuffle_buckets(
@@ -670,6 +757,7 @@ def external_shuffle(
         temp_dir=temp_dir,
         buckets=buckets,
         seed=seed,
+        workers=workers,
     )
     write_external_shuffled_chunks(
         temp_dir=temp_dir,
@@ -680,6 +768,7 @@ def external_shuffle(
         manifest_name=manifest_name,
         drop_remainder=drop_remainder,
         buckets=buckets,
+        workers=workers,
     )
     if not keep_temp:
         shutil.rmtree(temp_dir)
@@ -753,6 +842,7 @@ def main() -> None:
             temp_dir=temp_dir,
             keep_temp=args.keep_temp,
             overwrite=args.overwrite,
+            workers=args.workers,
         )
     else:
         df = read_all_data(files, args.workers)
