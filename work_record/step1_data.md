@@ -230,6 +230,7 @@ batch_root/
   - `--validate-all-schemas`：写前校验 schema
   - 临时目录：`${FLAT_DIR}/_shuffle_tmp`
 - **清单**：`shuffle_manifest.csv`，列为：`output_file`, `start_row`, `end_row_exclusive`, `num_rows`。
+- **`SHUFFLE_MODE=batch` 的局限**：仅在批内（每批 `BATCH_FILES` 个文件，对当前数据约占 7%）做完整 shuffle，**批间只靠 input file 全局 permutation 做粗粒度混合**。input 文件数 < `BATCH_FILES` 的稀有物种（如本数据集中的 Solanum_lycopersicum 1 个 input、Mesocricetus_auratus 2 个、Pan_paniscus 4 个）会在 output 文件号轴上呈**段状聚集**（行级仍是均匀打散在那段区间内）。多 epoch 训练靠训练侧文件级 shuffle 抹平；**单 epoch + 大 world_size 训练**或对稀有物种 embedding 稳定性敏感时，请切 `SHUFFLE_MODE=external`（脚本已支持，需 ≈1× 输出体量临时空间，总 IO 约 2×）。
 
 可选：`SKIP_FLATTEN=1` 跳过打平。
 
@@ -255,6 +256,8 @@ batch_root/
 | `idx` | `int64` | 索引字段 |
 
 训练时通过 `train_MNodes_torchrun_mfu_preindexparquet.py` 的 **`--data_path`** 指向**打平后的目录**（或其符号链接），由脚本自行 `glob` 该目录下的 `*.parquet`。
+
+> **训练侧每 epoch 文件级 shuffle（关键依赖）**：`DistributedFileSampler` 每 epoch 用 `seed+epoch` 重做 `randperm(num_files)` 后再切给各 rank。这是 `SHUFFLE_MODE=batch` 模式下「磁盘上 batch-block 结构对训练无害」的唯一依据；**改训练 loader 时务必保留这一行为**，否则磁盘上的批块顺序会直接暴露给训练，且单 epoch 下无法被自然抹平。
 
 ---
 
@@ -294,14 +297,19 @@ batch_root/
 ## 常用运行方式
 
 ```bash
-# 三路合并 + 打平（可调并行与 shuffle 批量参数）
+# 三路合并 + 打平（默认 SHUFFLE_MODE=batch；批内充分 shuffle，批间粗粒度混合）
 BATCH_FILES=2048 WORKERS=32 bash work_record/step1_data_1_2_3.sh
+
+# 严格全局打乱（external 模式：稀有物种均匀分布到所有 output 文件；总 IO 约 2×、临时空间 ≈1× 输出体量）
+SHUFFLE_MODE=external WORKERS=32 bash work_record/step1_data_1_2_3.sh
 
 # 仅 1st（过滤后）+ 3sc
 BATCH_FILES=2048 WORKERS=32 bash work_record/step1_data_1_3.sh
 ```
 
 仅调试管线时可组合：`SKIP_MERGE=1`、`SKIP_FLATTEN=1`、`SKIP_SYNC=1` 等（见脚本内注释与环境变量默认值）。
+
+> **`--num_of_used_data` 警告**：训练脚本 `train_MNodes_torchrun_mfu_preindexparquet.py --num_of_used_data N` 取的是 `sorted(glob)[:N]`（**顺序前 N 个，不是随机抽样**）。小规模实验请生成独立的打平目录（如现有的 `all_flatten_data_test_100m`），**不要对全集套小 N**：会按 batch 边界切，稀有物种可能被完全丢失。
 
 ---
 
