@@ -12,9 +12,9 @@ export INPUT_1ST=${STAGE2_ROOT}/1st_pretrain_data_preprocessed_step4
 export INPUT_3SC=${STAGE2_ROOT}/3scbasecount_pretrain_data_preprocessed_step4
 
 export RUN_ID=${RUN_ID:-$(date +%Y%m%d_%H%M%S)}
-export FIRST_VIEW=${STAGE2_ROOT}/views_1_3/1st_no_human_mouse_${RUN_ID}
-export MERGED_DIR=${STAGE2_ROOT}/data_1_3_merged_full_no_1st_human_mouse_${RUN_ID}
-export FLAT_DIR=${STAGE2_ROOT}/data_1_3_flatten_data_full_no_1st_human_mouse_${RUN_ID}
+export FIRST_VIEW=${FIRST_VIEW:-${STAGE2_ROOT}/views_1_3/1st_no_human_mouse_${RUN_ID}}
+export MERGED_DIR=${MERGED_DIR:-${STAGE2_ROOT}/data_1_3_merged_full_no_1st_human_mouse_${RUN_ID}}
+export FLAT_DIR=${FLAT_DIR:-${STAGE2_ROOT}/data_1_3_flatten_data_full_no_1st_human_mouse_${RUN_ID}}
 
 export WORKERS=${WORKERS:-16}
 export ROWS_PER_FILE=${ROWS_PER_FILE:-16384}
