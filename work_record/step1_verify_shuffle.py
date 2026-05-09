@@ -11,7 +11,7 @@ import sys
 import numpy as np
 import pandas as pd
 from pathlib import Path
-from collections import Counter
+from collections import Counter, defaultdict
 from scipy import stats as sp_stats
 
 
@@ -187,6 +187,46 @@ def analyze_shuffle_quality(flat_dir: str, sample_files: int = 10):
                   f"({'suspicious: all rows in 1 file' if total_occurrences > 3 and files_with_sp == 1 else 'ok'})")
     else:
         print("  No rare species found in sampled files (all species appear frequently).")
+
+    # --- Species spread across file index (detects batch-mode segment clustering) ---
+    print(f"\n{'=' * 60}")
+    print("SPECIES SPREAD ACROSS FILE INDEX")
+    print("=" * 60)
+    print("Detects batch-mode segment clustering: a species whose input files all")
+    print("fall in a single shuffle batch will appear only in a contiguous range of")
+    print("output files; its spread across sampled file indices will be small.")
+    print("(Recommend sample_files >= 50 for meaningful spread resolution.)\n")
+
+    species_to_sample_indices = defaultdict(list)
+    for i, stat in enumerate(file_stats):
+        for sp in stat["species_counts"]:
+            species_to_sample_indices[sp].append(i)
+
+    n_samples = len(file_stats)
+    if n_samples >= 2:
+        ranked = sorted(
+            species_to_sample_indices.keys(),
+            key=lambda x: global_species_counts[x],
+            reverse=True,
+        )
+        for sp in ranked:
+            indices = species_to_sample_indices[sp]
+            spread = (max(indices) - min(indices)) / (n_samples - 1)
+            n_files_with_sp = len(indices)
+            if spread >= 0.85:
+                verdict = "uniform"
+            elif spread >= 0.5:
+                verdict = "moderate"
+            elif spread >= 0.05:
+                verdict = "BATCH SEGMENT"
+            else:
+                verdict = "NEAR-SINGLE BATCH"
+            print(
+                f"  species_id={sp:>3d}: "
+                f"{global_species_counts[sp]:>10,} rows, "
+                f"in {n_files_with_sp:>3d}/{n_samples} sampled files, "
+                f"spread={spread:.2f} [{verdict}]"
+            )
 
     # --- Global interpretation ---
     print(f"\n{'=' * 60}")

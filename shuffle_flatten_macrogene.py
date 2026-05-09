@@ -574,6 +574,10 @@ def write_batch_shuffled_chunks(
         df = read_all_data(batch_paths, workers)
         rows_seen += len(df)
 
+        if not pending.empty:
+            df = pd.concat([pending, df], ignore_index=True, copy=False)
+            pending = pd.DataFrame(columns=SCHEMA_COLUMNS)
+
         shuffle_seed = int((seed + batch_index) % (2**32 - 1))
         print(
             f"[INFO] Batch {batch_index + 1}/{num_batches}: "
@@ -581,10 +585,6 @@ def write_batch_shuffled_chunks(
             flush=True,
         )
         df = df.sample(frac=1, random_state=shuffle_seed).reset_index(drop=True)
-
-        if not pending.empty:
-            df = pd.concat([pending, df], ignore_index=True, copy=False)
-            pending = pd.DataFrame(columns=SCHEMA_COLUMNS)
 
         full_rows = (len(df) // rows_per_file) * rows_per_file
         iterator = range(0, full_rows, rows_per_file)
