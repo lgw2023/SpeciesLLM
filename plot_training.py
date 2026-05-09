@@ -76,6 +76,21 @@ def _dir_label(path: Path) -> str:
     return " · ".join(parts) if parts else name
 
 
+def _run_short_key(path: Path) -> str:
+    """Compact filesystem-safe key for a run dir, used to name the output folder.
+
+    training_output_100m_test_from_scratch_20260506_220944 → '100m_220944'
+    training_output_1b_test_from_scratch_20260507_010521   → '1b_010521'
+    """
+    name = path.name
+    size_m = re.search(r"_(\d+(?:\.\d+)?[mMbBkK](?:b|B)?)_", name)
+    size = size_m.group(1).lower() if size_m else ""
+    ts_m = re.search(r"_(\d{8})_(\d{6})$", name)
+    ts_suffix = ts_m.group(2) if ts_m else ""          # last 6 digits = HHMMSS
+    parts = [p for p in [size, ts_suffix] if p]
+    return "_".join(parts) if parts else name
+
+
 def _parse_args_from_log(log_path: Path) -> dict:
     """Extract the JSON args block written by the trainer at startup."""
     if not log_path.exists():
@@ -375,7 +390,7 @@ def main() -> None:
     parser.add_argument("--root", type=Path, default=Path(__file__).parent,
                         help="project root to search (default: script dir)")
     parser.add_argument("--out", type=Path, default=None,
-                        help="output directory for figures (default: <root>/figures/)")
+                        help="output directory for figures (default: <root>/figures/<run_keys>/)")
     parser.add_argument("--smooth", type=int, default=1, metavar="N",
                         help="box-car smoothing window for loss/lr (default 1 = off)")
     parser.add_argument("--rank", type=int, default=0,
@@ -420,34 +435,43 @@ def main() -> None:
     if not runs:
         sys.exit("No data could be loaded.")
 
-    out_dir = args.out if args.out else args.root.resolve() / "figures"
-    out_dir.mkdir(parents=True, exist_ok=True)
+    # Each run gets its own output folder, regardless of how many runs were loaded.
+    for run_dir in run_dirs:
+        label = _dir_label(run_dir)
+        if label not in runs:
+            continue
 
-    # overview figure
-    fig = make_figure(runs, smooth_window=args.smooth)
-    for ext in (".pdf", ".png"):
-        p = out_dir / f"training_curves{ext}"
-        fig.savefig(p, bbox_inches="tight")
-        print(f"Saved: {p}")
-    plt.close(fig)
+        single_run = {label: runs[label]}
 
-    # loss detail
-    if not args.no_detail:
-        fig2 = make_loss_detail_figure(runs, smooth_window=args.smooth)
+        if args.out:
+            out_dir = args.out / _run_short_key(run_dir)
+        else:
+            out_dir = args.root.resolve() / "figures" / _run_short_key(run_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        print(f"\n[{label}] → {out_dir}")
+
+        fig = make_figure(single_run, smooth_window=args.smooth)
         for ext in (".pdf", ".png"):
-            p = out_dir / f"loss_detail{ext}"
-            fig2.savefig(p, bbox_inches="tight")
-            print(f"Saved: {p}")
-        plt.close(fig2)
+            p = out_dir / f"training_curves{ext}"
+            fig.savefig(p, bbox_inches="tight")
+            print(f"  Saved: {p}")
+        plt.close(fig)
 
-    # timing breakdown
-    if not args.no_timing:
-        fig3 = make_timing_figure(runs, smooth_window=args.smooth)
-        for ext in (".pdf", ".png"):
-            p = out_dir / f"step_timing{ext}"
-            fig3.savefig(p, bbox_inches="tight")
-            print(f"Saved: {p}")
-        plt.close(fig3)
+        if not args.no_detail:
+            fig2 = make_loss_detail_figure(single_run, smooth_window=args.smooth)
+            for ext in (".pdf", ".png"):
+                p = out_dir / f"loss_detail{ext}"
+                fig2.savefig(p, bbox_inches="tight")
+                print(f"  Saved: {p}")
+            plt.close(fig2)
+
+        if not args.no_timing:
+            fig3 = make_timing_figure(single_run, smooth_window=args.smooth)
+            for ext in (".pdf", ".png"):
+                p = out_dir / f"step_timing{ext}"
+                fig3.savefig(p, bbox_inches="tight")
+                print(f"  Saved: {p}")
+            plt.close(fig3)
 
 
 if __name__ == "__main__":
