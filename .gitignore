@@ -84,3 +84,6 @@ Thumbs.db
 
 # Trae
 .trae/
+
+# Claude Code
+.claude/
