@@ -26,6 +26,7 @@ export SHUFFLE_BUCKETS=${SHUFFLE_BUCKETS:-16}
 export SKIP_MERGE=${SKIP_MERGE:-0}
 export SKIP_FLATTEN=${SKIP_FLATTEN:-0}
 export SKIP_EXISTING=${SKIP_EXISTING:-0}
+export SKIP_PARTITION_IF_EXISTS=${SKIP_PARTITION_IF_EXISTS:-0}
 
 # Multi-node data sync. Run this script on the first host in HOSTS.
 export HOSTS=${HOSTS:-7.150.12.45,7.150.15.14,7.150.14.170}
@@ -204,6 +205,9 @@ flatten_cmd=(
   --validate-all-schemas
   --keep-remainder
 )
+if [[ "$SKIP_PARTITION_IF_EXISTS" == "1" ]]; then
+  flatten_cmd+=(--skip-partition-if-exists)
+fi
 
 if [[ "$SKIP_MERGE" == "1" ]]; then
   echo "[INFO] SKIP_MERGE=1, reuse merged data: ${MERGED_DIR}"

@@ -190,6 +190,16 @@ def parse_args() -> argparse.Namespace:
         help="Keep external-shuffle temporary bucket files after success.",
     )
     parser.add_argument(
+        "--skip-partition-if-exists",
+        action="store_true",
+        help=(
+            "If --temp-dir already contains bucket_*_chunk_*.parquet files from "
+            "a previous successful partition phase, skip the partition phase and "
+            "go straight to the write phase. Useful for recovering from a write "
+            "phase failure without redoing the partition."
+        ),
+    )
+    parser.add_argument(
         "--max-files",
         type=int,
         default=0,
@@ -566,8 +576,37 @@ def _list_bucket_chunks(temp_dir: Path) -> Dict[int, List[Path]]:
     return result
 
 
+def _safe_take_chunk_rows(table: pa.Table, target_values: int = 1_500_000_000) -> int:
+    """Compute safe rows-per-take to avoid int32 offset overflow on list columns.
+
+    pa.list_<T> uses int32 offsets, capping the values buffer at 2^31 ≈ 2.15B
+    elements. For ``X: list<float64>`` with average list length L, ``table.take``
+    of N rows produces ~N*L values. We pick N so N*L stays under
+    ``target_values`` (default 1.5B; ~30% margin under 2^31).
+    """
+    max_avg_len = 0.0
+    for field in table.schema:
+        if pa.types.is_list(field.type):
+            col = table.column(field.name)
+            n_rows = col.length()
+            if n_rows == 0:
+                continue
+            total_values = sum(chunk.values.length() for chunk in col.chunks)
+            avg = total_values / n_rows
+            if avg > max_avg_len:
+                max_avg_len = avg
+    if max_avg_len <= 0:
+        return table.num_rows
+    return max(1, min(int(target_values / max_avg_len), table.num_rows))
+
+
 def _read_concat_sort_bucket_arrow(chunk_paths: List[Path]) -> Optional[pa.Table]:
     """Read all chunks for one bucket, concat, sort by random key, drop key column.
+
+    The take is done in sub-batches sized by ``_safe_take_chunk_rows`` to avoid
+    int32 offset overflow on the X: list<float64> column. Sub-results are
+    glued back as a ChunkedArray-based Table (preserves chunk boundaries —
+    each chunk independently fits in int32 offsets).
 
     Returns a pyarrow Table whose rows are in random order (a quantile-band slice
     of the global random-key shuffle). Returns None if the bucket is empty.
@@ -579,12 +618,23 @@ def _read_concat_sort_bucket_arrow(chunk_paths: List[Path]) -> Optional[pa.Table
     del tables
     if table.num_rows == 0:
         return None
+
     keys = table.column(SHUFFLE_KEY_COLUMN).combine_chunks().to_numpy(zero_copy_only=False)
     indices = np.argsort(keys, kind="stable")
     del keys
-    sorted_table = table.take(pa.array(indices))
-    del indices, table
-    return sorted_table.drop_columns([SHUFFLE_KEY_COLUMN])
+
+    table_no_key = table.drop_columns([SHUFFLE_KEY_COLUMN])
+    del table
+
+    take_rows = _safe_take_chunk_rows(table_no_key)
+    n = len(indices)
+    sub_tables: List[pa.Table] = []
+    for i in range(0, n, take_rows):
+        sub_idx = pa.array(indices[i:i + take_rows])
+        sub_tables.append(table_no_key.take(sub_idx))
+    del table_no_key, indices
+
+    return pa.concat_tables(sub_tables)
 
 
 def _materialize_table_copy(table: pa.Table) -> pa.Table:
@@ -840,23 +890,39 @@ def external_shuffle(
     overwrite: bool,
     workers: int = 1,
     pyarrow_threads_per_worker: int = 4,
+    skip_partition_if_exists: bool = False,
 ) -> None:
     if buckets <= 0:
         raise ValueError("--shuffle-buckets must be positive")
-    prepare_temp_dir(temp_dir, overwrite=overwrite)
+
+    existing_chunks = (
+        skip_partition_if_exists
+        and temp_dir.exists()
+        and any(temp_dir.glob("bucket_*_chunk_*.parquet"))
+    )
+    if existing_chunks:
+        print(
+            f"[INFO] External shuffle: reusing existing partition data under {temp_dir} "
+            f"(--skip-partition-if-exists). Skipping partition phase.",
+            flush=True,
+        )
+    else:
+        prepare_temp_dir(temp_dir, overwrite=overwrite)
+
     print(
         f"[INFO] External shuffle: buckets={buckets}, temp_dir={temp_dir}, seed={seed}, "
         f"workers={workers}, pyarrow_threads_per_worker={pyarrow_threads_per_worker}",
         flush=True,
     )
-    partition_external_shuffle_buckets(
-        files=files,
-        temp_dir=temp_dir,
-        buckets=buckets,
-        seed=seed,
-        workers=workers,
-        pyarrow_threads_per_worker=pyarrow_threads_per_worker,
-    )
+    if not existing_chunks:
+        partition_external_shuffle_buckets(
+            files=files,
+            temp_dir=temp_dir,
+            buckets=buckets,
+            seed=seed,
+            workers=workers,
+            pyarrow_threads_per_worker=pyarrow_threads_per_worker,
+        )
     write_external_shuffled_chunks(
         temp_dir=temp_dir,
         output_dir=output_dir,
@@ -941,6 +1007,7 @@ def main() -> None:
             overwrite=args.overwrite,
             workers=args.workers,
             pyarrow_threads_per_worker=args.pyarrow_threads_per_worker,
+            skip_partition_if_exists=args.skip_partition_if_exists,
         )
     else:
         df = read_all_data(files, args.workers)
