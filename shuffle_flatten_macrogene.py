@@ -41,6 +41,7 @@ import numpy as np
 import pandas as pd
 import psutil
 import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 try:
@@ -600,13 +601,120 @@ def _safe_take_chunk_rows(table: pa.Table, target_values: int = 1_500_000_000) -
     return max(1, min(int(target_values / max_avg_len), table.num_rows))
 
 
-def _read_concat_sort_bucket_arrow(chunk_paths: List[Path]) -> Optional[pa.Table]:
+def _safe_take_chunk_rows_for_tables(
+    tables: List[pa.Table],
+    target_values: int = 1_500_000_000,
+) -> int:
+    """Compute safe rows-per-take across a list of same-schema tables."""
+    total_rows = sum(table.num_rows for table in tables)
+    if total_rows == 0:
+        return 0
+
+    max_avg_len = 0.0
+    for field in tables[0].schema:
+        if pa.types.is_list(field.type):
+            total_values = 0
+            for table in tables:
+                col = table.column(field.name)
+                total_values += sum(len(chunk.values) for chunk in col.chunks)
+            avg = total_values / total_rows
+            if avg > max_avg_len:
+                max_avg_len = avg
+    if max_avg_len <= 0:
+        return total_rows
+    return max(1, min(int(target_values / max_avg_len), total_rows))
+
+
+def _table_record_batches_with_offsets(
+    tables: List[pa.Table],
+) -> Tuple[List[pa.RecordBatch], np.ndarray, np.ndarray]:
+    """Return record batches with their global row start/end offsets."""
+    batches: List[pa.RecordBatch] = []
+    starts: List[int] = []
+    ends: List[int] = []
+    row_offset = 0
+    for table in tables:
+        for batch in table.to_batches():
+            if batch.num_rows == 0:
+                continue
+            starts.append(row_offset)
+            row_offset += batch.num_rows
+            ends.append(row_offset)
+            batches.append(batch)
+    return batches, np.asarray(starts, dtype=np.int64), np.asarray(ends, dtype=np.int64)
+
+
+def _take_global_rows_from_batches(
+    batches: List[pa.RecordBatch],
+    batch_starts: np.ndarray,
+    batch_ends: np.ndarray,
+    global_indices: np.ndarray,
+) -> pa.Table:
+    """Take global row indices from record batches without taking a huge table.
+
+    ``pa.Table.take`` on a very large chunked ``list<float64>`` column can
+    concatenate source chunks internally and overflow int32 list offsets. This
+    helper only takes rows from the source record batch that owns each row, then
+    restores the requested global order using a small temporary order column.
+    """
+    try:
+        return _take_global_rows_from_batches_once(
+            batches, batch_starts, batch_ends, global_indices
+        )
+    except pa.ArrowInvalid as exc:
+        if "offset overflow" not in str(exc) or len(global_indices) <= 1:
+            raise
+        mid = len(global_indices) // 2
+        return pa.concat_tables([
+            _take_global_rows_from_batches(
+                batches, batch_starts, batch_ends, global_indices[:mid]
+            ),
+            _take_global_rows_from_batches(
+                batches, batch_starts, batch_ends, global_indices[mid:]
+            ),
+        ])
+
+
+def _take_global_rows_from_batches_once(
+    batches: List[pa.RecordBatch],
+    batch_starts: np.ndarray,
+    batch_ends: np.ndarray,
+    global_indices: np.ndarray,
+) -> pa.Table:
+    """Single-attempt implementation for _take_global_rows_from_batches."""
+    if len(global_indices) == 0:
+        return pa.Table.from_batches([], schema=pa.schema([]))
+
+    batch_ids = np.searchsorted(batch_ends, global_indices, side="right")
+    parts: List[pa.Table] = []
+    order_field = pa.field("__take_order", pa.int64())
+
+    for batch_id in np.unique(batch_ids):
+        positions = np.nonzero(batch_ids == batch_id)[0]
+        local_indices = global_indices[positions] - batch_starts[batch_id]
+        taken = batches[batch_id].take(pa.array(local_indices, type=pa.int64()))
+        part = pa.Table.from_batches([taken])
+        part = part.append_column(order_field, pa.array(positions, type=pa.int64()))
+        parts.append(part)
+
+    table = pa.concat_tables(parts)
+    if len(parts) > 1:
+        order = pc.sort_indices(table, sort_keys=[("__take_order", "ascending")])
+        table = table.take(order)
+    return table.drop_columns(["__take_order"])
+
+
+def _read_concat_sort_bucket_arrow(
+    chunk_paths: List[Path],
+    max_take_rows: Optional[int] = None,
+) -> Optional[pa.Table]:
     """Read all chunks for one bucket, concat, sort by random key, drop key column.
 
-    The take is done in sub-batches sized by ``_safe_take_chunk_rows`` to avoid
-    int32 offset overflow on the X: list<float64> column. Sub-results are
-    glued back as a ChunkedArray-based Table (preserves chunk boundaries —
-    each chunk independently fits in int32 offsets).
+    The take is done from source record batches, not from a concatenated table,
+    to avoid PyArrow internally concatenating a huge ``list<float64>`` column
+    and overflowing int32 list offsets. Sub-results are glued back as a
+    ChunkedArray-based Table (preserves chunk boundaries — each chunk
+    independently fits in int32 offsets).
 
     Returns a pyarrow Table whose rows are in random order (a quantile-band slice
     of the global random-key shuffle). Returns None if the bucket is empty.
@@ -614,25 +722,36 @@ def _read_concat_sort_bucket_arrow(chunk_paths: List[Path]) -> Optional[pa.Table
     if not chunk_paths:
         return None
     tables = [pq.read_table(p) for p in chunk_paths]
-    table = pa.concat_tables(tables)
-    del tables
-    if table.num_rows == 0:
+    total_rows = sum(table.num_rows for table in tables)
+    if total_rows == 0:
         return None
 
-    keys = table.column(SHUFFLE_KEY_COLUMN).combine_chunks().to_numpy(zero_copy_only=False)
+    key_arrays = [
+        table.column(SHUFFLE_KEY_COLUMN).combine_chunks().to_numpy(zero_copy_only=False)
+        for table in tables
+        if table.num_rows > 0
+    ]
+    keys = key_arrays[0] if len(key_arrays) == 1 else np.concatenate(key_arrays)
     indices = np.argsort(keys, kind="stable")
-    del keys
+    del keys, key_arrays
 
-    table_no_key = table.drop_columns([SHUFFLE_KEY_COLUMN])
-    del table
+    tables_no_key = [table.drop_columns([SHUFFLE_KEY_COLUMN]) for table in tables]
+    del tables
 
-    take_rows = _safe_take_chunk_rows(table_no_key)
+    take_rows = _safe_take_chunk_rows_for_tables(tables_no_key)
+    if max_take_rows is not None:
+        take_rows = min(take_rows, max_take_rows)
     n = len(indices)
+    batches, batch_starts, batch_ends = _table_record_batches_with_offsets(tables_no_key)
+    del tables_no_key
+
     sub_tables: List[pa.Table] = []
     for i in range(0, n, take_rows):
-        sub_idx = pa.array(indices[i:i + take_rows])
-        sub_tables.append(table_no_key.take(sub_idx))
-    del table_no_key, indices
+        sub_idx = indices[i:i + take_rows]
+        sub_tables.append(
+            _take_global_rows_from_batches(batches, batch_starts, batch_ends, sub_idx)
+        )
+    del batches, batch_starts, batch_ends, indices
 
     return pa.concat_tables(sub_tables)
 
@@ -688,7 +807,7 @@ def write_external_shuffled_chunks(
         )
 
     for bucket_id, chunk_paths in bucket_iter:
-        table = _read_concat_sort_bucket_arrow(chunk_paths)
+        table = _read_concat_sort_bucket_arrow(chunk_paths, max_take_rows=rows_per_file)
         if table is None:
             continue
         rows_seen += table.num_rows
