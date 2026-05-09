@@ -591,7 +591,7 @@ def _safe_take_chunk_rows(table: pa.Table, target_values: int = 1_500_000_000) -
             n_rows = col.length()
             if n_rows == 0:
                 continue
-            total_values = sum(chunk.values.length() for chunk in col.chunks)
+            total_values = sum(len(chunk.values) for chunk in col.chunks)
             avg = total_values / n_rows
             if avg > max_avg_len:
                 max_avg_len = avg
@@ -895,11 +895,21 @@ def external_shuffle(
     if buckets <= 0:
         raise ValueError("--shuffle-buckets must be positive")
 
-    existing_chunks = (
-        skip_partition_if_exists
-        and temp_dir.exists()
-        and any(temp_dir.glob("bucket_*_chunk_*.parquet"))
-    )
+    existing_bucket_chunks: Dict[int, List[Path]] = {}
+    if skip_partition_if_exists and temp_dir.exists():
+        existing_bucket_chunks = _list_bucket_chunks(temp_dir)
+    existing_chunks = bool(existing_bucket_chunks)
+    if existing_chunks and len(existing_bucket_chunks) != buckets:
+        bucket_ids = sorted(existing_bucket_chunks)
+        raise ValueError(
+            f"Existing partition data under {temp_dir} contains "
+            f"{len(existing_bucket_chunks)} bucket(s) "
+            f"(id range {bucket_ids[0]}..{bucket_ids[-1]}), but "
+            f"--shuffle-buckets={buckets}. This usually means _shuffle_tmp "
+            f"was created by a different SHUFFLE_BUCKETS value or is incomplete. "
+            f"Rerun without --skip-partition-if-exists, remove the temp dir, "
+            f"or set --shuffle-buckets to match the existing partition if intentional."
+        )
     if existing_chunks:
         print(
             f"[INFO] External shuffle: reusing existing partition data under {temp_dir} "
