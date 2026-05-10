@@ -33,9 +33,15 @@ import os
 import re
 import shutil
 import time
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from concurrent.futures import (
+    FIRST_COMPLETED,
+    ProcessPoolExecutor,
+    ThreadPoolExecutor,
+    as_completed,
+    wait,
+)
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, Iterator, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -704,27 +710,33 @@ def _take_global_rows_from_batches_once(
     return table.drop_columns(["__take_order"])
 
 
-def _read_concat_sort_bucket_arrow(
+def _iter_sorted_bucket_tables_arrow(
     chunk_paths: List[Path],
     max_take_rows: Optional[int] = None,
-) -> Optional[pa.Table]:
-    """Read all chunks for one bucket, concat, sort by random key, drop key column.
+    bucket_label: Optional[str] = None,
+) -> Iterator[pa.Table]:
+    """Yield sorted row blocks for one bucket, dropping the random key column.
 
     The take is done from source record batches, not from a concatenated table,
     to avoid PyArrow internally concatenating a huge ``list<float64>`` column
-    and overflowing int32 list offsets. Sub-results are glued back as a
-    ChunkedArray-based Table (preserves chunk boundaries — each chunk
-    independently fits in int32 offsets).
+    and overflowing int32 list offsets. Each yielded table independently fits in
+    int32 offsets and can be written immediately.
 
-    Returns a pyarrow Table whose rows are in random order (a quantile-band slice
-    of the global random-key shuffle). Returns None if the bucket is empty.
+    Yields pyarrow Tables whose rows are in random order (a quantile-band slice
+    of the global random-key shuffle). Yields nothing if the bucket is empty.
     """
     if not chunk_paths:
-        return None
+        return
     tables = [pq.read_table(p) for p in chunk_paths]
     total_rows = sum(table.num_rows for table in tables)
     if total_rows == 0:
-        return None
+        return
+    if bucket_label is not None:
+        print(
+            f"[INFO] External write bucket {bucket_label}: "
+            f"loaded rows={total_rows}; sorting shuffle keys",
+            flush=True,
+        )
 
     key_arrays = [
         table.column(SHUFFLE_KEY_COLUMN).combine_chunks().to_numpy(zero_copy_only=False)
@@ -742,17 +754,50 @@ def _read_concat_sort_bucket_arrow(
     if max_take_rows is not None:
         take_rows = min(take_rows, max_take_rows)
     n = len(indices)
+    block_count = math.ceil(n / take_rows)
+    if bucket_label is not None:
+        print(
+            f"[INFO] External write bucket {bucket_label}: rows={n} "
+            f"take_rows={take_rows} blocks={block_count}",
+            flush=True,
+        )
     batches, batch_starts, batch_ends = _table_record_batches_with_offsets(tables_no_key)
     del tables_no_key
 
-    sub_tables: List[pa.Table] = []
-    for i in range(0, n, take_rows):
-        sub_idx = indices[i:i + take_rows]
-        sub_tables.append(
-            _take_global_rows_from_batches(batches, batch_starts, batch_ends, sub_idx)
+    index_iter: Iterable[int] = range(0, n, take_rows)
+    if tqdm is not None:
+        index_iter = tqdm(
+            index_iter,
+            total=block_count,
+            desc=(
+                f"sort/take bucket {bucket_label}"
+                if bucket_label is not None
+                else "sort/take bucket rows"
+            ),
+            unit="block",
+            leave=False,
         )
-    del batches, batch_starts, batch_ends, indices
 
+    try:
+        for i in index_iter:
+            sub_idx = indices[i:i + take_rows]
+            yield _take_global_rows_from_batches(
+                batches, batch_starts, batch_ends, sub_idx
+            )
+    finally:
+        del batches, batch_starts, batch_ends, indices
+
+
+def _read_concat_sort_bucket_arrow(
+    chunk_paths: List[Path],
+    max_take_rows: Optional[int] = None,
+) -> Optional[pa.Table]:
+    """Read, sort, and concatenate one bucket. Intended for small tests."""
+    sub_tables: List[pa.Table] = []
+    for table in _iter_sorted_bucket_tables_arrow(chunk_paths, max_take_rows):
+        sub_tables.append(table)
+    if not sub_tables:
+        return None
     return pa.concat_tables(sub_tables)
 
 
@@ -806,67 +851,97 @@ def write_external_shuffled_chunks(
             unit="bucket",
         )
 
-    for bucket_id, chunk_paths in bucket_iter:
-        table = _read_concat_sort_bucket_arrow(chunk_paths, max_take_rows=rows_per_file)
-        if table is None:
-            continue
-        rows_seen += table.num_rows
+    write_executor: Optional[ThreadPoolExecutor] = (
+        ThreadPoolExecutor(max_workers=workers) if workers > 1 else None
+    )
+    write_futures = []
+    max_inflight_writes = max(1, workers * 2)
 
-        if pending is not None:
-            table = pa.concat_tables([pending, table])
-            pending = None
+    def wait_for_writes(force: bool = False) -> None:
+        nonlocal write_futures
+        if not write_futures:
+            return
+        if force:
+            done, pending_futures = wait(write_futures)
+        else:
+            done, pending_futures = wait(write_futures, return_when=FIRST_COMPLETED)
+        for future in done:
+            future.result()
+        write_futures = list(pending_futures)
 
-        n = table.num_rows
-        full_rows = (n // rows_per_file) * rows_per_file
-        chunks_in_bucket = full_rows // rows_per_file
+    def submit_write(table: pa.Table, output_path: Path) -> None:
+        if write_executor is None:
+            pq.write_table(table, output_path, compression=compression)
+            return
+        write_futures.append(
+            write_executor.submit(
+                pq.write_table,
+                table,
+                output_path,
+                compression=compression,
+            )
+        )
+        if len(write_futures) >= max_inflight_writes:
+            wait_for_writes()
 
-        chunk_args: List[Tuple[pa.Table, Path]] = []
-        for i in range(chunks_in_bucket):
-            start_row = i * rows_per_file
-            chunk_table = table.slice(start_row, rows_per_file)
+    try:
+        for bucket_id, chunk_paths in bucket_iter:
+            print(
+                f"[INFO] External write bucket {bucket_id}: "
+                f"partition_files={len(chunk_paths)}",
+                flush=True,
+            )
+            for table in _iter_sorted_bucket_tables_arrow(
+                chunk_paths,
+                max_take_rows=rows_per_file,
+                bucket_label=str(bucket_id),
+            ):
+                rows_seen += table.num_rows
+
+                if pending is not None:
+                    table = pa.concat_tables([pending, table])
+                    pending = None
+
+                n = table.num_rows
+                full_rows = (n // rows_per_file) * rows_per_file
+
+                for start_row in range(0, full_rows, rows_per_file):
+                    chunk_table = table.slice(start_row, rows_per_file)
+                    output_name = f"{output_prefix}{output_index}.parquet"
+                    output_path = output_dir / output_name
+                    submit_write(chunk_table, output_path)
+                    manifest_rows.append({
+                        "output_file": output_name,
+                        "start_row": rows_written,
+                        "end_row_exclusive": rows_written + rows_per_file,
+                        "num_rows": rows_per_file,
+                    })
+                    rows_written += rows_per_file
+                    output_index += 1
+
+                if full_rows < n:
+                    pending = _materialize_table_copy(table.slice(full_rows, n - full_rows))
+                del table
+                release_unused_memory()
+
+        dropped_rows = pending.num_rows if (pending is not None and drop_remainder) else 0
+        if not drop_remainder and pending is not None and pending.num_rows > 0:
             output_name = f"{output_prefix}{output_index}.parquet"
             output_path = output_dir / output_name
-            chunk_args.append((chunk_table, output_path))
+            submit_write(pending, output_path)
             manifest_rows.append({
                 "output_file": output_name,
                 "start_row": rows_written,
-                "end_row_exclusive": rows_written + rows_per_file,
-                "num_rows": rows_per_file,
+                "end_row_exclusive": rows_written + pending.num_rows,
+                "num_rows": pending.num_rows,
             })
-            rows_written += rows_per_file
+            rows_written += pending.num_rows
             output_index += 1
 
-        if chunk_args:
-            if workers <= 1:
-                for ct, op in chunk_args:
-                    pq.write_table(ct, op, compression=compression)
-            else:
-                with ThreadPoolExecutor(max_workers=workers) as executor:
-                    futures = [
-                        executor.submit(pq.write_table, ct, op, compression=compression)
-                        for ct, op in chunk_args
-                    ]
-                    for future in futures:
-                        future.result()
-
-        if full_rows < n:
-            pending = _materialize_table_copy(table.slice(full_rows, n - full_rows))
-        del table, chunk_args
-        release_unused_memory()
-
-    dropped_rows = pending.num_rows if (pending is not None and drop_remainder) else 0
-    if not drop_remainder and pending is not None and pending.num_rows > 0:
-        output_name = f"{output_prefix}{output_index}.parquet"
-        output_path = output_dir / output_name
-        pq.write_table(pending, output_path, compression=compression)
-        manifest_rows.append({
-            "output_file": output_name,
-            "start_row": rows_written,
-            "end_row_exclusive": rows_written + pending.num_rows,
-            "num_rows": pending.num_rows,
-        })
-        rows_written += pending.num_rows
-        output_index += 1
+        wait_for_writes(force=True)
+    finally:
+        if write_executor is not None:
+            write_executor.shutdown(wait=True)
 
     print(
         f"[INFO] total rows={rows_seen}, usable rows={rows_written}, "
