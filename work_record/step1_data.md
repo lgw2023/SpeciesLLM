@@ -261,16 +261,15 @@ batch_root/
 
 ---
 
-## 多机同步与 `all_flatten_data` 符号链接
+## 多机同步
 
 脚本默认：
 
 - `HOSTS`：逗号分隔主机列表（默认脚本内写了三台内网 IP）；在列表**第一台**上执行本脚本时，会把本地 `FLAT_DIR` 用 `rsync` 同步到其余主机同名路径。
 - `LOCAL_HOST`：默认为 `HOSTS` 中第一台；与本机 IP 匹配的主机会跳过 rsync。
 - `SKIP_SYNC=1`：不做远端同步。
-- `UPDATE_DATA_PATH_LINK`（默认 1）：在本机与各远端将 **`DATA_PATH_LINK`**（默认 `${STAGE2_ROOT}/all_flatten_data`）更新为指向本次的 `FLAT_DIR` 的 symlink（若目标已存在且**不是** symlink 则跳过覆盖以免破坏实体目录）。
 
-因此：**训练配置里常见的「统一路径」是 `.../all_flatten_data`**，实际指向某次跑出来的 `..._${RUN_ID}` 打平目录。
+训练侧请直接在配置里写出本次的 `FLAT_DIR`（`..._${RUN_ID}` 打平目录的绝对路径），不要依赖任何统一软链接。
 
 ---
 
@@ -284,11 +283,11 @@ batch_root/
 | `1st_pretrain_data_preprocessed_step4/` | ~174 GB |
 | `2nd_pretrain_data_preprocessed_step4/` | ~577 GB |
 | `3scbasecount_pretrain_data_preprocessed_step4/` | ~520 GB |
-| 当前 `all_flatten_data` → 的打平目录 `all_flatten_data_full_no_1st_human_mouse_20260506_165244/` | ~1.2 TB |
+| 第一次三路全量打平目录 `all_flatten_data_full_no_1st_human_mouse_20260506_165244/` | ~1.2 TB |
 
 各批次物种清单及每个物种目录下的 **`macrogene_*.parquet` 个数**见上文「**物种列表与各物种下 macrogene 分片数量**」；合并 / 打平目录的文件类型与数量见该节表格。
 
-**当前默认 symlink 指向的那套打平数据**（同上 RUN_ID）：
+**该次跑出来的打平数据**（同上 RUN_ID）：
 
 - `shuffle_manifest.csv` 中 `num_rows` 合计约 **459,680,768**（约 **4.60×10⁸** 条样本；与 `ROWS_PER_FILE=16384` 及 `--keep-remainder` 一致）
 

@@ -36,8 +36,6 @@ export SSH_KEY=${SSH_KEY:-}
 export SSH_PASSWORD=${SSH_PASSWORD:-}
 export SSH_EXTRA_OPTS=${SSH_EXTRA_OPTS:-}
 export SKIP_SYNC=${SKIP_SYNC:-0}
-export UPDATE_DATA_PATH_LINK=${UPDATE_DATA_PATH_LINK:-1}
-export DATA_PATH_LINK=${DATA_PATH_LINK:-${STAGE2_ROOT}/all_flatten_data}
 
 SSH_OPTS=()
 if [[ -n "$SSH_KEY" ]]; then
@@ -89,30 +87,13 @@ rsync_ssh_cmd() {
 sync_flat_dir_to_host() {
   local host="$1"
   echo "[SYNC] flatten data -> ${host}:${FLAT_DIR}"
-  ssh_run "$host" "mkdir -p $(shell_quote "$FLAT_DIR") $(shell_quote "$(dirname "$DATA_PATH_LINK")")"
+  ssh_run "$host" "mkdir -p $(shell_quote "$FLAT_DIR")"
   if [[ -n "$SSH_PASSWORD" ]]; then
     SSHPASS="$SSH_PASSWORD" rsync -e "$(rsync_ssh_cmd)" -aH --info=progress2 --delete \
       "${FLAT_DIR%/}/" "${SSH_USER}@${host}:${FLAT_DIR%/}/"
   else
     rsync -e "$(rsync_ssh_cmd)" -aH --info=progress2 --delete \
       "${FLAT_DIR%/}/" "${SSH_USER}@${host}:${FLAT_DIR%/}/"
-  fi
-
-  if [[ "$UPDATE_DATA_PATH_LINK" == "1" ]]; then
-    ssh_run "$host" \
-      "if [ -e $(shell_quote "$DATA_PATH_LINK") ] && [ ! -L $(shell_quote "$DATA_PATH_LINK") ]; then echo '[SYNC] skip remote DATA_PATH_LINK because it exists and is not a symlink: ${DATA_PATH_LINK}'; else ln -sfn $(shell_quote "$FLAT_DIR") $(shell_quote "$DATA_PATH_LINK"); fi"
-  fi
-}
-
-update_local_data_path_link() {
-  if [[ "$UPDATE_DATA_PATH_LINK" != "1" ]]; then
-    return
-  fi
-  if [[ -e "$DATA_PATH_LINK" && ! -L "$DATA_PATH_LINK" ]]; then
-    echo "[SYNC] skip local DATA_PATH_LINK because it exists and is not a symlink: ${DATA_PATH_LINK}"
-  else
-    ln -sfn "$FLAT_DIR" "$DATA_PATH_LINK"
-    echo "[SYNC] local DATA_PATH_LINK -> ${FLAT_DIR}"
   fi
 }
 
@@ -223,11 +204,9 @@ else
   "${flatten_cmd[@]}"
 fi
 
-update_local_data_path_link
 sync_flat_dir_to_workers
 
 echo "[DONE] flatten data: ${FLAT_DIR}"
-echo "[DONE] training DATA_PATH_LINK: ${DATA_PATH_LINK}"
 
 
 # 第一次生成全量数据
@@ -236,7 +215,7 @@ echo "[DONE] training DATA_PATH_LINK: ${DATA_PATH_LINK}"
 # 第二次生成全量数据（external 全局打乱，桶数默认 16；ProcessPool 并行 partition）
 # 先用 --max-files 200 跑 smoke test：在脚本里加 SHUFFLE_EXTRA_ARGS 或临时改 flatten_cmd
 # RUN_ID=20260506_165244 \
-# SKIP_MERGE=1 SKIP_SYNC=1 UPDATE_DATA_PATH_LINK=0 \
+# SKIP_MERGE=1 SKIP_SYNC=1 \
 # FLAT_DIR=/data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData/all_flatten_data_full_no_1st_human_mouse_20260506_165244_external \
 # SHUFFLE_MODE=external WORKERS=32 \
 # bash work_record/step1_data_1_2_3.sh
