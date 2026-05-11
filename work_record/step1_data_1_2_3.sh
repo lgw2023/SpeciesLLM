@@ -1,16 +1,96 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ "${1:-}" != "--__speciesllm-step1-data-1-2-3-clean-env" ]]; then
+  exec /usr/bin/env -i \
+    HOME="${HOME:-/root}" \
+    PATH="/data/miniconda3/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+    LANG=C.UTF-8 \
+    bash "$0" --__speciesllm-step1-data-1-2-3-clean-env "$@"
+fi
+shift
+
 cd /data/disk1/SpeciesLLM
 
-set -a; source .env; set +a
+die() {
+  echo "[ERROR] $*" >&2
+  exit 1
+}
 
-export PYTHON_BIN=/data/miniconda3/bin/python
-export STAGE2_ROOT=/data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData
+usage() {
+  cat <<'USAGE'
+Usage:
+  bash work_record/step1_data_1_2_3.sh [KEY=VALUE ...]
 
-export INPUT_1ST=${STAGE2_ROOT}/1st_pretrain_data_preprocessed_step4
-export INPUT_2ND=${STAGE2_ROOT}/2nd_pretrain_data_preprocessed_step4
-export INPUT_3SC=${STAGE2_ROOT}/3scbasecount_pretrain_data_preprocessed_step4
+Runtime overrides must be passed after the script path as KEY=VALUE arguments.
+Inherited shell environment variables are ignored. Values from .env are loaded
+before command-line overrides.
+USAGE
+}
+
+is_allowed_cli_var() {
+  case "$1" in
+    ENV_FILE|PYTHON_BIN|STAGE2_ROOT|INPUT_1ST|INPUT_2ND|INPUT_3SC|\
+    RUN_ID|FIRST_VIEW|MERGED_DIR|FLAT_DIR|WORKERS|ROWS_PER_FILE|\
+    SHUFFLE_SEED|SHUFFLE_MODE|BATCH_FILES|SHUFFLE_BUCKETS|\
+    SKIP_MERGE|SKIP_FLATTEN|SKIP_EXISTING|SKIP_PARTITION_IF_EXISTS|\
+    HOSTS|LOCAL_HOST|SSH_USER|SSH_KEY|SSH_PASSWORD|SSH_EXTRA_OPTS|SKIP_SYNC)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+CLI_KEYS=()
+CLI_VALUES=()
+ENV_FILE=".env"
+for arg in "$@"; do
+  case "$arg" in
+    -h|--help|help)
+      usage
+      exit 0
+      ;;
+    *=*)
+      key="${arg%%=*}"
+      value="${arg#*=}"
+      [[ "$key" =~ ^[A-Z_][A-Z0-9_]*$ ]] || die "Invalid KEY=VALUE argument: $arg"
+      is_allowed_cli_var "$key" || die "Unsupported runtime variable: $key"
+      if ((${#CLI_KEYS[@]} > 0)); then
+        for existing_key in "${CLI_KEYS[@]}"; do
+          [[ "$existing_key" != "$key" ]] || die "Duplicate runtime variable: $key"
+        done
+      fi
+      CLI_KEYS+=("$key")
+      CLI_VALUES+=("$value")
+      [[ "$key" == "ENV_FILE" ]] && ENV_FILE="$value"
+      ;;
+    *)
+      usage >&2
+      die "Unsupported argument: $arg. Use KEY=VALUE arguments after the script path."
+      ;;
+  esac
+done
+
+if [[ -f "$ENV_FILE" ]]; then
+  set -a
+  # shellcheck source=/dev/null
+  source "$ENV_FILE"
+  set +a
+fi
+
+for i in "${!CLI_KEYS[@]}"; do
+  printf -v "${CLI_KEYS[$i]}" "%s" "${CLI_VALUES[$i]}"
+  export "${CLI_KEYS[$i]}"
+done
+
+export PYTHON_BIN=${PYTHON_BIN:-/data/miniconda3/bin/python}
+export STAGE2_ROOT=${STAGE2_ROOT:-/data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData}
+
+export INPUT_1ST=${INPUT_1ST:-${STAGE2_ROOT}/1st_pretrain_data_preprocessed_step4}
+export INPUT_2ND=${INPUT_2ND:-${STAGE2_ROOT}/2nd_pretrain_data_preprocessed_step4}
+export INPUT_3SC=${INPUT_3SC:-${STAGE2_ROOT}/3scbasecount_pretrain_data_preprocessed_step4}
 
 export RUN_ID=${RUN_ID:-$(date +%Y%m%d_%H%M%S)}
 export FIRST_VIEW=${FIRST_VIEW:-${STAGE2_ROOT}/views/1st_no_human_mouse_${RUN_ID}}
@@ -210,12 +290,12 @@ echo "[DONE] flatten data: ${FLAT_DIR}"
 
 
 # 第一次生成全量数据
-# BATCH_FILES=2048 WORKERS=32 bash work_record/step1_data_1_2_3.sh
+# bash work_record/step1_data_1_2_3.sh BATCH_FILES=2048 WORKERS=32
 
 # 第二次生成全量数据（external 全局打乱，桶数默认 16；ProcessPool 并行 partition）
 # 先用 --max-files 200 跑 smoke test：在脚本里加 SHUFFLE_EXTRA_ARGS 或临时改 flatten_cmd
-# RUN_ID=20260506_165244 \
-# SKIP_MERGE=1 SKIP_SYNC=1 \
-# FLAT_DIR=/data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData/all_flatten_data_full_no_1st_human_mouse_20260506_165244_external \
-# SHUFFLE_MODE=external WORKERS=32 \
-# bash work_record/step1_data_1_2_3.sh
+# bash work_record/step1_data_1_2_3.sh \
+#   RUN_ID=20260506_165244 \
+#   SKIP_MERGE=1 SKIP_SYNC=1 \
+#   FLAT_DIR=/data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData/all_flatten_data_full_no_1st_human_mouse_20260506_165244_external \
+#   SHUFFLE_MODE=external WORKERS=32

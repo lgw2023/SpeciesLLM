@@ -13,6 +13,22 @@ set -euo pipefail
 #
 #   # Collect/check one finished job. Reuse the same RUN_ID used for launch.
 #   bash work_record/step3_model_100M.sh ACTION=collect EXPERIMENT_NAME=data_1_2_3 RUN_ID=20260507_120000 DATA_PATH=/data/.../your_flatten_dir
+#
+# Notes:
+#   - The script re-execs itself with env -i, so exported shell variables are ignored.
+#   - Values from .env are loaded before command-line overrides.
+#   - Runtime overrides must be passed after the script path as KEY=VALUE arguments.
+#   - Do not use KEY=VALUE before the script path; those inherited environment values
+#     are intentionally discarded.
+
+if [[ "${1:-}" != "--__speciesllm-step3-100m-clean-env" ]]; then
+  exec /usr/bin/env -i \
+    HOME="${HOME:-/root}" \
+    PATH="/data/miniconda3/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+    LANG=C.UTF-8 \
+    bash "$0" --__speciesllm-step3-100m-clean-env "$@"
+fi
+shift
 
 cd /data/disk1/SpeciesLLM
 
@@ -22,12 +38,12 @@ die() {
 }
 
 usage() {
-  sed -n '4,21p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '4,22p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 is_allowed_cli_var() {
   case "$1" in
-    ACTION|RUN_ID|EXPERIMENT_NAME|DATA_PATH|OUT_PATH|COMMAND_DIR|LOG_SUBDIR|\
+    ENV_FILE|ACTION|RUN_ID|EXPERIMENT_NAME|DATA_PATH|OUT_PATH|COMMAND_DIR|LOG_SUBDIR|\
     PROJECT_ROOT|WORKDIR|PYTHON_BIN|PRETRAIN_CHECKS_PY|STAGE2_ROOT|\
     HOSTS|MASTER_ADDR|MASTER_PORT|NNODES|NPROC_PER_NODE|\
     EMB_ROOT|EMB_PATH|MODEL_CONFIG_JSON|SKIP_DATA_SYNC|\
@@ -47,6 +63,22 @@ is_allowed_cli_var() {
       ;;
   esac
 }
+
+ENV_FILE=".env"
+for arg in "$@"; do
+  case "$arg" in
+    ENV_FILE=*)
+      ENV_FILE="${arg#*=}"
+      ;;
+  esac
+done
+
+if [[ -f "$ENV_FILE" ]]; then
+  set -a
+  # shellcheck source=/dev/null
+  source "$ENV_FILE"
+  set +a
+fi
 
 CLI_KEYS=()
 for arg in "$@"; do
@@ -79,6 +111,11 @@ cli_has() {
   return 1
 }
 
+RUN_ID_CONFIGURED=0
+OUT_PATH_CONFIGURED=0
+[[ -n "${RUN_ID+x}" ]] && RUN_ID_CONFIGURED=1
+[[ -n "${OUT_PATH+x}" ]] && OUT_PATH_CONFIGURED=1
+
 run_smoke() {
   [[ -d "$DATA_PATH" ]] || die "Missing DATA_PATH: ${DATA_PATH}"
 
@@ -104,8 +141,12 @@ run_smoke() {
   echo "[INFO] OUT_PATH=${OUT_PATH}"
   echo "[INFO] COMMAND_DIR=${COMMAND_DIR}"
   echo "[INFO] LOG_SUBDIR=${LOG_SUBDIR}"
+  echo "[INFO] MODEL_CONFIG_JSON=${MODEL_CONFIG_JSON}"
+  echo "[INFO] BATCH_SIZE=${BATCH_SIZE}"
+  echo "[INFO] GRADIENT_ACCUMULATION_STEPS=${GRADIENT_ACCUMULATION_STEPS}"
 
   bash scripts/smoke_500m_3node.sh \
+    ENV_FILE="$ENV_FILE" \
     MODEL_SCALE=100m \
     PREP_ACTION=commands \
     RESET_TEST_OUTPUT=0 \
@@ -249,12 +290,12 @@ case "$ACTION" in
     ;;
 esac
 
-if ! cli_has DATA_PATH; then
-  die "DATA_PATH=/path/to/flatten_data is required. The script accepts exactly one generic data directory per run."
+if [[ -z "${DATA_PATH:-}" ]]; then
+  die "DATA_PATH=/path/to/flatten_data is required. Pass it after the script path or define it in .env."
 fi
 
-if [[ "$ACTION" == "collect" ]] && ! cli_has RUN_ID && ! cli_has OUT_PATH; then
-  die "ACTION=collect requires RUN_ID from the launch command, or an explicit OUT_PATH."
+if [[ "$ACTION" == "collect" && "$RUN_ID_CONFIGURED" != "1" && "$OUT_PATH_CONFIGURED" != "1" ]]; then
+  die "ACTION=collect requires RUN_ID from the launch command, or an explicit OUT_PATH. Pass it after the script path or define it in .env."
 fi
 
 run_smoke

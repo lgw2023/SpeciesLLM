@@ -1,5 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
 
+if [[ "${1:-}" != "--__speciesllm-step2-500m-clean-env" ]]; then
+  exec /usr/bin/env -i \
+    HOME="${HOME:-/root}" \
+    PATH="/data/miniconda3/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+    LANG=C.UTF-8 \
+    bash "$0" --__speciesllm-step2-500m-clean-env "$@"
+fi
+shift
 
+if [[ "$#" -gt 0 ]]; then
+  echo "[ERROR] Unsupported arguments: $*" >&2
+  echo "Use this script without environment-style overrides; training parameters are passed explicitly inside the script." >&2
+  exit 1
+fi
 
 # 500M 模型三节点的训练测试
 

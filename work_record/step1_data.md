@@ -297,16 +297,16 @@ batch_root/
 
 ```bash
 # 三路合并 + 打平（默认 SHUFFLE_MODE=batch；批内充分 shuffle，批间粗粒度混合）
-BATCH_FILES=2048 WORKERS=32 bash work_record/step1_data_1_2_3.sh
+bash work_record/step1_data_1_2_3.sh BATCH_FILES=2048 WORKERS=32
 
 # 严格全局打乱（external 模式：稀有物种均匀分布到所有 output 文件；总 IO 约 2×、临时空间 ≈1× 输出体量）
-SHUFFLE_MODE=external WORKERS=32 bash work_record/step1_data_1_2_3.sh
+bash work_record/step1_data_1_2_3.sh SHUFFLE_MODE=external WORKERS=32
 
 # 仅 1st（过滤后）+ 3sc
-BATCH_FILES=2048 WORKERS=32 bash work_record/step1_data_1_3.sh
+bash work_record/step1_data_1_3.sh BATCH_FILES=2048 WORKERS=32
 ```
 
-仅调试管线时可组合：`SKIP_MERGE=1`、`SKIP_FLATTEN=1`、`SKIP_SYNC=1` 等（见脚本内注释与环境变量默认值）。
+仅调试管线时可组合：`SKIP_MERGE=1`、`SKIP_FLATTEN=1`、`SKIP_SYNC=1` 等；这些覆盖项必须写在脚本路径后面，或者写入 `.env`。
 
 > **`--num_of_used_data` 警告**：训练脚本 `train_MNodes_torchrun_mfu_preindexparquet.py --num_of_used_data N` 取的是 `sorted(glob)[:N]`（**顺序前 N 个，不是随机抽样**）。小规模实验请生成独立的打平目录（如现有的 `all_flatten_data_test_100m`），**不要对全集套小 N**：会按 batch 边界切，稀有物种可能被完全丢失。
 
