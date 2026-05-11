@@ -6,7 +6,7 @@ cd /data/disk1/SpeciesLLM
 set -a; source .env; set +a
 
 export PYTHON_BIN=/data/miniconda3/bin/python
-export STAGE2_ROOT=/data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData
+export STAGE2_ROOT=/data/disk2/SpeciesLLM_obs/Stage2_SpeciesLLMData
 
 export INPUT_1ST=${STAGE2_ROOT}/1st_pretrain_data_preprocessed_step4
 export INPUT_3SC=${STAGE2_ROOT}/3scbasecount_pretrain_data_preprocessed_step4
@@ -25,6 +25,7 @@ export SHUFFLE_BUCKETS=${SHUFFLE_BUCKETS:-512}
 export SKIP_MERGE=${SKIP_MERGE:-0}
 export SKIP_FLATTEN=${SKIP_FLATTEN:-0}
 export SKIP_EXISTING=${SKIP_EXISTING:-0}
+export SKIP_PARTITION_IF_EXISTS=${SKIP_PARTITION_IF_EXISTS:-0}
 
 # Multi-node data sync. Run this script on the first host in HOSTS.
 export HOSTS=${HOSTS:-7.150.12.45,7.150.15.14,7.150.14.170}
@@ -182,6 +183,9 @@ flatten_cmd=(
   --validate-all-schemas
   --keep-remainder
 )
+if [[ "$SKIP_PARTITION_IF_EXISTS" == "1" ]]; then
+  flatten_cmd+=(--skip-partition-if-exists)
+fi
 
 if [[ "$SKIP_MERGE" == "1" ]]; then
   echo "[INFO] SKIP_MERGE=1, reuse merged data: ${MERGED_DIR}"
