@@ -18,7 +18,12 @@ Usage:
 
     --smooth N        box-car window for loss curves (default 1 = off)
     --rank R          which GPU rank file to read (default 0)
+    --max-steps N     only plot rows up to update_step N (default: all)
     --no-detail       skip the loss-components breakdown figure
+    --no-timing       skip the per-step timing breakdown figure
+    --compare         when 2+ dirs are given, also produce a single overlay
+                      figure under figures/compare_<keys>/
+    --no-individual   skip per-run figures (useful together with --compare)
     --out DIR         output directory (default <root>/figures/)
 """
 
@@ -406,6 +411,11 @@ def main() -> None:
                         help="skip per-step timing breakdown figure")
     parser.add_argument("--max-steps", type=int, default=None, metavar="N",
                         help="only plot rows up to update_step N (default: all)")
+    parser.add_argument("--compare", action="store_true",
+                        help="when 2+ dirs are given, also overlay all runs in a single "
+                             "comparison figure (output to figures/compare_<keys>/)")
+    parser.add_argument("--no-individual", action="store_true",
+                        help="skip per-run figures (only useful together with --compare)")
     args = parser.parse_args()
 
     # resolve run directories
@@ -442,22 +452,9 @@ def main() -> None:
     if not runs:
         sys.exit("No data could be loaded.")
 
-    # Each run gets its own output folder, regardless of how many runs were loaded.
-    for run_dir in run_dirs:
-        label = _dir_label(run_dir)
-        if label not in runs:
-            continue
-
-        single_run = {label: runs[label]}
-
-        if args.out:
-            out_dir = args.out / _run_short_key(run_dir)
-        else:
-            out_dir = args.root.resolve() / "figures" / _run_short_key(run_dir)
+    def _save_figures(runs_dict: dict[str, dict], out_dir: Path) -> None:
         out_dir.mkdir(parents=True, exist_ok=True)
-        print(f"\n[{label}] → {out_dir}")
-
-        fig = make_figure(single_run, smooth_window=args.smooth)
+        fig = make_figure(runs_dict, smooth_window=args.smooth)
         for ext in (".pdf", ".png"):
             p = out_dir / f"training_curves{ext}"
             fig.savefig(p, bbox_inches="tight")
@@ -465,7 +462,7 @@ def main() -> None:
         plt.close(fig)
 
         if not args.no_detail:
-            fig2 = make_loss_detail_figure(single_run, smooth_window=args.smooth)
+            fig2 = make_loss_detail_figure(runs_dict, smooth_window=args.smooth)
             for ext in (".pdf", ".png"):
                 p = out_dir / f"loss_detail{ext}"
                 fig2.savefig(p, bbox_inches="tight")
@@ -473,12 +470,35 @@ def main() -> None:
             plt.close(fig2)
 
         if not args.no_timing:
-            fig3 = make_timing_figure(single_run, smooth_window=args.smooth)
+            fig3 = make_timing_figure(runs_dict, smooth_window=args.smooth)
             for ext in (".pdf", ".png"):
                 p = out_dir / f"step_timing{ext}"
                 fig3.savefig(p, bbox_inches="tight")
                 print(f"  Saved: {p}")
             plt.close(fig3)
+
+    base_out = args.out if args.out else (args.root.resolve() / "figures")
+
+    # Per-run figures
+    if not args.no_individual:
+        for run_dir in run_dirs:
+            label = _dir_label(run_dir)
+            if label not in runs:
+                continue
+            out_dir = base_out / _run_short_key(run_dir)
+            print(f"\n[{label}] → {out_dir}")
+            _save_figures({label: runs[label]}, out_dir)
+
+    # Overlay comparison figure across all loaded runs
+    if args.compare and len(runs) >= 2:
+        compare_key = "_vs_".join(
+            _run_short_key(d) for d in run_dirs if _dir_label(d) in runs
+        )
+        out_dir = base_out / f"compare_{compare_key}"
+        print(f"\n[compare {len(runs)} runs] → {out_dir}")
+        _save_figures(runs, out_dir)
+    elif args.compare and len(runs) < 2:
+        print("\n[compare] skipped: need at least 2 runs to overlay", file=sys.stderr)
 
 
 if __name__ == "__main__":
