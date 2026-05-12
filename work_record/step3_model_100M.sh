@@ -310,3 +310,16 @@ run_smoke
 #   ACTION=launch \
 #   EXPERIMENT_NAME=data_1_3 \
 #   DATA_PATH=/data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData/data_1_3_flatten_data_full_no_1st_human_mouse_xxx
+
+# RUN_ID=$(date +%Y%m%d_%H%M%S)
+# bash work_record/step3_model_100M.sh \
+#   ACTION=launch \
+#   RUN_ID="$RUN_ID" \
+#   EXPERIMENT_NAME=data_1_3_stable \
+#   DATA_PATH=/data/disk2/SpeciesLLM_obs/Stage2_SpeciesLLMData/data_1_3_flatten_data_full_no_1st_human_mouse_20260510_225349 \
+#   GRAD_CLIP=0.5 \
+#   LEARNING_RATE=0.000005 \
+#   MIN_LR=0.0000005 \
+#   WARMUP_RATIO=0.10 \
+#   BETA2=0.98 \
+#   NAN_CHECK_INTERVAL=10
