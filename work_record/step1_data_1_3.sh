@@ -287,4 +287,8 @@ echo "[DONE] flatten data: ${FLAT_DIR}"
 
 
 # usage:
-# bash work_record/step1_data_1_3.sh BATCH_FILES=2048 WORKERS=32
+# bash work_record/step1_data_1_3.sh BATCH_FILES=2048 WORKERS=32 SHUFFLE_BUCKETS=16 
+# bash work_record/step1_data_1_3.sh RUN_ID=20260510_225349 \
+# SKIP_MERGE=1 SKIP_SYNC=1 SKIP_PARTITION_IF_EXISTS=1 \
+# FLAT_DIR=/data/disk2/SpeciesLLM_obs/Stage2_SpeciesLLMData/data_1_3_flatten_data_full_no_1st_human_mouse_20260510_225349_external \
+# SHUFFLE_MODE=external SHUFFLE_BUCKETS=16 WORKERS=32
