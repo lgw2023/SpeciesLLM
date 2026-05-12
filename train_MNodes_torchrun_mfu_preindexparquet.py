@@ -1474,7 +1474,7 @@ def argumentparser():
     parser.add_argument('--runtime_attn_implementation',
                         type=str,
                         choices=["eager", "sdpa"],
-                        default=None,
+                        default="sdpa",
                         help="Optional runtime override for config._attn_implementation.")
     parser.add_argument('--runtime_explicit_zero_prob',
                         type=str,

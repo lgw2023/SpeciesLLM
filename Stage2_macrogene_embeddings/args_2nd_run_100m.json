@@ -30,7 +30,7 @@
   "cell_emb_style": "cls",
   "do_mvc": true,
   "do_cls": false,
-  "_attn_implementation": "eager",
+  "_attn_implementation": "sdpa",
   "mvc_decoder_style": "inner product",
   "num_cls": 1,
   "chunk_size_feed_forward": 0,
