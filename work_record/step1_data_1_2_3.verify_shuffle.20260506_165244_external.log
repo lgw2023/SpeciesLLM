@@ -1,0 +1,88 @@
+Total output files: 28057
+Sampling 1000 files for verification
+
+--- all_flatten_part_0.parquet ---
+  Rows: 16,384  |  Unique species: 27
+  Change ratio:  observed=0.5814  expected=0.5841  delta=-0.0027
+  Mean run len:  observed=1.72  expected=1.79  delta=-0.068
+  Max run len:   13
+  Runs test (top2 species): z=-0.900  p=0.3680  (pass)
+  Top species: [(5, 8376), (8, 6417), (9, 310), (22, 287), (6, 263)]
+
+...
+
+--- all_flatten_part_9999.parquet ---
+  Rows: 16,384  |  Unique species: 29
+  Change ratio:  observed=0.5846  expected=0.5806  delta=+0.0040
+  Mean run len:  observed=1.71  expected=1.80  delta=-0.089
+  Max run len:   16
+  Runs test (top2 species): z=+1.435  p=0.1514  (pass)
+  Top species: [(5, 8439), (8, 6409), (9, 322), (22, 264), (6, 238)]
+
+============================================================
+PER-FILE SHUFFLE QUALITY
+============================================================
+  Mean (observed - expected) change ratio: -0.00019
+  Files with significant clustering (p<0.01): 13/1000
+
+============================================================
+RARE SPECIES DISTRIBUTION ACROSS FILES
+============================================================
+Verifies that rare species aren't all clustered in a few output files.
+
+  species_id=17: 4894 rows across 992/1000 files  (ok)
+  species_id=28: 3908 rows across 980/1000 files  (ok)
+  species_id=19: 3780 rows across 975/1000 files  (ok)
+  species_id=4: 3527 rows across 969/1000 files  (ok)
+  species_id=13: 2699 rows across 929/1000 files  (ok)
+  species_id=0: 1569 rows across 802/1000 files  (ok)
+  species_id=18: 1043 rows across 662/1000 files  (ok)
+  species_id=27: 298 rows across 263/1000 files  (ok)
+
+============================================================
+SPECIES SPREAD ACROSS FILE INDEX
+============================================================
+Detects batch-mode segment clustering: a species whose input files all
+fall in a single shuffle batch will appear only in a contiguous range of
+output files; its spread across sampled file indices will be small.
+(Recommend sample_files >= 50 for meaningful spread resolution.)
+
+  species_id=  5:  8,379,774 rows, in 1000/1000 sampled files, spread=1.00 [uniform]
+  species_id=  8:  6,388,604 rows, in 1000/1000 sampled files, spread=1.00 [uniform]
+  species_id=  9:    332,727 rows, in 1000/1000 sampled files, spread=1.00 [uniform]
+  species_id= 22:    312,212 rows, in 1000/1000 sampled files, spread=1.00 [uniform]
+  species_id=  6:    244,510 rows, in 1000/1000 sampled files, spread=1.00 [uniform]
+  species_id= 15:    162,026 rows, in 1000/1000 sampled files, spread=1.00 [uniform]
+  species_id=  7:     90,287 rows, in 1000/1000 sampled files, spread=1.00 [uniform]
+  species_id=  1:     69,462 rows, in 1000/1000 sampled files, spread=1.00 [uniform]
+  species_id= 16:     62,530 rows, in 1000/1000 sampled files, spread=1.00 [uniform]
+  species_id= 23:     57,123 rows, in 1000/1000 sampled files, spread=1.00 [uniform]
+  species_id=  3:     56,615 rows, in 1000/1000 sampled files, spread=1.00 [uniform]
+  species_id= 12:     55,223 rows, in 1000/1000 sampled files, spread=1.00 [uniform]
+  species_id= 11:     27,253 rows, in 1000/1000 sampled files, spread=1.00 [uniform]
+  species_id= 20:     25,820 rows, in 1000/1000 sampled files, spread=1.00 [uniform]
+  species_id= 14:     23,623 rows, in 1000/1000 sampled files, spread=1.00 [uniform]
+  species_id= 21:     17,811 rows, in 1000/1000 sampled files, spread=1.00 [uniform]
+  species_id=  2:     17,491 rows, in 1000/1000 sampled files, spread=1.00 [uniform]
+  species_id= 25:     14,582 rows, in 1000/1000 sampled files, spread=1.00 [uniform]
+  species_id= 24:      9,833 rows, in 1000/1000 sampled files, spread=1.00 [uniform]
+  species_id= 26:      9,437 rows, in 1000/1000 sampled files, spread=1.00 [uniform]
+  species_id= 10:      5,339 rows, in 998/1000 sampled files, spread=1.00 [uniform]
+  species_id= 17:      4,894 rows, in 992/1000 sampled files, spread=1.00 [uniform]
+  species_id= 28:      3,908 rows, in 980/1000 sampled files, spread=1.00 [uniform]
+  species_id= 19:      3,780 rows, in 975/1000 sampled files, spread=1.00 [uniform]
+  species_id=  4:      3,527 rows, in 969/1000 sampled files, spread=1.00 [uniform]
+  species_id= 13:      2,699 rows, in 929/1000 sampled files, spread=1.00 [uniform]
+  species_id=  0:      1,569 rows, in 802/1000 sampled files, spread=1.00 [uniform]
+  species_id= 18:      1,043 rows, in 662/1000 sampled files, spread=1.00 [uniform]
+  species_id= 27:        298 rows, in 263/1000 sampled files, spread=1.00 [uniform]
+
+============================================================
+INTERPRETATION
+============================================================
+  Species 5+8 make up 14,768,378 / 16,384,000 rows (90.1%).
+  With this imbalance, expected change_ratio ≈ 0.5841 in a perfectly random shuffle.
+
+  ✓ Shuffle looks correct.
+    Observed change_ratio matches random expectation (delta=-0.0002).
+    No evidence of species clustering within output files.
