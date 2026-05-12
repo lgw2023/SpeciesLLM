@@ -127,7 +127,7 @@ def _make_subtitle(train_args: dict) -> str:
 
 # ── data loading ──────────────────────────────────────────────────────────────
 
-def load_run(run_dir: Path, prefer_rank: int = 0) -> Optional[dict]:
+def load_run(run_dir: Path, prefer_rank: int = 0, max_steps: Optional[int] = None) -> Optional[dict]:
     """Load all metric rows from one training-output directory.
 
     Returns a dict with:
@@ -135,6 +135,8 @@ def load_run(run_dir: Path, prefer_rank: int = 0) -> Optional[dict]:
         'loss'  — subset where loss_total is not null (logged every log_interval)
         'args'  — dict of training hyper-parameters (from log.0-0.txt)
         'label' — human-readable run label
+
+    If ``max_steps`` is given, rows with ``update_step > max_steps`` are dropped.
     """
     # Find epoch-0 (or any epoch) metrics file for the requested rank
     pattern = re.compile(rf"metrics\.(\d+)-{prefer_rank}\.jsonl")
@@ -169,6 +171,9 @@ def load_run(run_dir: Path, prefer_rank: int = 0) -> Optional[dict]:
         return None
 
     df_all = pd.DataFrame(records).sort_values("batch_index").reset_index(drop=True)
+
+    if max_steps is not None and "update_step" in df_all.columns:
+        df_all = df_all[df_all["update_step"] <= max_steps].reset_index(drop=True)
 
     # loss rows: logged every log_interval steps (loss_total is non-null)
     if "loss_total" in df_all.columns:
@@ -399,6 +404,8 @@ def main() -> None:
                         help="skip loss-components detail figure")
     parser.add_argument("--no-timing", action="store_true",
                         help="skip per-step timing breakdown figure")
+    parser.add_argument("--max-steps", type=int, default=None, metavar="N",
+                        help="only plot rows up to update_step N (default: all)")
     args = parser.parse_args()
 
     # resolve run directories
@@ -415,7 +422,7 @@ def main() -> None:
 
     runs: dict[str, dict] = {}
     for run_dir in run_dirs:
-        result = load_run(run_dir, prefer_rank=args.rank)
+        result = load_run(run_dir, prefer_rank=args.rank, max_steps=args.max_steps)
         if result is None:
             print(f"  [skip] no usable data in {run_dir.name}", file=sys.stderr)
             continue
