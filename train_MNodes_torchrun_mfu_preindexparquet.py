@@ -756,6 +756,9 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
     t_temp_10_sum_sync = 0
 
     t_temp_0 = time.time()
+    last_completed_epoch = 0
+    last_completed_step = 0
+    last_completed_loss = 0.0
     for epoch in range(args.epoch):
 
         # Uncomment this if use DistributedSampler
@@ -1226,6 +1229,10 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
                 break
 
         total_loss = (total_loss_tensor / max(1, processed_batches)).item()
+        if processed_batches > 0:
+            last_completed_epoch = epoch
+            last_completed_step = batch_index + 1
+            last_completed_loss = total_loss
         loss_info = f"Node: {NODE_RANK}, Rank: {rank}, Epoch [{epoch + 1}/{args.epoch}], average loss is: {total_loss:.4f} | Learning rate is: {lr}"
         logger.info(loss_info)
         if adaptive_state is not None:
@@ -1261,9 +1268,9 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
     if args.skip_final_save:
         logger.info("skip_final_save=true")
     elif ddp:
-        save_model(model.module, optimizer, args.epoch+1, 0, 0, out_dir, rank, NODE_RANK, s3_remote_dir_path=args.s3_remote_dir_path, logger=logger)
+        save_model(model.module, optimizer, last_completed_epoch, last_completed_step, last_completed_loss, out_dir, rank, NODE_RANK, s3_remote_dir_path=args.s3_remote_dir_path, logger=logger)
     else:
-        save_model(model, optimizer, args.epoch+1, 0, 0, out_dir, rank, NODE_RANK, s3_remote_dir_path=args.s3_remote_dir_path, logger=logger)
+        save_model(model, optimizer, last_completed_epoch, last_completed_step, last_completed_loss, out_dir, rank, NODE_RANK, s3_remote_dir_path=args.s3_remote_dir_path, logger=logger)
     save_log_to_s3(args, out_dir, NODE_RANK, rank, logger=logger)
     cleanup_non_master_checkpoints(out_dir, NODE_RANK, rank, ddp, args, logger=logger)
 

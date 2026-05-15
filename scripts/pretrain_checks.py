@@ -411,9 +411,9 @@ def check_training(args: argparse.Namespace) -> None:
         if len(metrics_logs) < args.world_size:
             warnings.append(f"expected metrics jsonl logs for {args.world_size} ranks, found {len(metrics_logs)}")
 
-        final_epoch = args.epoch + 1
+        final_epoch = args.epoch - 1
         final_pattern = re.compile(
-            rf"SC-node-\d+-rank-\d+-epoch-{final_epoch:02d}-step-0-loss-0\.000000\.pt$"
+            rf"SC-node-\d+-rank-\d+-epoch-{final_epoch:02d}-step-\d+-loss-\d+\.\d+\.pt$"
         )
         final_weights = [p for p in weights if final_pattern.search(p.name)]
         if len(final_weights) < args.world_size:
