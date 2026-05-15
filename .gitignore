@@ -61,6 +61,7 @@ papers/
 training_log/
 training_output/
 training_output_*/
+training_output_*.zip
 
 # Logs and outputs
 *.log
