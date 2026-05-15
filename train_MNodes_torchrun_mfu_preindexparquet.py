@@ -1616,8 +1616,8 @@ def argumentparser():
                         help="Static global L2 grad-norm clip. Used as fallback during adaptive warmup or when adaptive is off. 0 disables.")
     parser.add_argument('--adaptive_grad_clip',
                         type=str2bool,
-                        default=False,
-                        help="Enable EMA-based adaptive grad-norm clipping + skip-on-spike. Default false preserves current behavior.")
+                        default=True,
+                        help="Enable EMA-based adaptive grad-norm clipping + skip-on-spike. Pass --adaptive_grad_clip=false to disable.")
     parser.add_argument('--grad_clip_ema_beta',
                         type=float,
                         default=0.98,
