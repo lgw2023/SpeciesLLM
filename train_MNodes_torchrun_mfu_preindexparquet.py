@@ -82,6 +82,13 @@ METRIC_FIELDNAMES = [
     "samples_per_s",
     "tokens_per_s",
     "mfu",
+    "grad_norm_raw",
+    "grad_norm_ema",
+    "grad_clip_threshold",
+    "grad_skip_threshold",
+    "grad_action",
+    "skipped",
+    "skipped_count_cum",
     "cluster_loss_total_mean",
     "cluster_loss_total_min",
     "cluster_loss_total_max",
@@ -156,6 +163,60 @@ def json_default(value):
     if isinstance(value, (np.ndarray,)):
         return value.tolist()
     return str(value)
+
+
+class AdaptiveGradClipState:
+    """EMA-based adaptive global-norm clipping with hard skip on spikes.
+
+    The grad norm fed to clip_grad_norm_ already reflects the DDP-synchronized
+    gradients, so it is identical on every rank. The EMA / decision logic here
+    therefore stays bit-identical across the cluster without any extra
+    all_reduce — every rank takes the same branch.
+
+    Three-tier rule (after warmup):
+        norm <= clip_threshold     -> pass through
+        clip_threshold < norm <= skip_threshold -> clip (rescale)
+        norm > skip_threshold or non-finite     -> skip optimizer.step
+
+    During warmup the static --grad_clip is used as the clip threshold and only
+    non-finite grads are skipped; the EMA is still updated so it is ready when
+    warmup ends.
+    """
+
+    def __init__(self, beta, clip_ratio, skip_ratio, min_clip, max_clip, warmup_steps, static_clip):
+        self.beta = float(beta)
+        self.clip_ratio = float(clip_ratio)
+        self.skip_ratio = float(skip_ratio)
+        self.min_clip = float(min_clip)
+        self.max_clip = float(max_clip)
+        self.warmup_steps = max(0, int(warmup_steps))
+        self.static_clip = float(static_clip) if static_clip and static_clip > 0 else 1.0
+        self.ema = None
+        self.observed = 0
+        self.skipped = 0
+
+    def warmup_done(self):
+        return self.ema is not None and self.observed >= self.warmup_steps
+
+    def thresholds(self):
+        if not self.warmup_done():
+            return self.static_clip, float("inf")
+        clip = max(self.min_clip, min(self.max_clip, self.ema * self.clip_ratio))
+        skip = self.ema * self.skip_ratio
+        return clip, skip
+
+    def update(self, raw_norm):
+        if not math.isfinite(raw_norm):
+            return
+        if self.ema is None:
+            contribution = raw_norm
+        else:
+            contribution = min(raw_norm, self.ema * self.clip_ratio)
+        if self.ema is None:
+            self.ema = contribution
+        else:
+            self.ema = self.beta * self.ema + (1.0 - self.beta) * contribution
+        self.observed += 1
 
 
 class StreamingMetricsWriter:
@@ -658,6 +719,31 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
     )
     lr = optimizer.param_groups[0]["lr"]
 
+    adaptive_state = None
+    if args.adaptive_grad_clip:
+        adaptive_state = AdaptiveGradClipState(
+            beta=args.grad_clip_ema_beta,
+            clip_ratio=args.grad_clip_ratio,
+            skip_ratio=args.grad_skip_ratio,
+            min_clip=args.grad_clip_min,
+            max_clip=args.grad_clip_max,
+            warmup_steps=args.grad_clip_warmup_steps,
+            static_clip=grad_clip if grad_clip != 0.0 else 1.0,
+        )
+        logger.info(
+            "adaptive_grad_clip=on beta=%.4f clip_ratio=%.2f skip_ratio=%.2f min_clip=%.4f "
+            "max_clip=%.4f warmup_steps=%s static_fallback=%.4f",
+            adaptive_state.beta,
+            adaptive_state.clip_ratio,
+            adaptive_state.skip_ratio,
+            adaptive_state.min_clip,
+            adaptive_state.max_clip,
+            adaptive_state.warmup_steps,
+            adaptive_state.static_clip,
+        )
+    else:
+        logger.info("adaptive_grad_clip=off static_grad_clip=%.4f", grad_clip)
+
     t_temp_1_sum_lr = 0
     t_temp_2_sum_data = 0
     t_temp_3_sum_batchdata = 0
@@ -915,6 +1001,12 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
             #         print(f"WARNING: {name} grad is None! ^^^^^^^^^^^^^^^^^^^^^^")
             t_temp_9_step_update_grad = time.time()
             t_temp_10_sync = 0
+            grad_norm_raw_value = None
+            grad_norm_ema_value = None
+            grad_clip_threshold_value = None
+            grad_skip_threshold_value = None
+            grad_action = "no_step"
+            skipped_this_step = False
             if should_step:
                 t_temp_1_lr = time.time()
                 lr = get_lr(update_step,
@@ -927,13 +1019,72 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
                 t_temp_1_lr = time.time() - t_temp_1_lr
                 t_temp_1_sum_lr += t_temp_1_lr
 
-                if grad_clip != 0.0:
+                if adaptive_state is not None:
+                    clip_threshold, skip_threshold = adaptive_state.thresholds()
+                    grad_clip_threshold_value = clip_threshold
+                    grad_skip_threshold_value = (
+                        skip_threshold if math.isfinite(skip_threshold) else None
+                    )
                     scaler.unscale_(optimizer)
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
-
-                scaler.step(optimizer)
-                scaler.update()
-                optimizer.zero_grad()
+                    raw_norm_tensor = torch.nn.utils.clip_grad_norm_(
+                        model.parameters(),
+                        max_norm=clip_threshold,
+                        error_if_nonfinite=False,
+                    )
+                    raw_norm = float(raw_norm_tensor.detach())
+                    grad_norm_raw_value = raw_norm
+                    if not math.isfinite(raw_norm):
+                        grad_action = "skip_nan"
+                        skipped_this_step = True
+                    elif math.isfinite(skip_threshold) and raw_norm > skip_threshold:
+                        grad_action = "skip_norm"
+                        skipped_this_step = True
+                    elif raw_norm > clip_threshold:
+                        grad_action = "clip"
+                    else:
+                        grad_action = "pass"
+                    if skipped_this_step:
+                        adaptive_state.skipped += 1
+                        logger.warning(
+                            "grad_skip update_step=%s raw_norm=%.4f clip_threshold=%.4f "
+                            "skip_threshold=%s ema=%s reason=%s",
+                            update_step,
+                            raw_norm,
+                            clip_threshold,
+                            (f"{skip_threshold:.4f}" if math.isfinite(skip_threshold) else "inf"),
+                            (f"{adaptive_state.ema:.4f}" if adaptive_state.ema is not None else "n/a"),
+                            grad_action,
+                        )
+                    else:
+                        scaler.step(optimizer)
+                        adaptive_state.update(raw_norm)
+                    scaler.update()
+                    optimizer.zero_grad()
+                    grad_norm_ema_value = adaptive_state.ema
+                elif grad_clip != 0.0:
+                    scaler.unscale_(optimizer)
+                    raw_norm_tensor = torch.nn.utils.clip_grad_norm_(
+                        model.parameters(),
+                        max_norm=grad_clip,
+                        error_if_nonfinite=False,
+                    )
+                    raw_norm = float(raw_norm_tensor.detach())
+                    grad_norm_raw_value = raw_norm
+                    grad_clip_threshold_value = grad_clip
+                    if not math.isfinite(raw_norm):
+                        grad_action = "skip_nan"
+                    elif raw_norm > grad_clip:
+                        grad_action = "clip"
+                    else:
+                        grad_action = "pass"
+                    scaler.step(optimizer)
+                    scaler.update()
+                    optimizer.zero_grad()
+                else:
+                    grad_action = "pass"
+                    scaler.step(optimizer)
+                    scaler.update()
+                    optimizer.zero_grad()
                 update_step += 1
                 # print(f"rank: {rank} step update zero_grad done")
                 if should_log_memory:
@@ -1022,6 +1173,13 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
                 "samples_per_s": samples_per_s,
                 "tokens_per_s": tokens_per_s,
                 "mfu": mfu_value,
+                "grad_norm_raw": grad_norm_raw_value,
+                "grad_norm_ema": grad_norm_ema_value,
+                "grad_clip_threshold": grad_clip_threshold_value,
+                "grad_skip_threshold": grad_skip_threshold_value,
+                "grad_action": grad_action,
+                "skipped": skipped_this_step,
+                "skipped_count_cum": (adaptive_state.skipped if adaptive_state is not None else None),
                 **cluster_summary,
             }
             metrics_writer.write(metric_row)
@@ -1070,6 +1228,14 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
         total_loss = (total_loss_tensor / max(1, processed_batches)).item()
         loss_info = f"Node: {NODE_RANK}, Rank: {rank}, Epoch [{epoch + 1}/{args.epoch}], average loss is: {total_loss:.4f} | Learning rate is: {lr}"
         logger.info(loss_info)
+        if adaptive_state is not None:
+            logger.info(
+                "adaptive_grad_clip_summary epoch=%s ema=%s observed=%s skipped=%s",
+                epoch + 1,
+                (f"{adaptive_state.ema:.4f}" if adaptive_state.ema is not None else "n/a"),
+                adaptive_state.observed,
+                adaptive_state.skipped,
+            )
         time_checker = (
                         f"Node: {NODE_RANK} "
                         f"Rank: {rank} "
@@ -1439,7 +1605,36 @@ def argumentparser():
                         default=0.95)
     parser.add_argument('--grad_clip',
                         type=float,
-                        default=1.0)
+                        default=1.0,
+                        help="Static global L2 grad-norm clip. Used as fallback during adaptive warmup or when adaptive is off. 0 disables.")
+    parser.add_argument('--adaptive_grad_clip',
+                        type=str2bool,
+                        default=False,
+                        help="Enable EMA-based adaptive grad-norm clipping + skip-on-spike. Default false preserves current behavior.")
+    parser.add_argument('--grad_clip_ema_beta',
+                        type=float,
+                        default=0.98,
+                        help="EMA smoothing factor for tracking grad-norm baseline. Higher = smoother / slower to react.")
+    parser.add_argument('--grad_clip_ratio',
+                        type=float,
+                        default=3.0,
+                        help="Adaptive clip threshold = ema * grad_clip_ratio. Grads with norm above this get rescaled.")
+    parser.add_argument('--grad_skip_ratio',
+                        type=float,
+                        default=10.0,
+                        help="Skip threshold = ema * grad_skip_ratio. Updates with norm above this are dropped entirely (no optimizer.step).")
+    parser.add_argument('--grad_clip_min',
+                        type=float,
+                        default=0.5,
+                        help="Lower bound on the adaptive clip threshold (prevents over-tight clipping when EMA is small).")
+    parser.add_argument('--grad_clip_max',
+                        type=float,
+                        default=1000.0,
+                        help="Upper bound on the adaptive clip threshold (prevents runaway thresholds during transient spikes).")
+    parser.add_argument('--grad_clip_warmup_steps',
+                        type=int,
+                        default=200,
+                        help="Number of optimizer steps to observe before adaptive thresholds take over. Static --grad_clip is used during warmup.")
     parser.add_argument('--compile',
                         type=bool,
                         default=False)
