@@ -86,6 +86,9 @@ METRIC_FIELDNAMES = [
     "grad_norm_ema",
     "grad_clip_threshold",
     "grad_skip_threshold",
+    "grad_skip_max",
+    "grad_hard_raw_norm_limit",
+    "grad_ema_contribution_cap",
     "grad_action",
     "skipped",
     "skipped_count_cum",
@@ -181,19 +184,21 @@ class AdaptiveGradClipState:
         clip_threshold < norm <= skip_threshold -> clip (rescale)
         norm > skip_threshold or non-finite     -> skip optimizer.step
 
-    During warmup the static --grad_clip is used as the clip threshold and only
-    non-finite grads are skipped; the EMA is still updated so it is ready when
-    warmup ends.
+    During warmup the static --grad_clip is used as the clip threshold; only
+    non-finite grads and the optional hard raw-norm fuse are skipped. The EMA
+    is still updated so it is ready when warmup ends.
 
-    EMA contribution is bounded by ``min(raw_norm, ema*clip_ratio, max_clip)``:
+    EMA contribution is bounded by ``min(raw_norm, ema*clip_ratio)`` plus an
+    optional cap derived from ``skip_max / skip_ratio``:
       * ``ema*clip_ratio`` stops a single spike from hijacking the EMA.
-      * ``max_clip`` stops a *slow* runaway from ratcheting the EMA past the
-        controller's own clip ceiling — the failure mode we hit in prod, where
-        EMA crept from 0 to 3e9 (1000× past max_clip=1000) while every step
-        was being "passed through clipping", silently breaking training. With
-        the ``max_clip`` cap, skip_threshold = ema*skip_ratio is naturally
-        bounded by ``max_clip*skip_ratio`` and the slow-runaway wedge cannot
-        happen.
+      * ``skip_max / skip_ratio`` (when ``skip_max`` is set) stops a slow
+        runaway from ratcheting the skip threshold above the configured fuse.
+
+    ``max_clip`` is deliberately NOT used to cap the EMA. The clip ceiling is
+    the size of the optimizer update after rescaling; the raw grad norm can be
+    many orders of magnitude larger for this model. Tying the EMA to
+    ``max_clip`` makes a 1e8-scale natural raw norm look catastrophic after
+    warmup and causes false skip cascades.
 
     Safety nets (all opt-in, default to off via 0 / None):
       * ``max_consecutive_skips``: abort after N consecutive skipped optimizer
@@ -201,16 +206,16 @@ class AdaptiveGradClipState:
         and never recovers" case, e.g. when params have drifted into a
         catastrophic basin.
       * ``ema_runaway_factor``: abort when ``ema > ema_runaway_factor *
-        max_clip``. With the in-update ``max_clip`` cap above this is now
-        defensive (it cannot fire in normal operation), but it remains useful
-        if a future change reintroduces an unbounded EMA path.
+        ema_contribution_cap``. Active only when ``skip_max`` is configured,
+        because the EMA cap is derived from the skip fuse, not from max_clip.
       * ``hard_raw_norm_limit``: abort whenever a single raw_norm reading
         exceeds this absolute cap. Useful as a "physical fuse" — pick a value
         many orders of magnitude above the normal regime.
     """
 
     def __init__(self, beta, clip_ratio, skip_ratio, min_clip, max_clip, warmup_steps, static_clip,
-                 max_consecutive_skips=0, ema_runaway_factor=0.0, hard_raw_norm_limit=0.0):
+                 skip_max=0.0, max_consecutive_skips=0, ema_runaway_factor=0.0,
+                 hard_raw_norm_limit=0.0):
         self.beta = float(beta)
         self.clip_ratio = float(clip_ratio)
         self.skip_ratio = float(skip_ratio)
@@ -218,9 +223,15 @@ class AdaptiveGradClipState:
         self.max_clip = float(max_clip)
         self.warmup_steps = max(0, int(warmup_steps))
         self.static_clip = float(static_clip) if static_clip and static_clip > 0 else 1.0
+        self.skip_max = max(0.0, float(skip_max))
         self.max_consecutive_skips = max(0, int(max_consecutive_skips))
         self.ema_runaway_factor = max(0.0, float(ema_runaway_factor))
         self.hard_raw_norm_limit = max(0.0, float(hard_raw_norm_limit))
+        if self.skip_max > 0.0 and self.skip_ratio > 0.0 and math.isfinite(self.skip_ratio):
+            self.ema_contribution_cap = self.skip_max / self.skip_ratio
+        else:
+            self.ema_contribution_cap = 0.0
+        self.last_ema_contribution = None
         self.ema = None
         self.observed = 0
         self.skipped = 0
@@ -235,9 +246,18 @@ class AdaptiveGradClipState:
 
     def thresholds(self):
         if not self.warmup_done():
-            return self.static_clip, float("inf")
-        clip = max(self.min_clip, min(self.max_clip, self.ema * self.clip_ratio))
-        skip = self.ema * self.skip_ratio
+            clip = self.static_clip
+            skip = float("inf")
+        else:
+            clip = max(self.min_clip, min(self.max_clip, self.ema * self.clip_ratio))
+            if self.skip_ratio > 0.0 and math.isfinite(self.skip_ratio):
+                skip = self.ema * self.skip_ratio
+            else:
+                skip = float("inf")
+            if self.skip_max > 0.0:
+                skip = min(skip, self.skip_max)
+        if self.hard_raw_norm_limit > 0.0:
+            skip = min(skip, self.hard_raw_norm_limit)
         return clip, skip
 
     def update(self, raw_norm):
@@ -251,11 +271,9 @@ class AdaptiveGradClipState:
             # Spike protection: a single big grad can lift the contribution at
             # most to ``ema*clip_ratio``.
             contribution = min(raw_norm, self.ema * self.clip_ratio)
-        # Hard ceiling: the EMA must never grow past ``max_clip``. Without this
-        # the EMA can climb exponentially while every step is being "passed
-        # through clipping" -- the silent runaway we hit in prod.
-        if self.max_clip > 0.0:
-            contribution = min(contribution, self.max_clip)
+        if self.ema_contribution_cap > 0.0:
+            contribution = min(contribution, self.ema_contribution_cap)
+        self.last_ema_contribution = contribution
         if self.ema is None:
             self.ema = contribution
         else:
@@ -297,10 +315,11 @@ class AdaptiveGradClipState:
                     % (self.consecutive_skips, self.max_consecutive_skips))
         if (self.ema_runaway_factor > 0.0
                 and self.ema is not None
-                and self.max_clip > 0.0
-                and self.ema > self.max_clip * self.ema_runaway_factor):
-            return ("ema=%.4e > ema_runaway_factor=%.2f * max_clip=%.4e (adaptive controller has decoupled)"
-                    % (self.ema, self.ema_runaway_factor, self.max_clip))
+                and self.ema_contribution_cap > 0.0
+                and self.ema > self.ema_contribution_cap * self.ema_runaway_factor):
+            return ("ema=%.4e > ema_runaway_factor=%.2f * ema_contribution_cap=%.4e "
+                    "(adaptive controller has decoupled)"
+                    % (self.ema, self.ema_runaway_factor, self.ema_contribution_cap))
         return None
 
 
@@ -814,24 +833,28 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
             max_clip=args.grad_clip_max,
             warmup_steps=args.grad_clip_warmup_steps,
             static_clip=grad_clip if grad_clip != 0.0 else 1.0,
+            skip_max=args.grad_skip_max,
             max_consecutive_skips=args.grad_clip_max_consecutive_skips,
             ema_runaway_factor=args.grad_clip_ema_runaway_factor,
             hard_raw_norm_limit=args.grad_clip_hard_raw_norm_limit,
         )
         logger.info(
             "adaptive_grad_clip=on beta=%.4f clip_ratio=%.2f skip_ratio=%.2f min_clip=%.4f "
-            "max_clip=%.4f warmup_steps=%s static_fallback=%.4f "
-            "max_consecutive_skips=%s ema_runaway_factor=%.2f hard_raw_norm_limit=%.4e",
+            "max_clip=%.4f skip_max=%.4e warmup_steps=%s static_fallback=%.4f "
+            "max_consecutive_skips=%s ema_runaway_factor=%.2f hard_raw_norm_limit=%.4e "
+            "ema_contribution_cap=%.4e",
             adaptive_state.beta,
             adaptive_state.clip_ratio,
             adaptive_state.skip_ratio,
             adaptive_state.min_clip,
             adaptive_state.max_clip,
+            adaptive_state.skip_max,
             adaptive_state.warmup_steps,
             adaptive_state.static_clip,
             adaptive_state.max_consecutive_skips,
             adaptive_state.ema_runaway_factor,
             adaptive_state.hard_raw_norm_limit,
+            adaptive_state.ema_contribution_cap,
         )
     else:
         logger.info("adaptive_grad_clip=off static_grad_clip=%.4f", grad_clip)
@@ -1100,6 +1123,9 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
             grad_norm_ema_value = None
             grad_clip_threshold_value = None
             grad_skip_threshold_value = None
+            grad_skip_max_value = None
+            grad_hard_raw_norm_limit_value = None
+            grad_ema_contribution_cap_value = None
             grad_action = "no_step"
             skipped_this_step = False
             if should_step:
@@ -1119,6 +1145,19 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
                     grad_clip_threshold_value = clip_threshold
                     grad_skip_threshold_value = (
                         skip_threshold if math.isfinite(skip_threshold) else None
+                    )
+                    grad_skip_max_value = (
+                        adaptive_state.skip_max if adaptive_state.skip_max > 0.0 else None
+                    )
+                    grad_hard_raw_norm_limit_value = (
+                        adaptive_state.hard_raw_norm_limit
+                        if adaptive_state.hard_raw_norm_limit > 0.0
+                        else None
+                    )
+                    grad_ema_contribution_cap_value = (
+                        adaptive_state.ema_contribution_cap
+                        if adaptive_state.ema_contribution_cap > 0.0
+                        else None
                     )
                     scaler.unscale_(optimizer)
                     raw_norm_tensor = torch.nn.utils.clip_grad_norm_(
@@ -1307,6 +1346,9 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
                 "grad_norm_ema": grad_norm_ema_value,
                 "grad_clip_threshold": grad_clip_threshold_value,
                 "grad_skip_threshold": grad_skip_threshold_value,
+                "grad_skip_max": grad_skip_max_value,
+                "grad_hard_raw_norm_limit": grad_hard_raw_norm_limit_value,
+                "grad_ema_contribution_cap": grad_ema_contribution_cap_value,
                 "grad_action": grad_action,
                 "skipped": skipped_this_step,
                 "skipped_count_cum": (adaptive_state.skipped if adaptive_state is not None else None),
@@ -1726,6 +1768,11 @@ def argumentparser():
                         type=float,
                         default=10.0,
                         help="Skip threshold = ema * grad_skip_ratio. Updates with norm above this are dropped entirely (no optimizer.step).")
+    parser.add_argument('--grad_skip_max',
+                        type=float,
+                        default=0.0,
+                        help="Optional absolute upper bound on the adaptive skip threshold. "
+                             "0 disables. This is independent from --grad_clip_max; use it as the raw-norm fuse scale.")
     parser.add_argument('--grad_clip_min',
                         type=float,
                         default=0.5,
@@ -1746,13 +1793,13 @@ def argumentparser():
     parser.add_argument('--grad_clip_ema_runaway_factor',
                         type=float,
                         default=2.0,
-                        help="Safety net: abort when ema > ema_runaway_factor * grad_clip_max. "
-                             "0 disables. Catches silent EMA blow-up before the skip cascade hits.")
+                        help="Safety net: abort when ema > ema_runaway_factor * (grad_skip_max / grad_skip_ratio). "
+                             "0 disables. Active only when --grad_skip_max is set.")
     parser.add_argument('--grad_clip_hard_raw_norm_limit',
                         type=float,
                         default=0.0,
                         help="Safety net: abort when any single raw grad norm exceeds this absolute cap. "
-                             "0 disables. Use as a physical fuse far above the normal regime (e.g. 1e6).")
+                             "0 disables. Use as a physical fuse far above the normal regime (e.g. 1e11 for 500M).")
     parser.add_argument('--compile',
                         type=bool,
                         default=False)

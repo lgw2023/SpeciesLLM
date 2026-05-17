@@ -411,7 +411,7 @@ def make_grad_clip_figure(runs: dict[str, dict], window: int = 100, smooth_windo
     Reads per-optimizer-step rows (where ``grad_norm_raw`` is non-null) from
     ``runs[*]["all"]`` and produces:
 
-      • Top-left   raw grad norm vs EMA vs clip / skip thresholds (log y).
+      • Top-left   raw grad norm vs EMA vs clip / skip thresholds/fuses (log y).
                    The prod failure pattern is raw_norm climbing into the clip
                    band and dragging EMA up with it; both lines ratcheting
                    together is the leading indicator of an upcoming skip
@@ -485,6 +485,25 @@ def make_grad_clip_figure(runs: dict[str, dict], window: int = 100, smooth_windo
                 ax_norm.plot(xs, np.clip(skip_t.values, 1e-12, None),
                              color=col, linewidth=1.0, linestyle=":",
                              alpha=0.85, label=f"{label} skip_thr")
+        for field, linestyle, suffix in (
+            ("grad_skip_max", "-.", "skip_max"),
+            ("grad_hard_raw_norm_limit", (0, (3, 1, 1, 1)), "hard_raw"),
+        ):
+            if field in sub.columns:
+                fuse = sub[field].dropna()
+                if not fuse.empty:
+                    val = float(fuse.iloc[-1])
+                    if val > 0:
+                        ax_norm.hlines(
+                            val,
+                            x[0],
+                            x[-1],
+                            color=col,
+                            linewidth=0.9,
+                            linestyle=linestyle,
+                            alpha=0.55,
+                            label=f"{label} {suffix}",
+                        )
         # Mark skipped steps as red ticks along the top of the panel.
         if "skipped" in sub.columns:
             skipped_x = sub.loc[sub["skipped"].fillna(False).astype(bool), "update_step"]

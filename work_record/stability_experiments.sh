@@ -1,27 +1,31 @@
 #!/usr/bin/env bash
 # 500M gradient-clip stability validation suite.
 #
-# Three experiments wrap work_record/step3_model_500M.sh with the parameter
+# Experiments wrap work_record/step3_model_500M.sh with the parameter
 # combinations recommended after the data_1_2_3_stable post-mortem
 # (see ../work_record/step3_model_500M.sh and ../train_MNodes_...py for context):
 #
-#   smoke - 500 step canary, original LR, fixed adaptive clip
-#           Verifies (a) the EMA-cap fix works end-to-end, (b) the controller
-#           doesn't fail-fast on this model's natural gradient scale.
+#   smoke - 500 step launch canary, original LR, adaptive clip
+#           Verifies the controller does not false-trip on the natural 1e8 raw
+#           grad-norm scale seen during early 500M training.
 #
-#   A     - 4000 step run, original LR=1e-6, GRAD_CLIP_MAX=1e6
-#           "Is the EMA-cap fix alone enough to prevent the runaway we hit?"
-#           If A stays healthy past warmup completion (~step 7500) we know
-#           the bug was purely adaptive-clip misconfiguration.
+#   A     - 13000 step canary, original LR=1e-6
+#           Reaches beyond the old first skip at step 11895. Uses a decoupled
+#           raw-norm skip fuse so 1e8 early norms are clipped, not skipped, while
+#           1e11-class excursions still abort quickly.
 #
-#   B     - 4000 step run, halved LR=5e-7, tighter adaptive
+#   B     - 13000 step canary, halved LR=5e-7, tighter adaptive
 #           Insurance: if A diverges, B is the next thing to try.
 #           Smaller LR + faster EMA decay + tighter clip ratios.
+#
+#   static - 13000 step conservative fallback
+#           Disables adaptive skip entirely and uses static GRAD_CLIP=0.5.
 #
 # Usage:
 #   bash work_record/stability_experiments.sh smoke
 #   bash work_record/stability_experiments.sh A
 #   bash work_record/stability_experiments.sh B
+#   bash work_record/stability_experiments.sh static
 #   bash work_record/stability_experiments.sh all          # smoke → A → B in order
 #
 # Override DATA_PATH if needed:
@@ -29,7 +33,8 @@
 #
 # After each experiment, run:
 #   python3 work_record/check_stability_health.py <out_dir>/metrics.0-0.jsonl
-# to verify gradient health (clip≫skip, EMA<max_clip, no consec_skips runs).
+# to verify gradient health (low skip rate, no consec_skips runs, raw norm below
+# the configured skip/hard fuse).
 #
 # NOTE: this wrapper passes vars to step3_model_500M.sh as KEY=VALUE positional
 # arguments. step3 re-execs with `env -i` so any exported envs are dropped --
@@ -56,19 +61,18 @@ DATA_PATH="${DATA_PATH:-/data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData/all_fla
 # see it immediately rather than silently waste compute (the failure mode of
 # the data_1_2_3_stable run).
 COMMON_ARGS=(
-  GRAD_CLIP=1.0                           # static fallback during warmup
+  GRAD_CLIP=0.5                           # static fallback during warmup
   ADAPTIVE_GRAD_CLIP=true
   GRAD_CLIP_MIN=0.5
   GRAD_CLIP_WARMUP_STEPS=200
   GRAD_CLIP_MAX_CONSECUTIVE_SKIPS=50      # abort after 50 skipped optimizer steps
-  GRAD_CLIP_EMA_RUNAWAY_FACTOR=2.0        # defensive: EMA cap should make this unreachable
-  GRAD_CLIP_HARD_RAW_NORM_LIMIT=1.0e+12   # physical fuse far above normal regime
+  GRAD_CLIP_EMA_RUNAWAY_FACTOR=2.0        # defensive: relative to GRAD_SKIP_MAX / GRAD_SKIP_RATIO
+  GRAD_CLIP_HARD_RAW_NORM_LIMIT=1.0e+11   # physical fuse above old 4.3e10 peak, below 1e11-class blowups
   BETA2=0.98
   WARMUP_RATIO=0.10
   NAN_CHECK_INTERVAL=10
-  # Crucial for this model: natural grad_norm ~1e4-1e6 so the adaptive ceiling
-  # has to be much higher than the controller's stock default of 1000.
-  GRAD_CLIP_MAX=1000000.0                 # 1e6 — see post-mortem
+  GRAD_CLIP_MAX=1000.0                    # actual optimizer update remains bounded
+  GRAD_SKIP_MAX=100000000000.0            # raw-norm skip fuse independent from GRAD_CLIP_MAX
 )
 
 run_exp() {
@@ -90,45 +94,58 @@ run_exp() {
 # ── Experiment definitions ─────────────────────────────────────────────────
 
 run_smoke() {
-  # 500 step canary: original LR, baseline adaptive ratios, large ceiling.
-  # ~50 min wall. Just checks the pipeline launches and the EMA cap holds.
+  # 500 step canary: original LR, adaptive clip, absolute raw-norm fuse.
+  # ~50 min wall. Checks launch + no false skip at the natural early 1e8 scale.
   run_exp stab_smoke_500 \
     LEARNING_RATE=0.000001 \
     MIN_LR=0.0000001 \
     GRAD_CLIP_RATIO=3.0 \
-    GRAD_SKIP_RATIO=10.0 \
+    GRAD_SKIP_RATIO=100.0 \
     GRAD_CLIP_EMA_BETA=0.98 \
     MAX_TRAIN_STEPS=500
 }
 
 run_A() {
-  # 4000 step run, ORIGINAL LR + baseline adaptive ratios + EMA-cap fix.
-  # ~7h wall. Tests the hypothesis "the EMA-cap code fix alone fixes the bug".
-  # Watch for: EMA staying well below 1e6, low consecutive_skips, loss
-  # decreasing past warmup (~step 7500).
-  run_exp stab_A_lr1e-6_4k \
+  # 13000 step run, ORIGINAL LR + decoupled adaptive skip fuse.
+  # Reaches beyond the old first skip at step 11895.
+  # Watch for: low skip rate, raw_norm below 1e11, loss still moving down.
+  run_exp stab_A_lr1e-6_13k \
     LEARNING_RATE=0.000001 \
     MIN_LR=0.0000001 \
     GRAD_CLIP_RATIO=3.0 \
-    GRAD_SKIP_RATIO=10.0 \
+    GRAD_SKIP_RATIO=100.0 \
     GRAD_CLIP_EMA_BETA=0.98 \
-    MAX_TRAIN_STEPS=4000
+    MAX_TRAIN_STEPS=13000
 }
 
 run_B() {
-  # 4000 step run, HALVED LR + tighter adaptive + faster-decaying EMA.
-  # ~7h wall. The "safer" baseline if A turns out to still diverge.
+  # 13000 step run, HALVED LR + tighter adaptive + faster-decaying EMA.
+  # The safer baseline if A turns out to still diverge.
   #   * LR  1e-6 → 5e-7  (half — gives the optimizer more headroom)
   #   * clip ratio 3 → 2 (spike caught one step earlier)
-  #   * skip ratio 10 → 5 (don't tolerate huge outliers)
+  #   * skip ratio 100 → 50, skip fuse 1e11 → 5e10
   #   * EMA beta 0.98 → 0.95 (half-life 35 → 14 step, recovers faster)
-  run_exp stab_B_lr5e-7_4k \
+  run_exp stab_B_lr5e-7_13k \
     LEARNING_RATE=0.0000005 \
     MIN_LR=0.00000005 \
     GRAD_CLIP_RATIO=2.0 \
-    GRAD_SKIP_RATIO=5.0 \
+    GRAD_SKIP_RATIO=50.0 \
+    GRAD_SKIP_MAX=50000000000.0 \
+    GRAD_CLIP_HARD_RAW_NORM_LIMIT=80000000000.0 \
+    GRAD_CLIP_MAX=500.0 \
     GRAD_CLIP_EMA_BETA=0.95 \
-    MAX_TRAIN_STEPS=4000
+    MAX_TRAIN_STEPS=13000
+}
+
+run_static() {
+  # Conservative fallback: no adaptive skip/EMA; every finite update is clipped
+  # to the original 0.5 global norm.
+  run_exp stab_static_clip0p5_13k \
+    ADAPTIVE_GRAD_CLIP=false \
+    LEARNING_RATE=0.0000005 \
+    MIN_LR=0.00000005 \
+    GRAD_CLIP=0.5 \
+    MAX_TRAIN_STEPS=13000
 }
 
 case "$EXP" in
@@ -141,6 +158,9 @@ case "$EXP" in
   B|b)
     run_B
     ;;
+  static|S|s)
+    run_static
+    ;;
   all)
     run_smoke
     run_A
@@ -148,7 +168,7 @@ case "$EXP" in
     ;;
   *)
     echo "[ERROR] Unknown experiment: $EXP" >&2
-    echo "Use one of: smoke | A | B | all" >&2
+    echo "Use one of: smoke | A | B | static | all" >&2
     exit 1
     ;;
 esac
