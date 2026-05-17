@@ -21,6 +21,9 @@ Usage:
     --max-steps N     only plot rows up to update_step N (default: all)
     --no-detail       skip the loss-components breakdown figure
     --no-timing       skip the per-step timing breakdown figure
+    --no-grad-clip    skip the adaptive-grad-clip diagnostics figure
+    --grad-clip-window N
+                      rolling window for skip/clip RATE panel (default 100)
     --compare         when 2+ dirs are given, also produce a single overlay
                       figure under figures/compare_<keys>/
     --no-individual   skip per-run figures (useful together with --compare)
@@ -380,6 +383,229 @@ def make_timing_figure(runs: dict[str, dict], smooth_window: int = 1) -> plt.Fig
     return fig
 
 
+def _derive_consecutive(skipped_series: pd.Series) -> pd.Series:
+    """Run-length-encode a boolean series into "consecutive True so far".
+
+    Used to back-fill ``consecutive_skips`` for runs from BEFORE the safety-net
+    patch landed, where only the per-row ``skipped`` flag is recorded.
+    """
+    skipped = skipped_series.fillna(False).astype(bool).values
+    out = np.zeros(len(skipped), dtype=np.int64)
+    run = 0
+    for i, s in enumerate(skipped):
+        run = run + 1 if s else 0
+        out[i] = run
+    return pd.Series(out, index=skipped_series.index)
+
+
+def _has_grad_clip_data(df: pd.DataFrame) -> bool:
+    """A run is plottable if at least one optimizer step recorded a raw norm."""
+    if df.empty or "grad_norm_raw" not in df.columns:
+        return False
+    return df["grad_norm_raw"].notna().any()
+
+
+def make_grad_clip_figure(runs: dict[str, dict], window: int = 100, smooth_window: int = 1) -> Optional[plt.Figure]:
+    """2×2 adaptive-grad-clip diagnostic figure.
+
+    Reads per-optimizer-step rows (where ``grad_norm_raw`` is non-null) from
+    ``runs[*]["all"]`` and produces:
+
+      • Top-left   raw grad norm vs EMA vs clip / skip thresholds (log y).
+                   The prod failure pattern is raw_norm climbing into the clip
+                   band and dragging EMA up with it; both lines ratcheting
+                   together is the leading indicator of an upcoming skip
+                   cascade.
+      • Top-right  consecutive_skips / consecutive_clips streaks (linear y).
+                   Bigger streaks ⇒ the safety net is closer to firing.
+      • Bottom-left  rolling skip/clip RATE over the last ``window`` steps
+                   (% of optimizer steps).
+      • Bottom-right cumulative skip / clip counts (linear y).
+
+    Backward-compatible: if ``consecutive_skips`` / ``consecutive_clips`` are
+    missing (older runs from before the safety-net patch), they are derived
+    on-the-fly from the per-row boolean ``skipped`` flag.
+
+    Returns ``None`` if no run has any usable gradient-step rows.
+    """
+    plottable = {label: run for label, run in runs.items() if _has_grad_clip_data(run["all"])}
+    if not plottable:
+        return None
+
+    colours = {label: PALETTE[i % len(PALETTE)] for i, label in enumerate(plottable)}
+
+    fig, axes = plt.subplots(2, 2, figsize=(14, 8.5))
+    first_args = next(iter(plottable.values()))["args"]
+    subtitle = _make_subtitle(first_args) if first_args else ""
+    fig.suptitle(
+        f"Adaptive Grad-Clip Diagnostics\n{subtitle}" if subtitle else "Adaptive Grad-Clip Diagnostics",
+        fontsize=12,
+        fontweight="bold",
+        y=0.99,
+    )
+
+    ax_norm, ax_streak = axes[0]
+    ax_rate, ax_cum    = axes[1]
+
+    # ── (0,0) raw_norm + EMA + clip/skip thresholds ─────────────────────────
+    ax_norm.set_title(f"Grad Norm vs EMA / Thresholds")
+    ax_norm.set_xlabel("Update Step")
+    ax_norm.set_ylabel("L2 Norm (log)")
+    ax_norm.set_yscale("log")
+
+    for label, run in plottable.items():
+        df = run["all"]
+        sub = df.dropna(subset=["grad_norm_raw"])
+        if sub.empty:
+            continue
+        x = sub["update_step"].values if "update_step" in sub.columns else np.arange(len(sub))
+        col = colours[label]
+        # Raw norm: thin alpha line — every step is plotted; clip with .clip()
+        # to avoid log-scale crashes on the rare 0-norm.
+        raw = np.clip(smooth(sub["grad_norm_raw"].values, smooth_window), 1e-12, None)
+        ax_norm.plot(x, raw, color=col, alpha=0.45, linewidth=1.0,
+                     label=f"{label} raw")
+        if "grad_norm_ema" in sub.columns:
+            ema = sub["grad_norm_ema"].dropna()
+            if not ema.empty:
+                xe = sub.loc[ema.index, "update_step"].values if "update_step" in sub.columns else ema.index.values
+                ax_norm.plot(xe, np.clip(ema.values, 1e-12, None),
+                             color=col, linewidth=2.0, label=f"{label} ema")
+        if "grad_clip_threshold" in sub.columns:
+            clip_t = sub["grad_clip_threshold"].dropna()
+            if not clip_t.empty:
+                xc = sub.loc[clip_t.index, "update_step"].values if "update_step" in sub.columns else clip_t.index.values
+                ax_norm.plot(xc, np.clip(clip_t.values, 1e-12, None),
+                             color=col, linewidth=1.0, linestyle="--",
+                             alpha=0.85, label=f"{label} clip_thr")
+        if "grad_skip_threshold" in sub.columns:
+            skip_t = sub["grad_skip_threshold"].dropna()
+            if not skip_t.empty:
+                xs = sub.loc[skip_t.index, "update_step"].values if "update_step" in sub.columns else skip_t.index.values
+                ax_norm.plot(xs, np.clip(skip_t.values, 1e-12, None),
+                             color=col, linewidth=1.0, linestyle=":",
+                             alpha=0.85, label=f"{label} skip_thr")
+        # Mark skipped steps as red ticks along the top of the panel.
+        if "skipped" in sub.columns:
+            skipped_x = sub.loc[sub["skipped"].fillna(False).astype(bool), "update_step"]
+            if not skipped_x.empty:
+                ax_norm.scatter(skipped_x.values,
+                                np.full(len(skipped_x), raw.max() if len(raw) else 1.0),
+                                marker="|", s=22, color=col, alpha=0.6, zorder=5)
+    ax_norm.legend(fontsize=7, ncol=2, loc="best")
+
+    # ── (0,1) consecutive_skips / consecutive_clips streaks ─────────────────
+    ax_streak.set_title("Consecutive Skip / Clip Streak")
+    ax_streak.set_xlabel("Update Step")
+    ax_streak.set_ylabel("Streak Length")
+    for label, run in plottable.items():
+        df = run["all"]
+        sub = df.dropna(subset=["grad_norm_raw"]).copy()
+        if sub.empty:
+            continue
+        x = sub["update_step"].values if "update_step" in sub.columns else np.arange(len(sub))
+        col = colours[label]
+        # consecutive_skips: prefer logged column, fall back to derived from `skipped`.
+        if "consecutive_skips" in sub.columns and sub["consecutive_skips"].notna().any():
+            cs = sub["consecutive_skips"].fillna(0).values
+        elif "skipped" in sub.columns:
+            cs = _derive_consecutive(sub["skipped"]).values
+        else:
+            cs = None
+        if cs is not None and cs.max() > 0:
+            ax_streak.plot(x, cs, color=col, linewidth=1.4,
+                           label=f"{label} skip streak")
+        if "consecutive_clips" in sub.columns and sub["consecutive_clips"].notna().any():
+            cc = sub["consecutive_clips"].fillna(0).values
+            if cc.max() > 0:
+                ax_streak.plot(x, cc, color=col, linewidth=1.0, linestyle="--",
+                               alpha=0.8, label=f"{label} clip streak")
+    if ax_streak.has_data():
+        ax_streak.legend(fontsize=7, ncol=2, loc="best")
+    else:
+        ax_streak.text(0.5, 0.5, "no skip / clip events",
+                       ha="center", va="center", transform=ax_streak.transAxes,
+                       color="gray", fontsize=9)
+
+    # ── (1,0) rolling skip/clip RATE over `window` optimizer steps ──────────
+    ax_rate.set_title(f"Skip / Clip Rate (rolling window={window})")
+    ax_rate.set_xlabel("Update Step")
+    ax_rate.set_ylabel("% of steps in window")
+    ax_rate.yaxis.set_major_formatter(ticker.PercentFormatter(xmax=1.0))
+    any_rate = False
+    for label, run in plottable.items():
+        df = run["all"]
+        sub = df.dropna(subset=["grad_norm_raw"]).copy()
+        if sub.empty:
+            continue
+        x = sub["update_step"].values if "update_step" in sub.columns else np.arange(len(sub))
+        col = colours[label]
+        if "skipped" in sub.columns:
+            skip_flag = sub["skipped"].fillna(False).astype(bool)
+            rolling = skip_flag.rolling(window=window, min_periods=1).mean().values
+            ax_rate.plot(x, rolling, color=col, linewidth=1.6,
+                         label=f"{label} skip rate")
+            any_rate = True
+        if "grad_action" in sub.columns:
+            clip_flag = (sub["grad_action"] == "clip")
+            if clip_flag.any():
+                rolling_c = clip_flag.rolling(window=window, min_periods=1).mean().values
+                ax_rate.plot(x, rolling_c, color=col, linewidth=1.0, linestyle="--",
+                             alpha=0.75, label=f"{label} clip rate")
+                any_rate = True
+    if any_rate:
+        ax_rate.legend(fontsize=7, ncol=2, loc="best")
+        ax_rate.set_ylim(bottom=0)
+    else:
+        ax_rate.text(0.5, 0.5, "no skip / clip events",
+                     ha="center", va="center", transform=ax_rate.transAxes,
+                     color="gray", fontsize=9)
+
+    # ── (1,1) cumulative skip / clip counts ─────────────────────────────────
+    ax_cum.set_title("Cumulative Skipped / Clipped Counts")
+    ax_cum.set_xlabel("Update Step")
+    ax_cum.set_ylabel("Count")
+    any_cum = False
+    for label, run in plottable.items():
+        df = run["all"]
+        sub = df.dropna(subset=["grad_norm_raw"]).copy()
+        if sub.empty:
+            continue
+        x = sub["update_step"].values if "update_step" in sub.columns else np.arange(len(sub))
+        col = colours[label]
+        # Prefer the logged cumulative; fall back to cumulative sum of `skipped`.
+        if "skipped_count_cum" in sub.columns and sub["skipped_count_cum"].notna().any():
+            sk_cum = sub["skipped_count_cum"].ffill().fillna(0).values
+        elif "skipped" in sub.columns:
+            sk_cum = sub["skipped"].fillna(False).astype(int).cumsum().values
+        else:
+            sk_cum = None
+        if sk_cum is not None and (len(sk_cum) and sk_cum[-1] > 0):
+            ax_cum.plot(x, sk_cum, color=col, linewidth=1.6, label=f"{label} skipped")
+            any_cum = True
+        if "clipped_count_cum" in sub.columns and sub["clipped_count_cum"].notna().any():
+            cl_cum = sub["clipped_count_cum"].ffill().fillna(0).values
+            if len(cl_cum) and cl_cum[-1] > 0:
+                ax_cum.plot(x, cl_cum, color=col, linewidth=1.0, linestyle="--",
+                            alpha=0.8, label=f"{label} clipped")
+                any_cum = True
+        elif "grad_action" in sub.columns:
+            cl_cum = (sub["grad_action"] == "clip").astype(int).cumsum().values
+            if len(cl_cum) and cl_cum[-1] > 0:
+                ax_cum.plot(x, cl_cum, color=col, linewidth=1.0, linestyle="--",
+                            alpha=0.8, label=f"{label} clipped (derived)")
+                any_cum = True
+    if any_cum:
+        ax_cum.legend(fontsize=7, ncol=2, loc="best")
+    else:
+        ax_cum.text(0.5, 0.5, "no skip / clip events",
+                    ha="center", va="center", transform=ax_cum.transAxes,
+                    color="gray", fontsize=9)
+
+    fig.tight_layout(rect=[0, 0, 1, 0.97])
+    return fig
+
+
 # ── discovery & CLI ───────────────────────────────────────────────────────────
 
 def discover_runs(root: Path) -> list[Path]:
@@ -409,6 +635,10 @@ def main() -> None:
                         help="skip loss-components detail figure")
     parser.add_argument("--no-timing", action="store_true",
                         help="skip per-step timing breakdown figure")
+    parser.add_argument("--no-grad-clip", action="store_true",
+                        help="skip the adaptive-grad-clip diagnostics figure")
+    parser.add_argument("--grad-clip-window", type=int, default=100, metavar="N",
+                        help="rolling window for the skip/clip RATE panel (default 100)")
     parser.add_argument("--max-steps", type=int, default=None, metavar="N",
                         help="only plot rows up to update_step N (default: all)")
     parser.add_argument("--compare", action="store_true",
@@ -476,6 +706,21 @@ def main() -> None:
                 fig3.savefig(p, bbox_inches="tight")
                 print(f"  Saved: {p}")
             plt.close(fig3)
+
+        if not args.no_grad_clip:
+            fig4 = make_grad_clip_figure(
+                runs_dict,
+                window=args.grad_clip_window,
+                smooth_window=args.smooth,
+            )
+            if fig4 is None:
+                print("  [skip] grad_clip figure: no grad_norm_raw rows in any run")
+            else:
+                for ext in (".pdf", ".png"):
+                    p = out_dir / f"grad_clip{ext}"
+                    fig4.savefig(p, bbox_inches="tight")
+                    print(f"  Saved: {p}")
+                plt.close(fig4)
 
     base_out = args.out if args.out else (args.root.resolve() / "figures")
 

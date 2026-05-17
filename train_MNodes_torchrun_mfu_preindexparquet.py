@@ -89,6 +89,9 @@ METRIC_FIELDNAMES = [
     "grad_action",
     "skipped",
     "skipped_count_cum",
+    "clipped_count_cum",
+    "consecutive_skips",
+    "consecutive_clips",
     "cluster_loss_total_mean",
     "cluster_loss_total_min",
     "cluster_loss_total_max",
@@ -181,9 +184,33 @@ class AdaptiveGradClipState:
     During warmup the static --grad_clip is used as the clip threshold and only
     non-finite grads are skipped; the EMA is still updated so it is ready when
     warmup ends.
+
+    EMA contribution is bounded by ``min(raw_norm, ema*clip_ratio, max_clip)``:
+      * ``ema*clip_ratio`` stops a single spike from hijacking the EMA.
+      * ``max_clip`` stops a *slow* runaway from ratcheting the EMA past the
+        controller's own clip ceiling — the failure mode we hit in prod, where
+        EMA crept from 0 to 3e9 (1000× past max_clip=1000) while every step
+        was being "passed through clipping", silently breaking training. With
+        the ``max_clip`` cap, skip_threshold = ema*skip_ratio is naturally
+        bounded by ``max_clip*skip_ratio`` and the slow-runaway wedge cannot
+        happen.
+
+    Safety nets (all opt-in, default to off via 0 / None):
+      * ``max_consecutive_skips``: abort after N consecutive skipped optimizer
+        steps. Catches the "raw_norm settled into a regime above skip_threshold
+        and never recovers" case, e.g. when params have drifted into a
+        catastrophic basin.
+      * ``ema_runaway_factor``: abort when ``ema > ema_runaway_factor *
+        max_clip``. With the in-update ``max_clip`` cap above this is now
+        defensive (it cannot fire in normal operation), but it remains useful
+        if a future change reintroduces an unbounded EMA path.
+      * ``hard_raw_norm_limit``: abort whenever a single raw_norm reading
+        exceeds this absolute cap. Useful as a "physical fuse" — pick a value
+        many orders of magnitude above the normal regime.
     """
 
-    def __init__(self, beta, clip_ratio, skip_ratio, min_clip, max_clip, warmup_steps, static_clip):
+    def __init__(self, beta, clip_ratio, skip_ratio, min_clip, max_clip, warmup_steps, static_clip,
+                 max_consecutive_skips=0, ema_runaway_factor=0.0, hard_raw_norm_limit=0.0):
         self.beta = float(beta)
         self.clip_ratio = float(clip_ratio)
         self.skip_ratio = float(skip_ratio)
@@ -191,9 +218,17 @@ class AdaptiveGradClipState:
         self.max_clip = float(max_clip)
         self.warmup_steps = max(0, int(warmup_steps))
         self.static_clip = float(static_clip) if static_clip and static_clip > 0 else 1.0
+        self.max_consecutive_skips = max(0, int(max_consecutive_skips))
+        self.ema_runaway_factor = max(0.0, float(ema_runaway_factor))
+        self.hard_raw_norm_limit = max(0.0, float(hard_raw_norm_limit))
         self.ema = None
         self.observed = 0
         self.skipped = 0
+        self.clipped = 0
+        self.consecutive_skips = 0
+        self.consecutive_clips = 0
+        self.max_consecutive_skips_seen = 0
+        self.max_consecutive_clips_seen = 0
 
     def warmup_done(self):
         return self.ema is not None and self.observed >= self.warmup_steps
@@ -209,14 +244,64 @@ class AdaptiveGradClipState:
         if not math.isfinite(raw_norm):
             return
         if self.ema is None:
+            # Bootstrap: don't let a freak step-1 grad (e.g. fresh-init MSE
+            # heads producing raw_norm ~1e8) pin the EMA at sky-high values.
             contribution = raw_norm
         else:
+            # Spike protection: a single big grad can lift the contribution at
+            # most to ``ema*clip_ratio``.
             contribution = min(raw_norm, self.ema * self.clip_ratio)
+        # Hard ceiling: the EMA must never grow past ``max_clip``. Without this
+        # the EMA can climb exponentially while every step is being "passed
+        # through clipping" -- the silent runaway we hit in prod.
+        if self.max_clip > 0.0:
+            contribution = min(contribution, self.max_clip)
         if self.ema is None:
             self.ema = contribution
         else:
             self.ema = self.beta * self.ema + (1.0 - self.beta) * contribution
         self.observed += 1
+
+    def note_action(self, action):
+        """Update consecutive-event counters. Call once per optimizer decision.
+
+        ``action`` should be one of: 'pass', 'clip', 'skip_norm', 'skip_nan',
+        'no_step'. 'no_step' (gradient-accumulation micro-step) is ignored so
+        it doesn't reset the streak counters.
+        """
+        if action == "no_step":
+            return
+        if action in ("skip_nan", "skip_norm"):
+            self.skipped += 1
+            self.consecutive_skips += 1
+            self.consecutive_clips = 0
+            if self.consecutive_skips > self.max_consecutive_skips_seen:
+                self.max_consecutive_skips_seen = self.consecutive_skips
+        elif action == "clip":
+            self.clipped += 1
+            self.consecutive_clips += 1
+            self.consecutive_skips = 0
+            if self.consecutive_clips > self.max_consecutive_clips_seen:
+                self.max_consecutive_clips_seen = self.consecutive_clips
+        else:  # 'pass'
+            self.consecutive_skips = 0
+            self.consecutive_clips = 0
+
+    def safety_check(self, raw_norm):
+        """Return a non-empty reason string if a safety tripwire fired."""
+        if self.hard_raw_norm_limit > 0.0 and math.isfinite(raw_norm) and raw_norm > self.hard_raw_norm_limit:
+            return ("raw_norm=%.4e exceeds hard_raw_norm_limit=%.4e"
+                    % (raw_norm, self.hard_raw_norm_limit))
+        if self.max_consecutive_skips > 0 and self.consecutive_skips >= self.max_consecutive_skips:
+            return ("consecutive_skips=%d >= max_consecutive_skips=%d (gradient regime decoupled from EMA)"
+                    % (self.consecutive_skips, self.max_consecutive_skips))
+        if (self.ema_runaway_factor > 0.0
+                and self.ema is not None
+                and self.max_clip > 0.0
+                and self.ema > self.max_clip * self.ema_runaway_factor):
+            return ("ema=%.4e > ema_runaway_factor=%.2f * max_clip=%.4e (adaptive controller has decoupled)"
+                    % (self.ema, self.ema_runaway_factor, self.max_clip))
+        return None
 
 
 class StreamingMetricsWriter:
@@ -729,10 +814,14 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
             max_clip=args.grad_clip_max,
             warmup_steps=args.grad_clip_warmup_steps,
             static_clip=grad_clip if grad_clip != 0.0 else 1.0,
+            max_consecutive_skips=args.grad_clip_max_consecutive_skips,
+            ema_runaway_factor=args.grad_clip_ema_runaway_factor,
+            hard_raw_norm_limit=args.grad_clip_hard_raw_norm_limit,
         )
         logger.info(
             "adaptive_grad_clip=on beta=%.4f clip_ratio=%.2f skip_ratio=%.2f min_clip=%.4f "
-            "max_clip=%.4f warmup_steps=%s static_fallback=%.4f",
+            "max_clip=%.4f warmup_steps=%s static_fallback=%.4f "
+            "max_consecutive_skips=%s ema_runaway_factor=%.2f hard_raw_norm_limit=%.4e",
             adaptive_state.beta,
             adaptive_state.clip_ratio,
             adaptive_state.skip_ratio,
@@ -740,6 +829,9 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
             adaptive_state.max_clip,
             adaptive_state.warmup_steps,
             adaptive_state.static_clip,
+            adaptive_state.max_consecutive_skips,
+            adaptive_state.ema_runaway_factor,
+            adaptive_state.hard_raw_norm_limit,
         )
     else:
         logger.info("adaptive_grad_clip=off static_grad_clip=%.4f", grad_clip)
@@ -1047,7 +1139,6 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
                     else:
                         grad_action = "pass"
                     if skipped_this_step:
-                        adaptive_state.skipped += 1
                         logger.warning(
                             "grad_skip update_step=%s raw_norm=%.4f clip_threshold=%.4f "
                             "skip_threshold=%s ema=%s reason=%s",
@@ -1063,6 +1154,41 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
                         adaptive_state.update(raw_norm)
                     scaler.update()
                     optimizer.zero_grad()
+                    adaptive_state.note_action(grad_action)
+                    # Surface clip streaks at the start, then every 50 in a row,
+                    # so a slow EMA runaway (the failure mode we hit in prod) is
+                    # visible BEFORE it cascades into 100% skips.
+                    if grad_action == "clip" and (
+                        adaptive_state.consecutive_clips == 1
+                        or adaptive_state.consecutive_clips % 50 == 0
+                    ):
+                        logger.warning(
+                            "grad_clipped update_step=%s raw_norm=%.4f clip_threshold=%.4f "
+                            "ema=%s consecutive_clips=%d",
+                            update_step,
+                            raw_norm,
+                            clip_threshold,
+                            (f"{adaptive_state.ema:.4f}" if adaptive_state.ema is not None else "n/a"),
+                            adaptive_state.consecutive_clips,
+                        )
+                    abort_reason = adaptive_state.safety_check(raw_norm)
+                    if abort_reason:
+                        logger.error(
+                            "adaptive_grad_clip_abort update_step=%s raw_norm=%.4f ema=%s "
+                            "clip_threshold=%.4f skip_threshold=%s consecutive_skips=%d "
+                            "consecutive_clips=%d reason=%s",
+                            update_step,
+                            raw_norm,
+                            (f"{adaptive_state.ema:.4f}" if adaptive_state.ema is not None else "n/a"),
+                            clip_threshold,
+                            (f"{skip_threshold:.4f}" if math.isfinite(skip_threshold) else "inf"),
+                            adaptive_state.consecutive_skips,
+                            adaptive_state.consecutive_clips,
+                            abort_reason,
+                        )
+                        raise RuntimeError(
+                            f"adaptive_grad_clip safety abort at update_step={update_step}: {abort_reason}"
+                        )
                     grad_norm_ema_value = adaptive_state.ema
                 elif grad_clip != 0.0:
                     scaler.unscale_(optimizer)
@@ -1184,6 +1310,9 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
                 "grad_action": grad_action,
                 "skipped": skipped_this_step,
                 "skipped_count_cum": (adaptive_state.skipped if adaptive_state is not None else None),
+                "clipped_count_cum": (adaptive_state.clipped if adaptive_state is not None else None),
+                "consecutive_skips": (adaptive_state.consecutive_skips if adaptive_state is not None else None),
+                "consecutive_clips": (adaptive_state.consecutive_clips if adaptive_state is not None else None),
                 **cluster_summary,
             }
             metrics_writer.write(metric_row)
@@ -1238,11 +1367,15 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
         logger.info(loss_info)
         if adaptive_state is not None:
             logger.info(
-                "adaptive_grad_clip_summary epoch=%s ema=%s observed=%s skipped=%s",
+                "adaptive_grad_clip_summary epoch=%s ema=%s observed=%s skipped=%s clipped=%s "
+                "max_consecutive_skips_seen=%s max_consecutive_clips_seen=%s",
                 epoch + 1,
                 (f"{adaptive_state.ema:.4f}" if adaptive_state.ema is not None else "n/a"),
                 adaptive_state.observed,
                 adaptive_state.skipped,
+                adaptive_state.clipped,
+                adaptive_state.max_consecutive_skips_seen,
+                adaptive_state.max_consecutive_clips_seen,
             )
         time_checker = (
                         f"Node: {NODE_RANK} "
@@ -1605,6 +1738,21 @@ def argumentparser():
                         type=int,
                         default=200,
                         help="Number of optimizer steps to observe before adaptive thresholds take over. Static --grad_clip is used during warmup.")
+    parser.add_argument('--grad_clip_max_consecutive_skips',
+                        type=int,
+                        default=50,
+                        help="Safety net: abort training when this many optimizer steps are skipped back-to-back. "
+                             "0 disables. Default 50 ~= 5 min of wasted compute at the 500M cluster step time.")
+    parser.add_argument('--grad_clip_ema_runaway_factor',
+                        type=float,
+                        default=2.0,
+                        help="Safety net: abort when ema > ema_runaway_factor * grad_clip_max. "
+                             "0 disables. Catches silent EMA blow-up before the skip cascade hits.")
+    parser.add_argument('--grad_clip_hard_raw_norm_limit',
+                        type=float,
+                        default=0.0,
+                        help="Safety net: abort when any single raw grad norm exceeds this absolute cap. "
+                             "0 disables. Use as a physical fuse far above the normal regime (e.g. 1e6).")
     parser.add_argument('--compile',
                         type=bool,
                         default=False)
