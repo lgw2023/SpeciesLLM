@@ -1100,10 +1100,11 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
 
                 if (batch_index + 1) % save_step_interval == 0:
                     lossf = loss.item() * args.gradient_accumulation_steps
-                    if ddp:
-                        save_model(model.module, optimizer, epoch, batch_index + 1, lossf, out_dir, rank, NODE_RANK, s3_remote_dir_path=args.s3_remote_dir_path, logger=logger)
-                    else:
-                        save_model(model, optimizer, epoch, batch_index + 1, lossf, out_dir, rank, NODE_RANK, s3_remote_dir_path=args.s3_remote_dir_path, logger=logger)
+                    if rank == 0:
+                        if ddp:
+                            save_model(model.module, optimizer, epoch, batch_index + 1, lossf, out_dir, rank, NODE_RANK, s3_remote_dir_path=args.s3_remote_dir_path, logger=logger)
+                        else:
+                            save_model(model, optimizer, epoch, batch_index + 1, lossf, out_dir, rank, NODE_RANK, s3_remote_dir_path=args.s3_remote_dir_path, logger=logger)
                     metrics_writer.flush()
                     save_log_to_s3(args, out_dir, NODE_RANK, rank, logger=logger)
             else:
@@ -1267,12 +1268,12 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
     NODE_RANK = get_node_rank()
     if args.skip_final_save:
         logger.info("skip_final_save=true")
-    elif ddp:
-        save_model(model.module, optimizer, last_completed_epoch, last_completed_step, last_completed_loss, out_dir, rank, NODE_RANK, s3_remote_dir_path=args.s3_remote_dir_path, logger=logger)
-    else:
-        save_model(model, optimizer, last_completed_epoch, last_completed_step, last_completed_loss, out_dir, rank, NODE_RANK, s3_remote_dir_path=args.s3_remote_dir_path, logger=logger)
+    elif rank == 0:
+        if ddp:
+            save_model(model.module, optimizer, last_completed_epoch, last_completed_step, last_completed_loss, out_dir, rank, NODE_RANK, s3_remote_dir_path=args.s3_remote_dir_path, logger=logger)
+        else:
+            save_model(model, optimizer, last_completed_epoch, last_completed_step, last_completed_loss, out_dir, rank, NODE_RANK, s3_remote_dir_path=args.s3_remote_dir_path, logger=logger)
     save_log_to_s3(args, out_dir, NODE_RANK, rank, logger=logger)
-    cleanup_non_master_checkpoints(out_dir, NODE_RANK, rank, ddp, args, logger=logger)
 
 def save_log_to_s3(args, out_dir, NODE_RANK, rank, logger=None):
     if not args.s3_remote_dir_path or not is_remote_output_path(args.s3_remote_dir_path):
@@ -1336,45 +1337,6 @@ def save_model(model, optimizer, epoch, step, loss, out_dir, local_rank=None, NO
             )
     else:
         log_or_print(logger, "info", f"checkpoint_saved model={save_path} optimizer={save_other_path}")
-
-
-def cleanup_non_master_checkpoints(out_dir, node_rank, rank, ddp, args, logger=None):
-    """After training, delete checkpoint files from non-master ranks to shrink the run dir.
-
-    DDP keeps model weights and gradients in sync, so per-rank checkpoints are duplicates of
-    the master's. We still let every rank save during training (so no rank blocks waiting on a
-    single writer), then prune everything except node=0 rank=0 at the very end.
-
-    Each rank deletes only its own files, so this works whether or not out_dir is shared.
-    A barrier ensures every rank has flushed its final checkpoint before any deletion starts.
-    """
-    if not getattr(args, "cleanup_non_master_checkpoints", True):
-        return
-    if ddp and dist.is_available() and dist.is_initialized():
-        try:
-            dist.barrier()
-        except Exception as e:
-            log_or_print(logger, "warning", f"checkpoint_cleanup barrier_failed error={e}")
-
-    if int(node_rank) == 0 and int(rank) == 0:
-        log_or_print(logger, "info", "checkpoint_cleanup keeping master checkpoints node=0 rank=0")
-        return
-
-    pattern = os.path.join(
-        out_dir, f"SC-node-{int(node_rank):02d}-rank-{int(rank):02d}-*.pt"
-    )
-    removed = 0
-    for path in glob.glob(pattern):
-        try:
-            os.remove(path)
-            removed += 1
-        except OSError as e:
-            log_or_print(logger, "warning", f"checkpoint_cleanup remove_failed path={path} error={e}")
-    log_or_print(
-        logger,
-        "info",
-        f"checkpoint_cleanup node={node_rank} rank={rank} deleted_count={removed} pattern={pattern}",
-    )
 
 
 def main(args):
@@ -1535,6 +1497,7 @@ def main(args):
             device_ids=[local_rank],
             find_unused_parameters=args.ddp_find_unused_parameters,
             broadcast_buffers=False,
+            gradient_as_bucket_view=True,
         )
     if args.memory_log_interval > 0:
         log_npu_memory(logger, "after_ddp_wrap", rank=rank)
@@ -1755,12 +1718,6 @@ def argumentparser():
                         type=str2bool,
                         default=False,
                         help="Skip final checkpoint save. Default false preserves current behavior.")
-    parser.add_argument('--cleanup_non_master_checkpoints',
-                        type=str2bool,
-                        default=True,
-                        help="After training, delete checkpoint files saved by non-(node=0,rank=0) "
-                             "processes. DDP keeps weights in sync so they are duplicates. "
-                             "Set false to retain every rank's checkpoints.")
     parser.add_argument('--ddp_find_unused_parameters',
                         type=str2bool,
                         default=False,
