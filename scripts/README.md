@@ -164,3 +164,35 @@ The training entrypoint remains in the project root:
 ```text
 train_MNodes_torchrun_mfu_preindexparquet.py
 ```
+
+## Compress training output text logs
+
+Use the stdlib-only archive helper when `training_output` text logs are too
+large to copy directly from the server. It only includes files whose basenames
+match `log*txt`, `loss_to_log*txt`, or `metrics*jsonl`; checkpoints, figures,
+and other artifacts are skipped. Run it after the training process has stopped
+writing these files.
+
+On the server:
+
+```bash
+python scripts/archive_training_output_text.py pack \
+  /data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData/training_output_xxx \
+  --output /data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData/training_output_xxx_text.tar.xz
+```
+
+Copy only the generated `.tar.xz` file to the workstation, then unpack:
+
+```bash
+python scripts/archive_training_output_text.py unpack \
+  training_output_xxx_text.tar.xz \
+  --output-dir .
+```
+
+The archive is lossless: extraction verifies every restored file against the
+manifest SHA-256 checksum. To inspect or verify without extracting:
+
+```bash
+python scripts/archive_training_output_text.py list training_output_xxx_text.tar.xz
+python scripts/archive_training_output_text.py verify training_output_xxx_text.tar.xz
+```

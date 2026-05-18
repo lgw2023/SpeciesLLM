@@ -147,6 +147,18 @@ save_data_interval="${save_data_interval:-${SAVE_DATA_INTERVAL:-5120000}}"
 beta1="${beta1:-${BETA1:-0.9}}"
 beta2="${beta2:-${BETA2:-0.95}}"
 grad_clip="${grad_clip:-${GRAD_CLIP:-1.0}}"
+adaptive_grad_clip="${adaptive_grad_clip:-${ADAPTIVE_GRAD_CLIP:-true}}"
+grad_clip_ema_beta="${grad_clip_ema_beta:-${GRAD_CLIP_EMA_BETA:-0.98}}"
+grad_clip_ratio="${grad_clip_ratio:-${GRAD_CLIP_RATIO:-3.0}}"
+grad_skip_ratio="${grad_skip_ratio:-${GRAD_SKIP_RATIO:-10.0}}"
+grad_skip_max="${grad_skip_max:-${GRAD_SKIP_MAX:-0.0}}"
+grad_clip_min="${grad_clip_min:-${GRAD_CLIP_MIN:-0.5}}"
+grad_clip_max="${grad_clip_max:-${GRAD_CLIP_MAX:-1000.0}}"
+grad_clip_warmup_steps="${grad_clip_warmup_steps:-${GRAD_CLIP_WARMUP_STEPS:-200}}"
+grad_clip_max_consecutive_skips="${grad_clip_max_consecutive_skips:-${GRAD_CLIP_MAX_CONSECUTIVE_SKIPS:-50}}"
+grad_clip_ema_runaway_factor="${grad_clip_ema_runaway_factor:-${GRAD_CLIP_EMA_RUNAWAY_FACTOR:-2.0}}"
+grad_clip_hard_raw_norm_limit="${grad_clip_hard_raw_norm_limit:-${GRAD_CLIP_HARD_RAW_NORM_LIMIT:-0.0}}"
+max_train_steps="${max_train_steps:-${MAX_TRAIN_STEPS:-0}}"
 compile="${compile:-${COMPILE:-true}}"
 backend="${backend:-${BACKEND:-hccl}}"
 device="${device:-${DEVICE:-npu}}"
@@ -420,6 +432,18 @@ build_train_args() {
     "--beta1=${beta1}"
     "--beta2=${beta2}"
     "--grad_clip=${grad_clip}"
+    "--adaptive_grad_clip=${adaptive_grad_clip}"
+    "--grad_clip_ema_beta=${grad_clip_ema_beta}"
+    "--grad_clip_ratio=${grad_clip_ratio}"
+    "--grad_skip_ratio=${grad_skip_ratio}"
+    "--grad_skip_max=${grad_skip_max}"
+    "--grad_clip_min=${grad_clip_min}"
+    "--grad_clip_max=${grad_clip_max}"
+    "--grad_clip_warmup_steps=${grad_clip_warmup_steps}"
+    "--grad_clip_max_consecutive_skips=${grad_clip_max_consecutive_skips}"
+    "--grad_clip_ema_runaway_factor=${grad_clip_ema_runaway_factor}"
+    "--grad_clip_hard_raw_norm_limit=${grad_clip_hard_raw_norm_limit}"
+    "--max_train_steps=${max_train_steps}"
     "--compile=$(bool_arg_value "$compile")"
     "--backend=${backend}"
     "--device=${device}"
@@ -551,7 +575,10 @@ remote_env_assignments() {
     HCCL_WHITELIST_DISABLE ASCEND_TOOLKIT_HOME ASCEND_ENV_SH ASCEND_HOME_PATH
     data_path num_of_used_data emb_path config_json out_path batch_size epoch
     gradient_accumulation_steps gradient_checkpointing learning_rate min_lr decay_lr warmup_iters
-    warmup_ratio weight_decay save_data_interval beta1 beta2 grad_clip compile
+    warmup_ratio weight_decay save_data_interval beta1 beta2 grad_clip
+    adaptive_grad_clip grad_clip_ema_beta grad_clip_ratio grad_skip_ratio grad_skip_max
+    grad_clip_min grad_clip_max grad_clip_warmup_steps grad_clip_max_consecutive_skips
+    grad_clip_ema_runaway_factor grad_clip_hard_raw_norm_limit max_train_steps compile
     backend device device_type s3_remote_dir_path
     log_interval profile_interval nan_check_interval metrics_flush_interval log_level log_all_ranks
     num_workers prefetch_factor persistent_workers pin_memory
@@ -583,6 +610,7 @@ run_launcher() {
   log "WORKDIR=${WORKDIR}, remote_script=${remote_self}"
   log "TRAIN_DATASET=${TRAIN_DATASET}, data_path=${data_path}, emb_path=${emb_path}"
   log "config_json=${config_json}"
+  log "max_train_steps=${max_train_steps}, adaptive_grad_clip=${adaptive_grad_clip}"
   log "SYNC_SELF=${SYNC_SELF}, DRY_RUN=${DRY_RUN}, LOCAL_NODE_RANK=${LOCAL_NODE_RANK}"
 
   local rank host
