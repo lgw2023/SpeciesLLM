@@ -173,26 +173,53 @@ match `log*txt`, `loss_to_log*txt`, or `metrics*jsonl`; checkpoints, figures,
 and other artifacts are skipped. Run it after the training process has stopped
 writing these files.
 
+Use `split-pack` when every transferred file must stay below 80 KB. It
+compresses each matched file independently with xz, runs the files in parallel,
+and writes many small `.xzpart` files plus split manifest files. With the normal
+8-rank layout this means the 24 `log`/`loss_to_log`/`metrics` files can be
+compressed by up to 24 worker processes.
+
 On the server:
+
+```bash
+python scripts/archive_training_output_text.py split-pack \
+  /data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData/training_output_xxx \
+  --output-dir /data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData/training_output_xxx_text_split \
+  --chunk-size 80KB \
+  --jobs 24
+```
+
+Copy the generated split directory to the workstation, then merge/decompress:
+
+```bash
+python scripts/archive_training_output_text.py split-unpack \
+  training_output_xxx_text_split \
+  --output-dir .
+```
+
+The split output is lossless: merge/decompress verifies every restored file
+against the manifest SHA-256 checksum. To inspect or verify without extracting:
+
+```bash
+python scripts/archive_training_output_text.py split-list training_output_xxx_text_split
+python scripts/archive_training_output_text.py split-verify training_output_xxx_text_split
+```
+
+If you prefer one archive file instead of many small files, use `pack`:
 
 ```bash
 python scripts/archive_training_output_text.py pack \
   /data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData/training_output_xxx \
-  --output /data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData/training_output_xxx_text.tar.xz
+  --output /data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData/training_output_xxx_text.tar \
+  --jobs 24
 ```
 
-Copy only the generated `.tar.xz` file to the workstation, then unpack:
+For the old single-stream `.tar.xz` format, which can be slightly smaller but is
+serial and slower on many large files, add `--single-stream`:
 
 ```bash
-python scripts/archive_training_output_text.py unpack \
-  training_output_xxx_text.tar.xz \
-  --output-dir .
-```
-
-The archive is lossless: extraction verifies every restored file against the
-manifest SHA-256 checksum. To inspect or verify without extracting:
-
-```bash
-python scripts/archive_training_output_text.py list training_output_xxx_text.tar.xz
-python scripts/archive_training_output_text.py verify training_output_xxx_text.tar.xz
+python scripts/archive_training_output_text.py pack \
+  /data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData/training_output_xxx \
+  --output /data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData/training_output_xxx_text.tar.xz \
+  --single-stream
 ```
