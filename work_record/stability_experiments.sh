@@ -1,22 +1,22 @@
 #!/usr/bin/env bash
-# 500M gradient-clip stability validation suite.
+# 500M gradient-clip + primary-task stability validation suite.
 #
 # Experiments wrap work_record/step3_model_500M.sh with the parameter
 # combinations recommended after the data_1_2_3_stable post-mortem
 # (see ../work_record/step3_model_500M.sh and ../train_MNodes_...py for context):
 #
-#   smoke - 500 step launch canary, original LR, adaptive clip
+#   smoke - 500 step launch canary, original LR, fixed 0.5 update clip
 #           Verifies the controller does not false-trip on the natural 1e8 raw
 #           grad-norm scale seen during early 500M training.
 #
 #   A     - 13000 step canary, original LR=1e-6
-#           Reaches beyond the old first skip at step 11895. Uses a decoupled
-#           raw-norm skip fuse so 1e8 early norms are clipped, not skipped, while
-#           1e11-class excursions still abort quickly.
+#           Reaches beyond the old first skip at step 11895. Keeps the effective
+#           optimizer update at the 100M-successful 0.5 global norm, while the
+#           adaptive controller still records raw norms and owns the skip fuses.
 #
 #   B     - 13000 step canary, halved LR=5e-7, tighter adaptive
 #           Insurance: if A diverges, B is the next thing to try.
-#           Smaller LR + faster EMA decay + tighter clip ratios.
+#           Smaller LR + faster EMA decay + tighter raw-norm skip ratios.
 #
 #   static - 13000 step conservative fallback
 #           Disables adaptive skip entirely and uses static GRAD_CLIP=0.5.
@@ -33,8 +33,9 @@
 #
 # After each experiment, run:
 #   python3 work_record/check_stability_health.py <out_dir>/metrics.0-0.jsonl
-# to verify gradient health (low skip rate, no consec_skips runs, raw norm below
-# the configured skip/hard fuse).
+# to verify both gradient-controller health and primary-task learning. Add
+# --disable-primary-loss-check only when intentionally checking gradient health
+# in isolation.
 #
 # NOTE: this wrapper passes vars to step3_model_500M.sh as KEY=VALUE positional
 # arguments. step3 re-execs with `env -i` so any exported envs are dropped --
@@ -71,7 +72,7 @@ COMMON_ARGS=(
   BETA2=0.98
   WARMUP_RATIO=0.10
   NAN_CHECK_INTERVAL=10
-  GRAD_CLIP_MAX=1000.0                    # actual optimizer update remains bounded
+  GRAD_CLIP_MAX=0.5                       # reproduce 100M's effective static clip while keeping adaptive fuses
   GRAD_SKIP_MAX=100000000000.0            # raw-norm skip fuse independent from GRAD_CLIP_MAX
 )
 
@@ -94,7 +95,7 @@ run_exp() {
 # ── Experiment definitions ─────────────────────────────────────────────────
 
 run_smoke() {
-  # 500 step canary: original LR, adaptive clip, absolute raw-norm fuse.
+  # 500 step canary: original LR, 0.5 update clip, absolute raw-norm fuse.
   # ~50 min wall. Checks launch + no false skip at the natural early 1e8 scale.
   run_exp stab_smoke_500 \
     LEARNING_RATE=0.000001 \
@@ -106,10 +107,10 @@ run_smoke() {
 }
 
 run_A() {
-  # 13000 step run, ORIGINAL LR + decoupled adaptive skip fuse.
+  # 13000 step run, ORIGINAL LR + 0.5 update clip + decoupled skip fuse.
   # Reaches beyond the old first skip at step 11895.
-  # Watch for: low skip rate, raw_norm below 1e11, loss still moving down.
-  run_exp stab_A_lr1e-6_13k \
+  # Watch for: low skip rate, raw_norm below 1e11, GEP/zero-prob moving down.
+  run_exp stab_A_clip0p5_lr1e-6_13k \
     LEARNING_RATE=0.000001 \
     MIN_LR=0.0000001 \
     GRAD_CLIP_RATIO=3.0 \
@@ -119,20 +120,21 @@ run_A() {
 }
 
 run_B() {
-  # 13000 step run, HALVED LR + tighter adaptive + faster-decaying EMA.
+  # 13000 step run, HALVED LR + tighter raw-norm fuse + faster-decaying EMA.
   # The safer baseline if A turns out to still diverge.
   #   * LR  1e-6 → 5e-7  (half — gives the optimizer more headroom)
-  #   * clip ratio 3 → 2 (spike caught one step earlier)
+  #   * update clip remains 0.5 to match the 100M-successful regime
+  #   * clip ratio 3 → 2 (EMA contribution spike guard tightens)
   #   * skip ratio 100 → 50, skip fuse 1e11 → 5e10
   #   * EMA beta 0.98 → 0.95 (half-life 35 → 14 step, recovers faster)
-  run_exp stab_B_lr5e-7_13k \
+  run_exp stab_B_clip0p5_lr5e-7_13k \
     LEARNING_RATE=0.0000005 \
     MIN_LR=0.00000005 \
     GRAD_CLIP_RATIO=2.0 \
     GRAD_SKIP_RATIO=50.0 \
     GRAD_SKIP_MAX=50000000000.0 \
     GRAD_CLIP_HARD_RAW_NORM_LIMIT=80000000000.0 \
-    GRAD_CLIP_MAX=500.0 \
+    GRAD_CLIP_MAX=0.5 \
     GRAD_CLIP_EMA_BETA=0.95 \
     MAX_TRAIN_STEPS=13000
 }
