@@ -172,10 +172,15 @@ match `log*txt`, `loss_to_log*txt`, or `metrics*jsonl`; checkpoints, figures,
 and other artifacts are skipped. Run it after the training process has stopped
 writing these files.
 
-Use `split-pack` when every transferred file must stay below 80 KB. It
-compresses each matched file independently with xz, runs the files in parallel,
-and writes many small `.xzpart` files plus split manifest files. With the normal
-8-rank layout this means the 24 `log`/`loss_to_log`/`metrics` files can be
+Use `split-pack` when every transferred file must stay below 80 KB. It first
+tries a structure-aware lossless encoding for `metrics*.jsonl`,
+`loss_to_log*.txt`, and `log*.txt`, verifies that the encoded form can recreate
+the original bytes exactly, then xz-compresses and splits the encoded stream
+into many small `.xzpart` files plus split manifest files. If a file does not
+match the expected stable format, it automatically falls back to raw-byte
+compression for that file.
+
+With the normal 8-rank layout the 24 `log`/`loss_to_log`/`metrics` files can be
 compressed by up to 24 worker processes.
 
 On the server:
@@ -187,6 +192,9 @@ python scripts/archive_training_output_text.py split-pack \
   --chunk-size 80KB \
   --jobs 24
 ```
+
+Add `--raw-bytes` if you want to disable the structure-aware step and only do
+plain byte compression/splitting.
 
 Copy the generated split directory to the workstation, then merge/decompress:
 

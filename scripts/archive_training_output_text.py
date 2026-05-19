@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 from concurrent.futures import ProcessPoolExecutor, as_completed
+import csv
 import fnmatch
 import hashlib
 import io
@@ -17,6 +18,7 @@ import json
 import lzma
 import os
 from pathlib import Path
+import re
 import stat
 import sys
 import tarfile
@@ -36,6 +38,10 @@ SPLIT_DATA_SUFFIX = ".xzpart"
 COPY_BUFFER_SIZE = 1024 * 1024
 DEFAULT_SPLIT_CHUNK_SIZE = 80_000
 XZ_MAGIC = b"\xfd7zXZ\x00"
+LOG_LINE_RE = re.compile(
+    r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) "
+    r"([A-Z]+) node=(\d+) rank=(\d+) local_rank=(\d+) pid=(\d+) (.*)$"
+)
 
 
 class ArchiveError(RuntimeError):
@@ -374,7 +380,7 @@ def compress_file_to_xz(task: tuple[int, str, str, str, str, int]) -> dict[str, 
 
 
 def compress_file_to_split_chunks(
-    task: tuple[int, str, str, str, str, int, int, bool]
+    task: tuple[int, str, str, str, str, int, int, bool, bool]
 ) -> dict[str, object]:
     (
         index,
@@ -385,12 +391,18 @@ def compress_file_to_split_chunks(
         preset,
         chunk_size,
         overwrite,
+        use_structured,
     ) = task
     source_path = Path(source_path_text)
     output_dir = Path(output_dir_text)
     st = source_path.stat()
-    source_sha256 = hashlib.sha256()
-    source_size = 0
+    source_data = source_path.read_bytes()
+    source_size = len(source_data)
+    source_sha256 = hashlib.sha256(source_data).hexdigest()
+    codec, encoded_payload = encode_structured_payload(
+        source_path, source_data, use_structured
+    )
+    encoded_sha256 = hashlib.sha256(encoded_payload).hexdigest()
     split_writer = SplitChunkWriter(
         output_dir,
         file_index=index,
@@ -399,15 +411,8 @@ def compress_file_to_split_chunks(
     )
 
     try:
-        with source_path.open("rb") as raw_in:
-            with lzma.LZMAFile(split_writer, "wb", preset=preset) as xz_out:
-                while True:
-                    chunk = raw_in.read(COPY_BUFFER_SIZE)
-                    if not chunk:
-                        break
-                    source_sha256.update(chunk)
-                    source_size += len(chunk)
-                    xz_out.write(chunk)
+        with lzma.LZMAFile(split_writer, "wb", preset=preset) as xz_out:
+            xz_out.write(encoded_payload)
     finally:
         split_writer.close()
 
@@ -415,12 +420,15 @@ def compress_file_to_split_chunks(
         "index": index,
         "path": arcname,
         "source_relative_path": source_relative_path,
+        "codec": codec,
         "chunks": split_writer.chunks,
         "size": source_size,
+        "encoded_size": len(encoded_payload),
+        "encoded_sha256": encoded_sha256,
         "compressed_size": split_writer.compressed_size,
         "mode": stat.S_IMODE(st.st_mode),
         "mtime": int(st.st_mtime),
-        "sha256": source_sha256.hexdigest(),
+        "sha256": source_sha256,
         "compressed_sha256": split_writer.hexdigest,
     }
 
@@ -461,6 +469,231 @@ def compact_json_bytes(payload: dict[str, object]) -> bytes:
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")
+
+
+def detect_newline(data: bytes) -> str:
+    crlf = data.find(b"\r\n")
+    lf = data.find(b"\n")
+    if crlf != -1 and (lf == -1 or crlf <= lf):
+        return "\r\n"
+    if lf != -1:
+        return "\n"
+    return ""
+
+
+def split_line_bytes(data: bytes) -> list[bytes]:
+    if not data:
+        return []
+    return data.splitlines(keepends=True)
+
+
+def strip_line_ending(text: str) -> tuple[str, str]:
+    if text.endswith("\r\n"):
+        return text[:-2], "\r\n"
+    if text.endswith("\n"):
+        return text[:-1], "\n"
+    if text.endswith("\r"):
+        return text[:-1], "\r"
+    return text, ""
+
+
+def decode_utf8(data: bytes) -> str:
+    return data.decode("utf-8")
+
+
+def encode_metric_jsonl_payload(data: bytes) -> bytes:
+    text = decode_utf8(data)
+    newline = detect_newline(data)
+    rows: list[list[tuple[str, object]]] = []
+    fields: list[str] = []
+    field_seen: set[str] = set()
+    compact_style: bool | None = None
+    trailing_empty_line = False
+
+    lines = text.splitlines()
+    if text.endswith("\n") or text.endswith("\r"):
+        trailing_empty_line = False
+    elif not text:
+        lines = []
+
+    for raw_line in lines:
+        if raw_line == "":
+            trailing_empty_line = True
+            continue
+        pairs = json.loads(raw_line, object_pairs_hook=list)
+        if not isinstance(pairs, list):
+            raise ArchiveError("metrics jsonl row is not a JSON object")
+        typed_pairs: list[tuple[str, object]] = []
+        for key, value in pairs:
+            if not isinstance(key, str):
+                raise ArchiveError("metrics jsonl key is not a string")
+            typed_pairs.append((key, value))
+            if key not in field_seen:
+                fields.append(key)
+                field_seen.add(key)
+        if compact_style is None:
+            compact_style = '":' in raw_line and '": ' not in raw_line
+        rows.append(typed_pairs)
+
+    field_to_index = {field: index for index, field in enumerate(fields)}
+    encoded_rows: list[list[object]] = []
+    for row in rows:
+        indexes = [field_to_index[key] for key, _value in row]
+        if indexes != sorted(indexes):
+            raise ArchiveError("metrics jsonl field order is not stable")
+        mask = 0
+        values = []
+        for index, _key_value in zip(indexes, row):
+            mask |= 1 << index
+            values.append(_key_value[1])
+        encoded_rows.append([format(mask, "x"), values])
+
+    payload = {
+        "kind": "metrics_jsonl_v1",
+        "newline": newline,
+        "json_style": "compact" if compact_style else "spaced",
+        "fields": fields,
+        "rows": encoded_rows,
+        "trailing_empty_line": trailing_empty_line,
+    }
+    return compact_json_bytes(payload)
+
+
+def restore_metric_jsonl_payload(encoded: bytes) -> bytes:
+    payload = json.loads(encoded.decode("utf-8"))
+    fields = payload["fields"]
+    newline = payload["newline"]
+    separators = (",", ":") if payload["json_style"] == "compact" else None
+    output_lines = []
+    for mask_hex, values in payload["rows"]:
+        mask = int(mask_hex, 16)
+        value_iter = iter(values)
+        row = {}
+        for index, field in enumerate(fields):
+            if mask & (1 << index):
+                row[field] = next(value_iter)
+        output_lines.append(
+            json.dumps(row, ensure_ascii=False, separators=separators)
+        )
+    text = newline.join(output_lines)
+    if output_lines and newline:
+        text += newline
+    if payload.get("trailing_empty_line"):
+        text += newline
+    return text.encode("utf-8")
+
+
+def encode_loss_csv_payload(data: bytes) -> bytes:
+    text = decode_utf8(data)
+    newline = detect_newline(data) or "\n"
+    reader = csv.reader(io.StringIO(text), lineterminator=newline)
+    rows = list(reader)
+    if not rows:
+        raise ArchiveError("loss csv is empty")
+    header = rows[0]
+    data_rows = rows[1:]
+    width = len(header)
+    for row in data_rows:
+        if len(row) != width:
+            raise ArchiveError("loss csv row width is not stable")
+    columns = [[row[index] for row in data_rows] for index in range(width)]
+    payload = {
+        "kind": "loss_csv_v1",
+        "newline": newline,
+        "header": header,
+        "columns": columns,
+    }
+    return compact_json_bytes(payload)
+
+
+def restore_loss_csv_payload(encoded: bytes) -> bytes:
+    payload = json.loads(encoded.decode("utf-8"))
+    header = payload["header"]
+    columns = payload["columns"]
+    newline = payload["newline"]
+    row_count = len(columns[0]) if columns else 0
+    output = io.StringIO()
+    writer = csv.writer(output, lineterminator=newline)
+    writer.writerow(header)
+    for row_index in range(row_count):
+        writer.writerow([column[row_index] for column in columns])
+    return output.getvalue().encode("utf-8")
+
+
+def encode_log_payload(data: bytes) -> bytes:
+    text = decode_utf8(data)
+    records: list[list[object]] = []
+    for line_bytes in split_line_bytes(data):
+        line_text = line_bytes.decode("utf-8")
+        body, newline = strip_line_ending(line_text)
+        match = LOG_LINE_RE.match(body)
+        if match:
+            ts, level, node, rank, local_rank, pid, message = match.groups()
+            records.append(
+                ["L", ts, level, int(node), int(rank), int(local_rank), int(pid), message, newline]
+            )
+        else:
+            records.append(["R", body, newline])
+    if data and not records:
+        raise ArchiveError("log payload has no records")
+    payload = {
+        "kind": "log_template_v1",
+        "records": records,
+    }
+    return compact_json_bytes(payload)
+
+
+def restore_log_payload(encoded: bytes) -> bytes:
+    payload = json.loads(encoded.decode("utf-8"))
+    parts = []
+    for record in payload["records"]:
+        if record[0] == "L":
+            _kind, ts, level, node, rank, local_rank, pid, message, newline = record
+            parts.append(
+                f"{ts} {level} node={node} rank={rank} "
+                f"local_rank={local_rank} pid={pid} {message}{newline}"
+            )
+        elif record[0] == "R":
+            _kind, body, newline = record
+            parts.append(f"{body}{newline}")
+        else:
+            raise ArchiveError(f"unknown log record kind: {record[0]}")
+    return "".join(parts).encode("utf-8")
+
+
+def restore_structured_payload(codec: str, encoded: bytes) -> bytes:
+    if codec == "raw-bytes":
+        return encoded
+    if codec == "metrics-jsonl-v1":
+        return restore_metric_jsonl_payload(encoded)
+    if codec == "loss-csv-v1":
+        return restore_loss_csv_payload(encoded)
+    if codec == "log-template-v1":
+        return restore_log_payload(encoded)
+    raise ArchiveError(f"unsupported payload codec: {codec}")
+
+
+def encode_structured_payload(path: Path, data: bytes, use_structured: bool) -> tuple[str, bytes]:
+    if not use_structured:
+        return "raw-bytes", data
+
+    name = path.name
+    candidates = []
+    if fnmatch.fnmatch(name, "metrics*jsonl"):
+        candidates.append(("metrics-jsonl-v1", encode_metric_jsonl_payload))
+    elif fnmatch.fnmatch(name, "loss_to_log*txt"):
+        candidates.append(("loss-csv-v1", encode_loss_csv_payload))
+    elif fnmatch.fnmatch(name, "log*txt"):
+        candidates.append(("log-template-v1", encode_log_payload))
+
+    for codec, encoder in candidates:
+        try:
+            encoded = encoder(data)
+            if restore_structured_payload(codec, encoded) == data:
+                return codec, encoded
+        except Exception:
+            continue
+    return "raw-bytes", data
 
 
 def validate_generated_file_sizes(
@@ -511,6 +744,7 @@ def split_pack(args: argparse.Namespace) -> int:
                 preset,
                 chunk_size,
                 args.overwrite,
+                not args.raw_bytes,
             )
         )
 
@@ -1164,41 +1398,20 @@ def read_split_manifest(split_dir: Path) -> dict[str, object]:
 def decompress_chunk_sequence(
     split_dir: Path,
     chunks: list[dict[str, object]],
-    *,
-    output_path: Path | None,
-    overwrite: bool,
-    mode: int,
-    mtime: int,
-) -> tuple[int, str, str]:
-    if output_path is not None and output_path.exists() and not overwrite:
-        raise ArchiveError(f"refusing to overwrite existing file: {output_path}")
-    if output_path is not None:
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-
+) -> tuple[bytes, str]:
     chunk_reader = ChunkSequenceReader(split_dir, chunks)
     compressed_reader = HashingReader(chunk_reader)
-    source_digest = hashlib.sha256()
-    source_size = 0
-    out = output_path.open("wb") if output_path is not None else None
+    output = io.BytesIO()
     try:
         with lzma.LZMAFile(compressed_reader, "rb") as xz_in:
             while True:
                 chunk = xz_in.read(COPY_BUFFER_SIZE)
                 if not chunk:
                     break
-                source_digest.update(chunk)
-                source_size += len(chunk)
-                if out is not None:
-                    out.write(chunk)
+                output.write(chunk)
     finally:
         chunk_reader.close()
-        if out is not None:
-            out.close()
-
-    if output_path is not None:
-        os.chmod(output_path, mode & 0o777)
-        os.utime(output_path, (mtime, mtime))
-    return source_size, source_digest.hexdigest(), compressed_reader.hexdigest
+    return output.getvalue(), compressed_reader.hexdigest
 
 
 def load_split_archive(
@@ -1234,26 +1447,37 @@ def load_split_archive(
                 raise ArchiveError(f"split manifest is malformed: invalid chunk for {path}")
             typed_chunks.append(chunk)
 
-        output_path = None
-        if not verify_only:
-            if output_root is None:
-                raise ArchiveError("output_dir is required unless verify is set")
-            output_path = safe_output_path(output_root, path)
+        encoded_payload, compressed_sha = decompress_chunk_sequence(split_dir, typed_chunks)
+        if len(encoded_payload) != int(expected.get("encoded_size", len(encoded_payload))):
+            raise ArchiveError(f"encoded size mismatch for {path}")
+        expected_encoded_sha = expected.get("encoded_sha256")
+        if expected_encoded_sha and hashlib.sha256(encoded_payload).hexdigest() != expected_encoded_sha:
+            raise ArchiveError(f"encoded sha256 mismatch for {path}")
 
-        source_size, source_sha, compressed_sha = decompress_chunk_sequence(
-            split_dir,
-            typed_chunks,
-            output_path=output_path,
-            overwrite=overwrite,
-            mode=int(expected["mode"]),
-            mtime=int(expected["mtime"]),
-        )
+        codec = str(expected.get("codec", "raw-bytes"))
+        source_payload = restore_structured_payload(codec, encoded_payload)
+        source_size = len(source_payload)
+        source_sha = hashlib.sha256(source_payload).hexdigest()
+
         if source_size != int(expected["size"]):
             raise ArchiveError(f"size mismatch for {path}")
         if source_sha != expected.get("sha256"):
             raise ArchiveError(f"sha256 mismatch for {path}")
         if compressed_sha != expected.get("compressed_sha256"):
             raise ArchiveError(f"compressed sha256 mismatch for {path}")
+
+        output_path = None
+        if not verify_only:
+            if output_root is None:
+                raise ArchiveError("output_dir is required unless verify is set")
+            output_path = safe_output_path(output_root, path)
+            if output_path.exists() and not overwrite:
+                raise ArchiveError(f"refusing to overwrite existing file: {output_path}")
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_bytes(source_payload)
+            os.chmod(output_path, int(expected["mode"]) & 0o777)
+            os.utime(output_path, (int(expected["mtime"]), int(expected["mtime"])))
+
         observed[path] = {
             "size": source_size,
             "sha256": source_sha,
@@ -1457,6 +1681,11 @@ def build_parser() -> argparse.ArgumentParser:
             "Maximum size of each generated file. Default: 80KB "
             f"({DEFAULT_SPLIT_CHUNK_SIZE} bytes)."
         ),
+    )
+    split_pack_parser.add_argument(
+        "--raw-bytes",
+        action="store_true",
+        help="Disable structure-aware encoding and compress raw file bytes.",
     )
     add_common_pack_options(split_pack_parser)
     split_pack_parser.set_defaults(func=split_pack)

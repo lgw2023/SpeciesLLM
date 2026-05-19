@@ -181,6 +181,69 @@ class ArchiveTrainingOutputTextTest(unittest.TestCase):
                 self.assertEqual(restored_path.read_bytes(), data)
             self.assertFalse((restored_root / source.name / "checkpoint.pt").exists())
 
+    def test_structured_split_codecs_roundtrip_stable_formats(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            source = tmp_path / "training_output_demo"
+            source.mkdir()
+            (source / "metrics.0-0.jsonl").write_bytes(
+                b'{"time":"2026-05-06T22:15:37","node_rank":"0","rank":0,'
+                b'"local_rank":0,"epoch":1,"batch_index":1,"num_batches":2,'
+                b'"update_step":1,"should_step":true,"lr":1e-06,"loss_total":1.5}\r\n'
+                b'{"time":"2026-05-06T22:15:38","node_rank":"0","rank":0,'
+                b'"local_rank":0,"epoch":1,"batch_index":2,"num_batches":2,'
+                b'"update_step":2,"should_step":true,"lr":2e-06}\r\n'
+            )
+            (source / "loss_to_log.0-0.txt").write_bytes(
+                b"time,node_rank,rank,local_rank,epoch,batch_index,lr,loss_total\r\n"
+                b"2026-05-06T22:15:37,0,0,0,1,1,1e-06,1.5\r\n"
+                b"2026-05-06T22:15:38,0,0,0,1,2,2e-06,\r\n"
+            )
+            (source / "log.0-0.txt").write_bytes(
+                b"2026-05-06 22:14:52 INFO node=0 rank=0 local_rank=0 pid=123 args={\r\n"
+                b'  "batch_size": 512\r\n'
+                b"}\r\n"
+            )
+
+            split_dir = tmp_path / "split"
+            with contextlib.redirect_stdout(io.StringIO()):
+                rc = archive_tool.main(
+                    [
+                        "split-pack",
+                        str(source),
+                        "--output-dir",
+                        str(split_dir),
+                        "--chunk-size",
+                        "4096",
+                        "--jobs",
+                        "2",
+                        "--preset",
+                        "0",
+                    ]
+                )
+            self.assertEqual(rc, 0)
+
+            manifest = archive_tool.read_split_manifest(split_dir)
+            codecs = {item["path"].split("/")[-1]: item["codec"] for item in manifest["files"]}
+            self.assertEqual(codecs["metrics.0-0.jsonl"], "metrics-jsonl-v1")
+            self.assertEqual(codecs["loss_to_log.0-0.txt"], "loss-csv-v1")
+            self.assertEqual(codecs["log.0-0.txt"], "log-template-v1")
+
+            restored_root = tmp_path / "restored"
+            with contextlib.redirect_stdout(io.StringIO()):
+                rc = archive_tool.main(
+                    [
+                        "split-unpack",
+                        str(split_dir),
+                        "--output-dir",
+                        str(restored_root),
+                    ]
+                )
+            self.assertEqual(rc, 0)
+            for original_path in source.iterdir():
+                restored_path = restored_root / source.name / original_path.name
+                self.assertEqual(restored_path.read_bytes(), original_path.read_bytes())
+
 
 if __name__ == "__main__":
     unittest.main()
