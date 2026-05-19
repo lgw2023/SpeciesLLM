@@ -8,7 +8,7 @@ set -euo pipefail
 #   cd /data/disk1/SpeciesLLM
 #   bash scripts/launch_singlenode_torchrun.sh
 #
-# This script intentionally does not read .env from the smoke-test launcher. It always launches
+# This script intentionally does not read .env from the three-node launcher. It always launches
 # one local node only:
 #   nnodes=1, node_rank=0, nproc_per_node=8
 ###############################################################################
@@ -53,7 +53,7 @@ MODEL_CONFIG_JSON="${MODEL_CONFIG_JSON:-${EMB_PATH}/args_2nd_run.json}"
 OUT_PATH="${OUT_PATH:-training_output}"
 
 # ---------- training parameters ----------
-# scripts/smoke_500m_3node.sh uses 3 nodes * 8 ranks, batch_size=16, grad_accum=4.
+# scripts/pretrain_3node.sh uses 3 nodes * 8 ranks, batch_size=16, grad_accum=4.
 # On one node, grad_accum=12 preserves the same effective global batch:
 # 8 * 16 * 12 == 24 * 16 * 4.
 BATCH_SIZE="${BATCH_SIZE:-16}"

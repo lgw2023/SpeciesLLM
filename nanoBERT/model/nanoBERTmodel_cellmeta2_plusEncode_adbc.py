@@ -629,16 +629,17 @@ class BERTModel(nn.Module):
         self.apply(self._init_weights)
 
     def _init_weights(self, module):
+        initializer_range = float(self.config.initializer_range)
         if isinstance(module,
                       nn.Linear):
             module.weight.data.normal_(mean=0.0,
-                                       std=0.02)
+                                       std=initializer_range)
             if module.bias is not None:
                 module.bias.data.zero_()
         elif isinstance(module,
                         nn.Embedding):
             module.weight.data.normal_(mean=0.0,
-                                       std=0.02)
+                                       std=initializer_range)
         elif isinstance(module,
                         nn.LayerNorm):
             module.bias.data.zero_()
@@ -865,16 +866,17 @@ class BERTForPreTraining(nn.Module):
         return src, esm_embeddings, desc_embeddings, dna_embeddings
 
     def _init_weights(self, module):
+        initializer_range = float(self.config.initializer_range)
         if isinstance(module,
                       nn.Linear):
             module.weight.data.normal_(mean=0.0,
-                                       std=0.02)
+                                       std=initializer_range)
             if module.bias is not None:
                 module.bias.data.zero_()
         elif isinstance(module,
                         nn.Embedding):
             module.weight.data.normal_(mean=0.0,
-                                       std=0.02)
+                                       std=initializer_range)
         elif isinstance(module,
                         nn.LayerNorm):
             module.bias.data.zero_()

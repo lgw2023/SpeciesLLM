@@ -29,6 +29,7 @@ if [[ "${1:-}" != "--__speciesllm-step3-1b-clean-env" ]]; then
     bash "$0" --__speciesllm-step3-1b-clean-env "$@"
 fi
 shift
+RUN_RECORD_ARGS=("$@")
 
 cd /data/disk1/SpeciesLLM
 
@@ -113,12 +114,21 @@ cli_has() {
   return 1
 }
 
+write_run_record() {
+  "$PYTHON_BIN" scripts/write_run_record.py \
+    --repo "$WORKDIR" \
+    --out-path "$OUT_PATH" \
+    --script "$0" \
+    --shell bash \
+    -- "${RUN_RECORD_ARGS[@]}"
+}
+
 RUN_ID_CONFIGURED=0
 OUT_PATH_CONFIGURED=0
 [[ -n "${RUN_ID+x}" ]] && RUN_ID_CONFIGURED=1
 [[ -n "${OUT_PATH+x}" ]] && OUT_PATH_CONFIGURED=1
 
-run_smoke() {
+run_pretrain_3node() {
   [[ -d "$DATA_PATH" ]] || die "Missing DATA_PATH: ${DATA_PATH}"
 
   local run_training="0"
@@ -147,7 +157,7 @@ run_smoke() {
   echo "[INFO] BATCH_SIZE=${BATCH_SIZE}"
   echo "[INFO] GRADIENT_ACCUMULATION_STEPS=${GRADIENT_ACCUMULATION_STEPS}"
 
-  bash scripts/smoke_500m_3node.sh \
+  bash scripts/pretrain_3node.sh \
     ENV_FILE="$ENV_FILE" \
     MODEL_SCALE=1b \
     PREP_ACTION=commands \
@@ -316,7 +326,11 @@ if [[ "$ACTION" == "collect" && "$RUN_ID_CONFIGURED" != "1" && "$OUT_PATH_CONFIG
   die "ACTION=collect requires RUN_ID from the launch command, or an explicit OUT_PATH. Pass it after the script path or define it in .env."
 fi
 
-run_smoke
+if [[ "$ACTION" == "launch" ]]; then
+  write_run_record
+fi
+
+run_pretrain_3node
 
 
 # Vanilla launch (uses script defaults: LEARNING_RATE=1e-5, GRAD_CLIP=1.0, etc.):

@@ -29,6 +29,7 @@ if [[ "${1:-}" != "--__speciesllm-step3-100m-clean-env" ]]; then
     bash "$0" --__speciesllm-step3-100m-clean-env "$@"
 fi
 shift
+RUN_RECORD_ARGS=("$@")
 
 cd /data/disk1/SpeciesLLM
 
@@ -113,12 +114,21 @@ cli_has() {
   return 1
 }
 
+write_run_record() {
+  "$PYTHON_BIN" scripts/write_run_record.py \
+    --repo "$WORKDIR" \
+    --out-path "$OUT_PATH" \
+    --script "$0" \
+    --shell bash \
+    -- "${RUN_RECORD_ARGS[@]}"
+}
+
 RUN_ID_CONFIGURED=0
 OUT_PATH_CONFIGURED=0
 [[ -n "${RUN_ID+x}" ]] && RUN_ID_CONFIGURED=1
 [[ -n "${OUT_PATH+x}" ]] && OUT_PATH_CONFIGURED=1
 
-run_smoke() {
+run_pretrain_3node() {
   [[ -d "$DATA_PATH" ]] || die "Missing DATA_PATH: ${DATA_PATH}"
 
   local run_training="0"
@@ -147,7 +157,7 @@ run_smoke() {
   echo "[INFO] BATCH_SIZE=${BATCH_SIZE}"
   echo "[INFO] GRADIENT_ACCUMULATION_STEPS=${GRADIENT_ACCUMULATION_STEPS}"
 
-  bash scripts/smoke_500m_3node.sh \
+  bash scripts/pretrain_3node.sh \
     ENV_FILE="$ENV_FILE" \
     MODEL_SCALE=100m \
     PREP_ACTION=commands \
@@ -316,7 +326,11 @@ if [[ "$ACTION" == "collect" && "$RUN_ID_CONFIGURED" != "1" && "$OUT_PATH_CONFIG
   die "ACTION=collect requires RUN_ID from the launch command, or an explicit OUT_PATH. Pass it after the script path or define it in .env."
 fi
 
-run_smoke
+if [[ "$ACTION" == "launch" ]]; then
+  write_run_record
+fi
+
+run_pretrain_3node
 
 
 # bash work_record/step3_model_100M.sh \
@@ -329,15 +343,129 @@ run_smoke
 #   EXPERIMENT_NAME=data_1_3 \
 #   DATA_PATH=/data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData/data_1_3_flatten_data_full_no_1st_human_mouse_xxx
 
-# RUN_ID=$(date +%Y%m%d_%H%M%S)
 # bash work_record/step3_model_100M.sh \
 #   ACTION=launch \
-#   RUN_ID="$RUN_ID" \
+#   RUN_ID=20260513_103448 \
 #   EXPERIMENT_NAME=data_1_3_stable \
 #   DATA_PATH=/data/disk2/SpeciesLLM_obs/Stage2_SpeciesLLMData/data_1_3_flatten_data_full_no_1st_human_mouse_20260510_225349_external \
 #   GRAD_CLIP=0.5 \
 #   LEARNING_RATE=0.000001 \
 #   MIN_LR=0.0000001 \
+#   WARMUP_RATIO=0.10 \
+#   BETA2=0.98 \
+#   NAN_CHECK_INTERVAL=10
+
+# bash work_record/step3_model_100M.sh \
+#   ACTION=launch \
+#   RUN_ID=20260514_011839 \
+#   EXPERIMENT_NAME=data_1_2_3_stable \
+#   DATA_PATH=/data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData/all_flatten_data_full_no_1st_human_mouse_20260506_165244_external \
+#   GRAD_CLIP=0.5 \
+#   LEARNING_RATE=0.000001 \
+#   MIN_LR=0.0000001 \
+#   WARMUP_RATIO=0.10 \
+#   BETA2=0.98 \
+#   NAN_CHECK_INTERVAL=10
+
+
+
+# Learning-rate sweep for the current 100M data_1_2_3 stable setup.
+# Reference result:
+#   training_output_100m_data_1_2_3_stable_from_scratch_20260514_011839
+#   peak LR=1e-6, min LR=1e-7, final cluster loss around 17.
+#
+# Batch-size context:
+#   effective_global_batch = BATCH_SIZE * NNODES * NPROC_PER_NODE * GRAD_ACCUM
+#                          = 512 * 3 * 8 * 1 = 12288 cells/update
+#   token batch is about 12288 * 640 = 7.86M tokens/update.
+#
+# Literature anchors from papers/:
+#   STACK Base/Large pretrain: peak LR=1e-4; XLarge/Huge: 3e-5.
+#   STACK post-training: peak LR=2e-5, min LR=5e-6.
+#   Tahoe-X1: Tx1-70M LR=3e-4; Tx1-1.3B LR=1e-4; Tx1-3B stage2 LR=3e-5.
+#
+# Sweep list: 1e-5, 3e-5, 5e-5, 1e-4, 3e-4, 5e-4.
+# This covers STACK's 3e-5 to 1e-4 range, Tahoe-X1's 3e-4 peak, and one
+# higher-risk point above the paper anchors. Keep all non-LR settings copied
+# from the stable run. Scale MIN_LR with peak LR at the same 0.1 ratio used by
+# the stable run and by Tahoe-X1 stage1's 3e-4 -> 3e-5 endpoint.
+
+# RUN_ID=$(date +%Y%m%d_%H%M%S)
+# bash work_record/step3_model_100M.sh \
+#   ACTION=launch \
+#   RUN_ID="$RUN_ID" \
+#   EXPERIMENT_NAME=data_1_2_3_stable_lr1em5 \
+#   DATA_PATH=/data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData/all_flatten_data_full_no_1st_human_mouse_20260506_165244_external \
+#   GRAD_CLIP=0.5 \
+#   LEARNING_RATE=0.00001 \
+#   MIN_LR=0.000001 \
+#   WARMUP_RATIO=0.10 \
+#   BETA2=0.98 \
+#   NAN_CHECK_INTERVAL=10
+
+# RUN_ID=$(date +%Y%m%d_%H%M%S)
+# bash work_record/step3_model_100M.sh \
+#   ACTION=launch \
+#   RUN_ID="$RUN_ID" \
+#   EXPERIMENT_NAME=data_1_2_3_stable_lr3em5 \
+#   DATA_PATH=/data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData/all_flatten_data_full_no_1st_human_mouse_20260506_165244_external \
+#   GRAD_CLIP=0.5 \
+#   LEARNING_RATE=0.00003 \
+#   MIN_LR=0.000003 \
+#   WARMUP_RATIO=0.10 \
+#   BETA2=0.98 \
+#   NAN_CHECK_INTERVAL=10
+
+# RUN_ID=$(date +%Y%m%d_%H%M%S)
+# bash work_record/step3_model_100M.sh \
+#   ACTION=launch \
+#   RUN_ID="$RUN_ID" \
+#   EXPERIMENT_NAME=data_1_2_3_stable_lr5em5 \
+#   DATA_PATH=/data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData/all_flatten_data_full_no_1st_human_mouse_20260506_165244_external \
+#   GRAD_CLIP=0.5 \
+#   LEARNING_RATE=0.00005 \
+#   MIN_LR=0.000005 \
+#   WARMUP_RATIO=0.10 \
+#   BETA2=0.98 \
+#   NAN_CHECK_INTERVAL=10
+
+# RUN_ID=$(date +%Y%m%d_%H%M%S)
+# bash work_record/step3_model_100M.sh \
+#   ACTION=launch \
+#   RUN_ID="$RUN_ID" \
+#   EXPERIMENT_NAME=data_1_2_3_stable_lr1em4 \
+#   DATA_PATH=/data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData/all_flatten_data_full_no_1st_human_mouse_20260506_165244_external \
+#   GRAD_CLIP=0.5 \
+#   LEARNING_RATE=0.0001 \
+#   MIN_LR=0.00001 \
+#   WARMUP_RATIO=0.10 \
+#   BETA2=0.98 \
+#   NAN_CHECK_INTERVAL=10
+
+# High-risk point matching Tahoe-X1 70M/stage1 peak LR.
+# RUN_ID=$(date +%Y%m%d_%H%M%S)
+# bash work_record/step3_model_100M.sh \
+#   ACTION=launch \
+#   RUN_ID="$RUN_ID" \
+#   EXPERIMENT_NAME=data_1_2_3_stable_lr3em4 \
+#   DATA_PATH=/data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData/all_flatten_data_full_no_1st_human_mouse_20260506_165244_external \
+#   GRAD_CLIP=0.5 \
+#   LEARNING_RATE=0.0003 \
+#   MIN_LR=0.00003 \
+#   WARMUP_RATIO=0.10 \
+#   BETA2=0.98 \
+#   NAN_CHECK_INTERVAL=10
+
+# Higher-risk point above the Tahoe-X1 and STACK paper anchors.
+# RUN_ID=$(date +%Y%m%d_%H%M%S)
+# bash work_record/step3_model_100M.sh \
+#   ACTION=launch \
+#   RUN_ID="$RUN_ID" \
+#   EXPERIMENT_NAME=data_1_2_3_stable_lr5em4 \
+#   DATA_PATH=/data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData/all_flatten_data_full_no_1st_human_mouse_20260506_165244_external \
+#   GRAD_CLIP=0.5 \
+#   LEARNING_RATE=0.0005 \
+#   MIN_LR=0.00005 \
 #   WARMUP_RATIO=0.10 \
 #   BETA2=0.98 \
 #   NAN_CHECK_INTERVAL=10

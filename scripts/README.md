@@ -51,9 +51,8 @@ scripts/pretrain_checks.py
 
 They provide strict model JSON loading, seq_len derivation, source parquet
 preflight, flattened parquet validation, embedding checks, distributed file-plan
-generation, output path resolution, and post-training log/artifact checks. Both
-the smoke-test wrapper and the multi-node launcher use the same fixed 500M model
-JSON:
+generation, output path resolution, and post-training log/artifact checks. The
+test pipeline defaults to the 500M model JSON:
 
 ```text
 Stage2_macrogene_embeddings/args_2nd_run.json
@@ -62,7 +61,7 @@ Stage2_macrogene_embeddings/args_2nd_run.json
 Missing model structure fields, label switches, label counts, or inconsistent
 `vocab_size` / `max_position_embeddings` fail fast.
 
-## 500M three-node smoke test
+## Three-node pretraining smoke test
 
 ```bash
 bash scripts/pretrain_pipeline.sh all
@@ -71,7 +70,7 @@ bash scripts/pretrain_pipeline.sh all
 This server-oriented script uses
 `merge_macrogene_rounds.py --test-mode`, flattens the small merged
 sample, validates parquet schema / label ranges / macrogene embedding shapes,
-writes a 24-rank file distribution plan, and generates 500M three-node training
+creates a 24-rank file distribution plan, and generates three-node training
 commands under `Stage2_SpeciesLLMData/pretrain_500m_test_commands`.
 
 Model structure and label parameters are read strictly from
@@ -92,11 +91,11 @@ HOSTS=host0,host1,host2 MASTER_ADDR=host0 \
 bash scripts/pretrain_pipeline.sh all
 ```
 
-For the existing end-to-end 500M three-node smoke orchestration, including
-remote sync, path checks, dry-run, and optional launch, use:
+For end-to-end three-node orchestration, including remote sync, path checks,
+dry-run, and optional launch, use:
 
 ```bash
-bash scripts/smoke_500m_3node.sh
+bash scripts/pretrain_3node.sh
 ```
 
 After the distributed job finishes:

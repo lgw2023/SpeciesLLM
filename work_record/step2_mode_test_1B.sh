@@ -23,7 +23,7 @@ cd /data/disk1/SpeciesLLM
 RUN_ID=$(date +%Y%m%d_%H%M%S)
 OUT_PATH="/data/disk1/SpeciesLLM/training_output_1b_test_from_scratch_${RUN_ID}"
 
-bash scripts/smoke_500m_3node.sh \
+bash scripts/pretrain_3node.sh \
   MODEL_SCALE=1b \
   PREP_ACTION=all \
   RESET_TEST_OUTPUT=1 \

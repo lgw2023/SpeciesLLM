@@ -143,7 +143,7 @@ SpeciesLLM/
 ├── scripts/
 │   ├── generate_test_data.sh                       # Test-data generation command
 │   ├── pretrain_pipeline.sh                        # Reusable pretraining data/check/command pipeline
-│   ├── smoke_500m_3node.sh                         # 500M three-node smoke-test orchestrator
+│   ├── pretrain_3node.sh                           # Three-node pretraining orchestrator
 │   ├── launch_multinode_torchrun.sh                # Multi-node torchrun launcher
 │   ├── launch_singlenode_torchrun.sh               # Single-node torchrun launcher
 │   ├── train_modelarts.sh                          # ModelArts training wrapper

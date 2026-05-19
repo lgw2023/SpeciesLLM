@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ "${1:-}" != "--__speciesllm-smoke-clean-env" ]]; then
+if [[ "${1:-}" != "--__speciesllm-pretrain-3node-clean-env" ]]; then
   exec /usr/bin/env -i \
     HOME="${HOME:-/root}" \
     PATH="/data/miniconda3/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
     LANG=C.UTF-8 \
-    bash "$0" --__speciesllm-smoke-clean-env "$@"
+    bash "$0" --__speciesllm-pretrain-3node-clean-env "$@"
 fi
 shift
 
@@ -18,19 +18,19 @@ die() {
 usage() {
   cat <<'USAGE'
 Usage:
-  bash scripts/smoke_500m_3node.sh [KEY=VALUE ...]
+  bash scripts/pretrain_3node.sh [KEY=VALUE ...]
 
 Examples:
-  bash scripts/smoke_500m_3node.sh
-  bash scripts/smoke_500m_3node.sh PREP_ACTION=all
-  bash scripts/smoke_500m_3node.sh RUN_TRAINING=0
-  bash scripts/smoke_500m_3node.sh COLLECT_ONLY=1
-  bash scripts/smoke_500m_3node.sh COLLECT_ONLY=1 TRAIN_OUT_DIR=/data/disk1/SpeciesLLM/training_output
-  bash scripts/smoke_500m_3node.sh SSH_PASSWORD='your-password' PREP_ACTION=commands
-  bash scripts/smoke_500m_3node.sh SSH_KEY=/path/to/id_ed25519 PREP_ACTION=commands
-  bash scripts/smoke_500m_3node.sh BATCH_SIZE=16 PREP_ACTION=commands SKIP_DATA_SYNC=1
-  bash scripts/smoke_500m_3node.sh MODEL_SCALE=100m PREP_ACTION=all
-  bash scripts/smoke_500m_3node.sh MODEL_SCALE=1b PREP_ACTION=all
+  bash scripts/pretrain_3node.sh
+  bash scripts/pretrain_3node.sh PREP_ACTION=all
+  bash scripts/pretrain_3node.sh RUN_TRAINING=0
+  bash scripts/pretrain_3node.sh COLLECT_ONLY=1
+  bash scripts/pretrain_3node.sh COLLECT_ONLY=1 TRAIN_OUT_DIR=/data/disk1/SpeciesLLM/training_output
+  bash scripts/pretrain_3node.sh SSH_PASSWORD='your-password' PREP_ACTION=commands
+  bash scripts/pretrain_3node.sh SSH_KEY=/path/to/id_ed25519 PREP_ACTION=commands
+  bash scripts/pretrain_3node.sh BATCH_SIZE=16 PREP_ACTION=commands SKIP_DATA_SYNC=1
+  bash scripts/pretrain_3node.sh MODEL_SCALE=100m PREP_ACTION=all
+  bash scripts/pretrain_3node.sh MODEL_SCALE=1b PREP_ACTION=all
 
 Notes:
   - The script re-execs itself with env -i, so exported shell variables are ignored.
@@ -630,10 +630,10 @@ collect_training_outputs() {
 }
 
 # 已经生成好测试数据时用 commands；需要重新生成测试数据时：
-#   bash scripts/smoke_500m_3node.sh PREP_ACTION=all
+#   bash scripts/pretrain_3node.sh PREP_ACTION=all
 #
 # 训练脚本通过 nohup 在远端后台运行；训练完成后收集各节点输出：
-#   bash scripts/smoke_500m_3node.sh COLLECT_ONLY=1
+#   bash scripts/pretrain_3node.sh COLLECT_ONLY=1
 if [[ "$COLLECT_ONLY" == "1" ]]; then
   collect_training_outputs
   bash scripts/pretrain_pipeline.sh check-training
@@ -663,4 +663,4 @@ bash "$LAUNCH_SCRIPT"
 
 echo "[INFO] Training has been launched through nohup on remote nodes."
 echo "[INFO] Monitor logs under each node: ${WORKDIR}/${LOG_SUBDIR}/node_rank*.log"
-echo "[INFO] After training finishes, run: bash scripts/smoke_500m_3node.sh COLLECT_ONLY=1"
+echo "[INFO] After training finishes, run: bash scripts/pretrain_3node.sh COLLECT_ONLY=1"
