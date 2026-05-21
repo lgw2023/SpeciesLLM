@@ -397,9 +397,11 @@ run_pretrain_3node
 # Sweep list: 1e-5, 3e-5, 5e-5, 1e-4, 3e-4, 5e-4.
 # This covers STACK's 3e-5 to 1e-4 range, Tahoe-X1's 3e-4 peak, and one
 # higher-risk point above the paper anchors. Keep all non-LR settings copied
-# from the stable run. The 100M script defaults keep the effective update clip
-# at 0.5 after adaptive warmup (GRAD_CLIP_MAX=0.5) and use the wider stability
-# fuse (GRAD_SKIP_RATIO=100, GRAD_SKIP_MAX=1e11), so these commands isolate LR.
+# from the stable run. The commands below also pin the gradient-control settings
+# explicitly so copied runs keep the effective update clip at 0.5 after adaptive
+# warmup (GRAD_CLIP_MAX=0.5) and use the wider stability fuse
+# (GRAD_SKIP_RATIO=100, GRAD_SKIP_MAX=1e11). That keeps the LR sweep isolated
+# from future script-default changes.
 # Scale MIN_LR with peak LR at the same 0.1 ratio used by the stable run and by
 # Tahoe-X1 stage1's 3e-4 -> 3e-5 endpoint.
 
@@ -410,10 +412,22 @@ run_pretrain_3node
 #   EXPERIMENT_NAME=data_1_2_3_stable_lr1em5 \
 #   DATA_PATH=/data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData/all_flatten_data_full_no_1st_human_mouse_20260506_165244_external \
 #   GRAD_CLIP=0.5 \
+#   ADAPTIVE_GRAD_CLIP=true \
+#   GRAD_CLIP_EMA_BETA=0.98 \
+#   GRAD_CLIP_RATIO=3.0 \
 #   LEARNING_RATE=0.00001 \
 #   MIN_LR=0.000001 \
 #   WARMUP_RATIO=0.10 \
 #   BETA2=0.98 \
+#   GRAD_CLIP_MIN=0.5 \
+#   GRAD_CLIP_MAX=0.5 \
+#   GRAD_CLIP_WARMUP_STEPS=200 \
+#   GRAD_SKIP_RATIO=100.0 \
+#   GRAD_SKIP_MAX=100000000000.0 \
+#   GRAD_CLIP_MAX_CONSECUTIVE_SKIPS=50 \
+#   GRAD_CLIP_EMA_RUNAWAY_FACTOR=2.0 \
+#   GRAD_CLIP_HARD_RAW_NORM_LIMIT=100000000000.0 \
+#   MAX_TRAIN_STEPS=0 \
 #   NAN_CHECK_INTERVAL=10
 
 # RUN_ID=$(date +%Y%m%d_%H%M%S)
@@ -423,10 +437,22 @@ run_pretrain_3node
 #   EXPERIMENT_NAME=data_1_2_3_stable_lr3em5 \
 #   DATA_PATH=/data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData/all_flatten_data_full_no_1st_human_mouse_20260506_165244_external \
 #   GRAD_CLIP=0.5 \
+#   ADAPTIVE_GRAD_CLIP=true \
+#   GRAD_CLIP_EMA_BETA=0.98 \
+#   GRAD_CLIP_RATIO=3.0 \
 #   LEARNING_RATE=0.00003 \
 #   MIN_LR=0.000003 \
 #   WARMUP_RATIO=0.10 \
 #   BETA2=0.98 \
+#   GRAD_CLIP_MIN=0.5 \
+#   GRAD_CLIP_MAX=0.5 \
+#   GRAD_CLIP_WARMUP_STEPS=200 \
+#   GRAD_SKIP_RATIO=100.0 \
+#   GRAD_SKIP_MAX=100000000000.0 \
+#   GRAD_CLIP_MAX_CONSECUTIVE_SKIPS=50 \
+#   GRAD_CLIP_EMA_RUNAWAY_FACTOR=2.0 \
+#   GRAD_CLIP_HARD_RAW_NORM_LIMIT=100000000000.0 \
+#   MAX_TRAIN_STEPS=0 \
 #   NAN_CHECK_INTERVAL=10
 
 # RUN_ID=$(date +%Y%m%d_%H%M%S)
@@ -436,10 +462,22 @@ run_pretrain_3node
 #   EXPERIMENT_NAME=data_1_2_3_stable_lr5em5 \
 #   DATA_PATH=/data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData/all_flatten_data_full_no_1st_human_mouse_20260506_165244_external \
 #   GRAD_CLIP=0.5 \
+#   ADAPTIVE_GRAD_CLIP=true \
+#   GRAD_CLIP_EMA_BETA=0.98 \
+#   GRAD_CLIP_RATIO=3.0 \
 #   LEARNING_RATE=0.00005 \
 #   MIN_LR=0.000005 \
 #   WARMUP_RATIO=0.10 \
 #   BETA2=0.98 \
+#   GRAD_CLIP_MIN=0.5 \
+#   GRAD_CLIP_MAX=0.5 \
+#   GRAD_CLIP_WARMUP_STEPS=200 \
+#   GRAD_SKIP_RATIO=100.0 \
+#   GRAD_SKIP_MAX=100000000000.0 \
+#   GRAD_CLIP_MAX_CONSECUTIVE_SKIPS=50 \
+#   GRAD_CLIP_EMA_RUNAWAY_FACTOR=2.0 \
+#   GRAD_CLIP_HARD_RAW_NORM_LIMIT=100000000000.0 \
+#   MAX_TRAIN_STEPS=0 \
 #   NAN_CHECK_INTERVAL=10
 
 # RUN_ID=$(date +%Y%m%d_%H%M%S)
@@ -449,10 +487,22 @@ run_pretrain_3node
 #   EXPERIMENT_NAME=data_1_2_3_stable_lr1em4 \
 #   DATA_PATH=/data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData/all_flatten_data_full_no_1st_human_mouse_20260506_165244_external \
 #   GRAD_CLIP=0.5 \
+#   ADAPTIVE_GRAD_CLIP=true \
+#   GRAD_CLIP_EMA_BETA=0.98 \
+#   GRAD_CLIP_RATIO=3.0 \
 #   LEARNING_RATE=0.0001 \
 #   MIN_LR=0.00001 \
 #   WARMUP_RATIO=0.10 \
 #   BETA2=0.98 \
+#   GRAD_CLIP_MIN=0.5 \
+#   GRAD_CLIP_MAX=0.5 \
+#   GRAD_CLIP_WARMUP_STEPS=200 \
+#   GRAD_SKIP_RATIO=100.0 \
+#   GRAD_SKIP_MAX=100000000000.0 \
+#   GRAD_CLIP_MAX_CONSECUTIVE_SKIPS=50 \
+#   GRAD_CLIP_EMA_RUNAWAY_FACTOR=2.0 \
+#   GRAD_CLIP_HARD_RAW_NORM_LIMIT=100000000000.0 \
+#   MAX_TRAIN_STEPS=0 \
 #   NAN_CHECK_INTERVAL=10
 
 # High-risk point matching Tahoe-X1 70M/stage1 peak LR.
@@ -463,10 +513,22 @@ run_pretrain_3node
 #   EXPERIMENT_NAME=data_1_2_3_stable_lr3em4 \
 #   DATA_PATH=/data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData/all_flatten_data_full_no_1st_human_mouse_20260506_165244_external \
 #   GRAD_CLIP=0.5 \
+#   ADAPTIVE_GRAD_CLIP=true \
+#   GRAD_CLIP_EMA_BETA=0.98 \
+#   GRAD_CLIP_RATIO=3.0 \
 #   LEARNING_RATE=0.0003 \
 #   MIN_LR=0.00003 \
 #   WARMUP_RATIO=0.10 \
 #   BETA2=0.98 \
+#   GRAD_CLIP_MIN=0.5 \
+#   GRAD_CLIP_MAX=0.5 \
+#   GRAD_CLIP_WARMUP_STEPS=200 \
+#   GRAD_SKIP_RATIO=100.0 \
+#   GRAD_SKIP_MAX=100000000000.0 \
+#   GRAD_CLIP_MAX_CONSECUTIVE_SKIPS=50 \
+#   GRAD_CLIP_EMA_RUNAWAY_FACTOR=2.0 \
+#   GRAD_CLIP_HARD_RAW_NORM_LIMIT=100000000000.0 \
+#   MAX_TRAIN_STEPS=0 \
 #   NAN_CHECK_INTERVAL=10
 
 # Higher-risk point above the Tahoe-X1 and STACK paper anchors.
@@ -477,8 +539,20 @@ run_pretrain_3node
 #   EXPERIMENT_NAME=data_1_2_3_stable_lr5em4 \
 #   DATA_PATH=/data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData/all_flatten_data_full_no_1st_human_mouse_20260506_165244_external \
 #   GRAD_CLIP=0.5 \
+#   ADAPTIVE_GRAD_CLIP=true \
+#   GRAD_CLIP_EMA_BETA=0.98 \
+#   GRAD_CLIP_RATIO=3.0 \
 #   LEARNING_RATE=0.0005 \
 #   MIN_LR=0.00005 \
 #   WARMUP_RATIO=0.10 \
 #   BETA2=0.98 \
+#   GRAD_CLIP_MIN=0.5 \
+#   GRAD_CLIP_MAX=0.5 \
+#   GRAD_CLIP_WARMUP_STEPS=200 \
+#   GRAD_SKIP_RATIO=100.0 \
+#   GRAD_SKIP_MAX=100000000000.0 \
+#   GRAD_CLIP_MAX_CONSECUTIVE_SKIPS=50 \
+#   GRAD_CLIP_EMA_RUNAWAY_FACTOR=2.0 \
+#   GRAD_CLIP_HARD_RAW_NORM_LIMIT=100000000000.0 \
+#   MAX_TRAIN_STEPS=0 \
 #   NAN_CHECK_INTERVAL=10
