@@ -230,3 +230,25 @@ python scripts/archive_training_output_text.py pack \
   --output /data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData/training_output_xxx_text.tar.xz \
   --single-stream
 ```
+
+## Publish training outputs to GitHub
+
+Local `training_output/` directories stay in `.gitignore`, including checkpoints
+and other large artifacts. To share logs/metrics (and optional plot snapshots)
+with collaborators via GitHub, build git-friendly mirror directories:
+
+```bash
+bash scripts/publish_training_outputs_to_git.sh --overwrite --git-add
+git commit -m "Share training output logs/metrics mirrors for collaborators."
+git push
+```
+
+This writes `training_output_<run>_text_split/` next to each local run. Those
+mirror directories are explicitly un-ignored in `.gitignore`. Weights such as
+`*.pt` remain excluded. Collaborators restore the original text files with:
+
+```bash
+python scripts/archive_training_output_text.py split-unpack \
+  training_output_<run>_text_split \
+  --output-dir .
+```
