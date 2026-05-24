@@ -10,8 +10,8 @@ Log structure (from train_MNodes_torchrun_mfu_preindexparquet.py):
   - log.{node}-{rank}.txt — human-readable; first block contains JSON args dump
 
 Scans the project root for training_output_* directories, loads rank-0 metrics,
-parses training args from the matching log file, and produces figures saved to
-./figures/.
+parses training args from the matching log file, and writes per-run figures
+back into each training output directory by default.
 
 Usage:
     python plot_training.py [training_output_dir ...]
@@ -25,9 +25,10 @@ Usage:
     --grad-clip-window N
                       rolling window for skip/clip RATE panel (default 100)
     --compare         when 2+ dirs are given, also produce a single overlay
-                      figure under figures/compare_<keys>/
+                      figure under figures/compare_<keys>/ by default
     --no-individual   skip per-run figures (useful together with --compare)
-    --out DIR         output directory (default <root>/figures/)
+    --out DIR         base output directory. When set, per-run figures are
+                      saved under DIR/<run_key>/ instead of the run directory.
 """
 
 import argparse
@@ -634,6 +635,13 @@ def discover_runs(root: Path) -> list[Path]:
     )
 
 
+def _individual_out_dir(run_dir: Path, base_out: Optional[Path]) -> Path:
+    """Resolve where plots for one training run should be written."""
+    if base_out is None:
+        return run_dir
+    return base_out / _run_short_key(run_dir)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Plot SpeciesLLM training metrics.",
@@ -645,7 +653,8 @@ def main() -> None:
     parser.add_argument("--root", type=Path, default=Path(__file__).parent,
                         help="project root to search (default: script dir)")
     parser.add_argument("--out", type=Path, default=None,
-                        help="output directory for figures (default: <root>/figures/<run_keys>/)")
+                        help="base output directory for figures; default writes "
+                             "per-run figures into each training_output_* dir")
     parser.add_argument("--smooth", type=int, default=1, metavar="N",
                         help="box-car smoothing window for loss/lr (default 1 = off)")
     parser.add_argument("--rank", type=int, default=0,
@@ -662,7 +671,7 @@ def main() -> None:
                         help="only plot rows up to update_step N (default: all)")
     parser.add_argument("--compare", action="store_true",
                         help="when 2+ dirs are given, also overlay all runs in a single "
-                             "comparison figure (output to figures/compare_<keys>/)")
+                             "comparison figure (default output: <root>/figures/compare_<keys>/)")
     parser.add_argument("--no-individual", action="store_true",
                         help="skip per-run figures (only useful together with --compare)")
     args = parser.parse_args()
@@ -741,7 +750,7 @@ def main() -> None:
                     print(f"  Saved: {p}")
                 plt.close(fig4)
 
-    base_out = args.out if args.out else (args.root.resolve() / "figures")
+    base_out = args.out.resolve() if args.out else None
 
     # Per-run figures
     if not args.no_individual:
@@ -749,7 +758,7 @@ def main() -> None:
             label = _dir_label(run_dir)
             if label not in runs:
                 continue
-            out_dir = base_out / _run_short_key(run_dir)
+            out_dir = _individual_out_dir(run_dir, base_out)
             print(f"\n[{label}] → {out_dir}")
             _save_figures({label: runs[label]}, out_dir)
 
@@ -758,7 +767,8 @@ def main() -> None:
         compare_key = "_vs_".join(
             _run_short_key(d) for d in run_dirs if _dir_label(d) in runs
         )
-        out_dir = base_out / f"compare_{compare_key}"
+        compare_base_out = base_out if base_out is not None else (args.root.resolve() / "figures")
+        out_dir = compare_base_out / f"compare_{compare_key}"
         print(f"\n[compare {len(runs)} runs] → {out_dir}")
         _save_figures(runs, out_dir)
     elif args.compare and len(runs) < 2:
