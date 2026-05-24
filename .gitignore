@@ -57,16 +57,17 @@ scbasecount_demo/data/**/.DS_Store
 # Papers and references (large PDF collections)
 papers/
 
-# Training logs (local full outputs stay untracked by default)
+# Training logs
 training_log/
-training_output/
-training_output_*/
-training_output_*.zip
 
-# Git-friendly compressed mirrors for collaborators (logs/metrics/plots only).
-# Create/update with: bash scripts/publish_training_outputs_to_git.sh
+# Git-friendly compressed mirrors
 !training_output_*_text_split/
 !training_output_*_text_split/**
+
+# Exclude training output checkpoints (already covered by *.pt above)
+# Track everything else: logs, metrics, plots, summaries
+*.optimizer.pt
+training_output_*.zip
 
 # Logs and outputs
 *.log
