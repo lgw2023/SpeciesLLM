@@ -669,6 +669,65 @@ def get_lr(itertion_number, min_learning_rate, warmup_iters, learning_rate, lr_d
     return min_learning_rate + coeff * (learning_rate - min_learning_rate)
 
 
+def unwrap_checkpoint_state(checkpoint):
+    if isinstance(checkpoint, dict):
+        for key in ("state_dict", "model_state_dict", "model"):
+            state = checkpoint.get(key)
+            if isinstance(state, dict):
+                return state
+    return checkpoint
+
+
+def strip_module_prefix(state_dict):
+    if not isinstance(state_dict, dict):
+        return state_dict
+    if not state_dict:
+        return state_dict
+    if all(isinstance(key, str) and key.startswith("module.") for key in state_dict):
+        return {key[len("module."):]: value for key, value in state_dict.items()}
+    return state_dict
+
+
+def broadcast_model_state(model, src_rank=0):
+    with torch.no_grad():
+        for tensor in model.state_dict().values():
+            if torch.is_tensor(tensor):
+                dist.broadcast(tensor, src=src_rank)
+
+
+def load_model_checkpoint(model, checkpoint_path, device, logger, ddp=False, rank=0):
+    if not checkpoint_path:
+        return
+    checkpoint_path = os.path.expanduser(checkpoint_path)
+    if rank == 0 and not os.path.exists(checkpoint_path):
+        raise FileNotFoundError(f"init_model_path not found: {checkpoint_path}")
+    if rank == 0 or os.path.exists(checkpoint_path):
+        checkpoint = torch.load(checkpoint_path, map_location=device)
+        state_dict = strip_module_prefix(unwrap_checkpoint_state(checkpoint))
+        load_result = model.load_state_dict(state_dict, strict=True)
+        logger.info("init_model_loaded path=%s missing_keys=%s unexpected_keys=%s",
+                    checkpoint_path, load_result.missing_keys, load_result.unexpected_keys)
+    elif not ddp:
+        raise FileNotFoundError(f"init_model_path not found: {checkpoint_path}")
+    else:
+        logger.info("init_model_path not local on rank=%s; waiting for rank0 broadcast", rank)
+    if ddp:
+        broadcast_model_state(model, src_rank=0)
+        logger.info("init_model_broadcast src_rank=0")
+
+
+def load_optimizer_checkpoint(optimizer, checkpoint_path, device, logger):
+    if not checkpoint_path:
+        return
+    checkpoint_path = os.path.expanduser(checkpoint_path)
+    if not os.path.exists(checkpoint_path):
+        raise FileNotFoundError(f"init_optimizer_path not found: {checkpoint_path}")
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+    state_dict = checkpoint.get("optimizer_state_dict", checkpoint) if isinstance(checkpoint, dict) else checkpoint
+    optimizer.load_state_dict(state_dict)
+    logger.info("init_optimizer_loaded path=%s", checkpoint_path)
+
+
 def read_parquet(fp):
     return dask.delayed(pd.read_parquet)(fp)
 
@@ -804,7 +863,9 @@ def setup_ddp(backend='hccl', device_type='npu'):
 
 def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelist, train_sampler, device, config, ctx, scaler, grad_clip, out_dir, collate_fn, world_size, logger):
     raw_model = model.module if ddp else model
-    iter_num, update_step, runing_mfu = 0, 0, -1.0
+    iter_num = 0
+    update_step = max(0, int(args.resume_update_step))
+    runing_mfu = -1.0
 
     save_step_interval = max(1, int(args.save_data_interval / world_size / args.batch_size))
     NODE_RANK = get_node_rank()
@@ -821,6 +882,8 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
         world_size,
         args.batch_size,
     )
+    if update_step:
+        logger.info("resume_update_step=%s", update_step)
     lr = optimizer.param_groups[0]["lr"]
 
     adaptive_state = None
@@ -1653,8 +1716,10 @@ def main(args):
     )
     if args.memory_log_interval > 0:
         log_npu_memory(logger, "after_static_gene_inputs", rank=rank)
+    load_model_checkpoint(model, args.init_model_path, device, logger, ddp=ddp, rank=rank)
     # optimizer and initialize a GradSclaer.
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay, betas=(beta1, beta2))
+    load_optimizer_checkpoint(optimizer, args.init_optimizer_path, device, logger)
     if args.memory_log_interval > 0:
         log_npu_memory(logger, "after_optimizer_init", rank=rank)
     # NanoGPT's way to initialize optimizer. But using this with turn use_fused = False in model
@@ -1727,7 +1792,7 @@ def argumentparser():
                         type=float,
                         default=6e-5)
     parser.add_argument('--decay_lr',
-                        type=bool,
+                        type=str2bool,
                         default=True)
     parser.add_argument('--warmup_iters',
                         type=int,
@@ -1801,7 +1866,7 @@ def argumentparser():
                         help="Safety net: abort when any single raw grad norm exceeds this absolute cap. "
                              "0 disables. Use as a physical fuse far above the normal regime (e.g. 1e11 for 500M).")
     parser.add_argument('--compile',
-                        type=bool,
+                        type=str2bool,
                         default=False)
     parser.add_argument('--backend',
                         type=str,
@@ -1917,6 +1982,21 @@ def argumentparser():
                         type=str2bool,
                         default=False,
                         help="DDP find_unused_parameters. Default false preserves current behavior.")
+    parser.add_argument('--init_model_path',
+                        type=str,
+                        default="",
+                        help="Optional model state_dict checkpoint to load before training. "
+                             "All ranks must be able to read this path.")
+    parser.add_argument('--init_optimizer_path',
+                        type=str,
+                        default="",
+                        help="Optional optimizer state_dict checkpoint to load after optimizer creation. "
+                             "Use only for exact resume-style runs.")
+    parser.add_argument('--resume_update_step',
+                        type=int,
+                        default=0,
+                        help="Initial update_step used for LR schedule and metrics. "
+                             "0 starts a fresh schedule from the loaded weights.")
     parser.add_argument('--hidden_size',
         type=int,
         default=None)

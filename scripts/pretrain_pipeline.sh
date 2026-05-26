@@ -119,6 +119,9 @@ GRAD_CLIP_MAX_CONSECUTIVE_SKIPS="${GRAD_CLIP_MAX_CONSECUTIVE_SKIPS:-50}"
 GRAD_CLIP_EMA_RUNAWAY_FACTOR="${GRAD_CLIP_EMA_RUNAWAY_FACTOR:-2.0}"
 GRAD_CLIP_HARD_RAW_NORM_LIMIT="${GRAD_CLIP_HARD_RAW_NORM_LIMIT:-100000000000.0}"
 MAX_TRAIN_STEPS="${MAX_TRAIN_STEPS:-0}"
+INIT_MODEL_PATH="${INIT_MODEL_PATH:-}"
+INIT_OPTIMIZER_PATH="${INIT_OPTIMIZER_PATH:-}"
+RESUME_UPDATE_STEP="${RESUME_UPDATE_STEP:-0}"
 COMPILE="${COMPILE:-false}"
 BACKEND="${BACKEND:-hccl}"
 DEVICE="${DEVICE:-npu}"
@@ -439,6 +442,7 @@ train_args() {
     "--grad_clip_ema_runaway_factor=${GRAD_CLIP_EMA_RUNAWAY_FACTOR}"
     "--grad_clip_hard_raw_norm_limit=${GRAD_CLIP_HARD_RAW_NORM_LIMIT}"
     "--max_train_steps=${MAX_TRAIN_STEPS}"
+    "--resume_update_step=${RESUME_UPDATE_STEP}"
     "--compile=${COMPILE}"
     "--backend=${BACKEND}"
     "--device=${DEVICE}"
@@ -456,6 +460,12 @@ train_args() {
   )
   if [[ -n "$S3_REMOTE_DIR_PATH" ]]; then
     TRAIN_ARGS+=("--s3_remote_dir_path=${S3_REMOTE_DIR_PATH}")
+  fi
+  if [[ -n "$INIT_MODEL_PATH" ]]; then
+    TRAIN_ARGS+=("--init_model_path=${INIT_MODEL_PATH}")
+  fi
+  if [[ -n "$INIT_OPTIMIZER_PATH" ]]; then
+    TRAIN_ARGS+=("--init_optimizer_path=${INIT_OPTIMIZER_PATH}")
   fi
   if [[ -n "$RUNTIME_DO_MVC" ]]; then
     TRAIN_ARGS+=("--runtime_do_mvc=${RUNTIME_DO_MVC}")
@@ -563,6 +573,9 @@ write_launcher_script() {
     print_export GRAD_CLIP_EMA_RUNAWAY_FACTOR "$GRAD_CLIP_EMA_RUNAWAY_FACTOR"
     print_export GRAD_CLIP_HARD_RAW_NORM_LIMIT "$GRAD_CLIP_HARD_RAW_NORM_LIMIT"
     print_export MAX_TRAIN_STEPS "$MAX_TRAIN_STEPS"
+    print_export INIT_MODEL_PATH "$INIT_MODEL_PATH"
+    print_export INIT_OPTIMIZER_PATH "$INIT_OPTIMIZER_PATH"
+    print_export RESUME_UPDATE_STEP "$RESUME_UPDATE_STEP"
     print_export COMPILE "$COMPILE"
     print_export BACKEND "$BACKEND"
     print_export DEVICE "$DEVICE"
