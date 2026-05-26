@@ -62,6 +62,7 @@ OUTPUT_NODE_RE = re.compile(r"^(?:metrics|loss_to_log|log)\.(\d+)-")
 CHECKPOINT_NODE_RE = re.compile(r"^SC-node-(\d+)-")
 LOG_PROGRESS_RE = re.compile(r"\[e:\s*\d+,\s*(\d+)/")
 LOG_UPDATE_STEP_RE = re.compile(r"\bupdate_step=(\d+)\b")
+RESUME_TARGET_METADATA_FILES = {"run_record.json"}
 
 
 def fail(title: str, errors: Iterable[str]) -> None:
@@ -177,11 +178,28 @@ def seed_resume_output(args: argparse.Namespace) -> None:
         fail("seed resume output failed", ["source and target output directories must be different"])
     if target.exists() and any(target.iterdir()):
         if not args.replace_target:
-            fail(
-                "seed resume output failed",
-                [f"target output directory is not empty: {target}. Pass --replace-target to recreate it."],
-            )
-        shutil.rmtree(target)
+            unexpected = [
+                item
+                for item in target.iterdir()
+                if item.name not in RESUME_TARGET_METADATA_FILES
+            ]
+            if not unexpected:
+                print(
+                    f"[INFO] target contains only metadata files; keep existing target: {target}"
+                )
+            else:
+                examples = ", ".join(str(item.name) for item in unexpected[:5])
+                suffix = "" if len(unexpected) <= 5 else ", ..."
+                fail(
+                    "seed resume output failed",
+                    [
+                        f"target output directory is not empty: {target}. "
+                        f"Unexpected existing files: {examples}{suffix}. "
+                        "Pass --replace-target to recreate it."
+                    ],
+                )
+        else:
+            shutil.rmtree(target)
     target.mkdir(parents=True, exist_ok=True)
 
     counts: Counter[str] = Counter()
