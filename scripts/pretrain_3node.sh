@@ -61,7 +61,9 @@ is_allowed_cli_var() {
     GRAD_CLIP_MIN|GRAD_CLIP_MAX|GRAD_CLIP_WARMUP_STEPS|\
     GRAD_CLIP_MAX_CONSECUTIVE_SKIPS|GRAD_CLIP_EMA_RUNAWAY_FACTOR|\
     GRAD_CLIP_HARD_RAW_NORM_LIMIT|MAX_TRAIN_STEPS|INIT_MODEL_PATH|\
-    INIT_OPTIMIZER_PATH|RESUME_UPDATE_STEP|COMPILE|\
+    INIT_OPTIMIZER_PATH|RESUME_UPDATE_STEP|RESUME_START_EPOCH|RESUME_SKIP_BATCHES|\
+    APPEND_OUTPUT_LOGS|RESUME_SEED_OUTPUT|RESUME_SOURCE_OUT_DIR|RESUME_CUTOFF_STEP|\
+    RESUME_SEED_REPLACE|COMPILE|\
     BACKEND|DEVICE|DEVICE_TYPE|S3_REMOTE_DIR_PATH|LOG_INTERVAL|PROFILE_INTERVAL|\
     NAN_CHECK_INTERVAL|METRICS_FLUSH_INTERVAL|LOG_LEVEL|LOG_ALL_RANKS|\
     NUM_WORKERS|PREFETCH_FACTOR|PERSISTENT_WORKERS|PIN_MEMORY|\
@@ -311,6 +313,13 @@ set_default MAX_TRAIN_STEPS 0
 set_default INIT_MODEL_PATH ""
 set_default INIT_OPTIMIZER_PATH ""
 set_default RESUME_UPDATE_STEP 0
+set_default RESUME_START_EPOCH 0
+set_default RESUME_SKIP_BATCHES 0
+set_default APPEND_OUTPUT_LOGS false
+set_default RESUME_SEED_OUTPUT 0
+set_default RESUME_SOURCE_OUT_DIR ""
+set_default RESUME_CUTOFF_STEP 0
+set_default RESUME_SEED_REPLACE 0
 set_default COMPILE false
 set_default BACKEND hccl
 set_default DEVICE npu
@@ -633,6 +642,44 @@ collect_training_outputs() {
   done
 }
 
+seed_resume_outputs() {
+  [[ "$RESUME_SEED_OUTPUT" == "1" ]] || return 0
+  [[ -n "$RESUME_SOURCE_OUT_DIR" ]] || die "RESUME_SEED_OUTPUT=1 requires RESUME_SOURCE_OUT_DIR"
+  [[ "$RESUME_CUTOFF_STEP" != "0" ]] || die "RESUME_SEED_OUTPUT=1 requires RESUME_CUTOFF_STEP"
+
+  split_hosts
+
+  local train_out_dir rank host remote_cmd
+  local -a replace_arg=()
+  train_out_dir="$(resolve_train_out_dir)"
+  if [[ "$RESUME_SEED_REPLACE" == "1" ]]; then
+    replace_arg=(--replace-target)
+  fi
+
+  echo "[RESUME] seed output prefix <= step ${RESUME_CUTOFF_STEP}"
+  echo "[RESUME] source: ${RESUME_SOURCE_OUT_DIR}"
+  echo "[RESUME] target: ${train_out_dir}"
+
+  for rank in "${!HOSTS_ARR[@]}"; do
+    host="${HOSTS_ARR[$rank]}"
+    echo "[RESUME] seed ${host}"
+    if [[ "$host" == "$MASTER_ADDR" ]]; then
+      "$PYTHON_BIN" "$PRETRAIN_CHECKS_PY" seed-resume-output \
+        --source-out-dir "$RESUME_SOURCE_OUT_DIR" \
+        --target-out-dir "$train_out_dir" \
+        --cutoff-step "$RESUME_CUTOFF_STEP" \
+        --node-rank "$rank" \
+        "${replace_arg[@]}"
+    else
+      remote_cmd="set -e; cd $(shell_quote "$WORKDIR"); $(shell_quote "$PYTHON_BIN") $(shell_quote "$PRETRAIN_CHECKS_PY") seed-resume-output --source-out-dir $(shell_quote "$RESUME_SOURCE_OUT_DIR") --target-out-dir $(shell_quote "$train_out_dir") --cutoff-step $(shell_quote "$RESUME_CUTOFF_STEP") --node-rank $(shell_quote "$rank")"
+      if [[ "$RESUME_SEED_REPLACE" == "1" ]]; then
+        remote_cmd+=" --replace-target"
+      fi
+      ssh_run "$host" "$remote_cmd"
+    fi
+  done
+}
+
 # 已经生成好测试数据时用 commands；需要重新生成测试数据时：
 #   bash scripts/pretrain_3node.sh PREP_ACTION=all
 #
@@ -651,6 +698,7 @@ bash scripts/pretrain_pipeline.sh "$PREP_ACTION"
 local_mkdirs
 sync_code_and_data_to_workers
 check_remote_paths
+seed_resume_outputs
 
 LAUNCH_SCRIPT="${COMMAND_DIR}/launch_${MODEL_SCALE}_3nodes.sh"
 [[ -f "$LAUNCH_SCRIPT" ]] || die "Missing generated launcher: $LAUNCH_SCRIPT"

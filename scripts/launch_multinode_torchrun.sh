@@ -159,6 +159,12 @@ grad_clip_max_consecutive_skips="${grad_clip_max_consecutive_skips:-${GRAD_CLIP_
 grad_clip_ema_runaway_factor="${grad_clip_ema_runaway_factor:-${GRAD_CLIP_EMA_RUNAWAY_FACTOR:-2.0}}"
 grad_clip_hard_raw_norm_limit="${grad_clip_hard_raw_norm_limit:-${GRAD_CLIP_HARD_RAW_NORM_LIMIT:-100000000000.0}}"
 max_train_steps="${max_train_steps:-${MAX_TRAIN_STEPS:-0}}"
+init_model_path="${init_model_path:-${INIT_MODEL_PATH:-}}"
+init_optimizer_path="${init_optimizer_path:-${INIT_OPTIMIZER_PATH:-}}"
+resume_update_step="${resume_update_step:-${RESUME_UPDATE_STEP:-0}}"
+resume_start_epoch="${resume_start_epoch:-${RESUME_START_EPOCH:-0}}"
+resume_skip_batches="${resume_skip_batches:-${RESUME_SKIP_BATCHES:-0}}"
+append_output_logs="${append_output_logs:-${APPEND_OUTPUT_LOGS:-false}}"
 compile="${compile:-${COMPILE:-true}}"
 backend="${backend:-${BACKEND:-hccl}}"
 device="${device:-${DEVICE:-npu}}"
@@ -401,9 +407,7 @@ bool_arg_value() {
       printf "true"
       ;;
     0|false|no|n|off)
-      # The training script currently declares some boolean flags as
-      # type=bool. Passing an empty value is parsed by bool("") as False.
-      printf ""
+      printf "false"
       ;;
     *)
       printf "%s" "$1"
@@ -444,6 +448,10 @@ build_train_args() {
     "--grad_clip_ema_runaway_factor=${grad_clip_ema_runaway_factor}"
     "--grad_clip_hard_raw_norm_limit=${grad_clip_hard_raw_norm_limit}"
     "--max_train_steps=${max_train_steps}"
+    "--resume_update_step=${resume_update_step}"
+    "--resume_start_epoch=${resume_start_epoch}"
+    "--resume_skip_batches=${resume_skip_batches}"
+    "--append_output_logs=${append_output_logs}"
     "--compile=$(bool_arg_value "$compile")"
     "--backend=${backend}"
     "--device=${device}"
@@ -462,6 +470,12 @@ build_train_args() {
 
   if [[ -n "$s3_remote_dir_path" ]]; then
     TRAIN_ARGS+=("--s3_remote_dir_path=${s3_remote_dir_path}")
+  fi
+  if [[ -n "$init_model_path" ]]; then
+    TRAIN_ARGS+=("--init_model_path=${init_model_path}")
+  fi
+  if [[ -n "$init_optimizer_path" ]]; then
+    TRAIN_ARGS+=("--init_optimizer_path=${init_optimizer_path}")
   fi
 }
 
@@ -578,7 +592,9 @@ remote_env_assignments() {
     warmup_ratio weight_decay save_data_interval beta1 beta2 grad_clip
     adaptive_grad_clip grad_clip_ema_beta grad_clip_ratio grad_skip_ratio grad_skip_max
     grad_clip_min grad_clip_max grad_clip_warmup_steps grad_clip_max_consecutive_skips
-    grad_clip_ema_runaway_factor grad_clip_hard_raw_norm_limit max_train_steps compile
+    grad_clip_ema_runaway_factor grad_clip_hard_raw_norm_limit max_train_steps
+    init_model_path init_optimizer_path resume_update_step resume_start_epoch resume_skip_batches
+    append_output_logs compile
     backend device device_type s3_remote_dir_path
     log_interval profile_interval nan_check_interval metrics_flush_interval log_level log_all_ranks
     num_workers prefetch_factor persistent_workers pin_memory

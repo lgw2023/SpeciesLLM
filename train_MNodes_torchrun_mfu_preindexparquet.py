@@ -121,7 +121,8 @@ class RankContextFilter(logging.Filter):
         return True
 
 
-def setup_rank_logger(out_dir, node_rank, rank, local_rank, master_process, log_level="INFO", log_all_ranks=False):
+def setup_rank_logger(out_dir, node_rank, rank, local_rank, master_process, log_level="INFO",
+                      log_all_ranks=False, append=False):
     level = getattr(logging, str(log_level).upper(), logging.INFO)
     logger = logging.getLogger(f"speciesllm.train.node{node_rank}.rank{rank}")
     logger.setLevel(level)
@@ -137,7 +138,7 @@ def setup_rank_logger(out_dir, node_rank, rank, local_rank, master_process, log_
     )
 
     log_path = os.path.join(out_dir, f"log.{node_rank}-{rank}.txt")
-    file_handler = logging.FileHandler(log_path, mode="w", encoding="utf-8")
+    file_handler = logging.FileHandler(log_path, mode=("a" if append else "w"), encoding="utf-8")
     file_handler.setLevel(level)
     file_handler.setFormatter(formatter)
     file_handler.addFilter(context_filter)
@@ -324,15 +325,17 @@ class AdaptiveGradClipState:
 
 
 class StreamingMetricsWriter:
-    def __init__(self, out_dir, node_rank, rank, flush_interval=100):
+    def __init__(self, out_dir, node_rank, rank, flush_interval=100, append=False):
         self.flush_interval = max(1, int(flush_interval))
         self.rows_since_flush = 0
         self.jsonl_path = os.path.join(out_dir, f"metrics.{node_rank}-{rank}.jsonl")
         self.csv_path = os.path.join(out_dir, f"loss_to_log.{node_rank}-{rank}.txt")
-        self.jsonl_file = open(self.jsonl_path, "w", encoding="utf-8")
-        self.csv_file = open(self.csv_path, "w", newline="", encoding="utf-8")
+        csv_has_rows = append and os.path.exists(self.csv_path) and os.path.getsize(self.csv_path) > 0
+        self.jsonl_file = open(self.jsonl_path, "a" if append else "w", encoding="utf-8")
+        self.csv_file = open(self.csv_path, "a" if append else "w", newline="", encoding="utf-8")
         self.csv_writer = csv.DictWriter(self.csv_file, fieldnames=METRIC_FIELDNAMES)
-        self.csv_writer.writeheader()
+        if not csv_has_rows:
+            self.csv_writer.writeheader()
 
     def write(self, row):
         clean_row = {field: row.get(field, None) for field in METRIC_FIELDNAMES}
@@ -865,6 +868,15 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
     raw_model = model.module if ddp else model
     iter_num = 0
     update_step = max(0, int(args.resume_update_step))
+    resume_start_epoch = max(0, int(args.resume_start_epoch))
+    resume_skip_batches = max(0, int(args.resume_skip_batches))
+    if resume_start_epoch >= args.epoch:
+        raise ValueError(f"resume_start_epoch ({resume_start_epoch}) must be < epoch ({args.epoch})")
+    if resume_skip_batches and resume_skip_batches % args.gradient_accumulation_steps != 0:
+        raise ValueError(
+            f"resume_skip_batches ({resume_skip_batches}) must be divisible by "
+            f"gradient_accumulation_steps ({args.gradient_accumulation_steps})"
+        )
     runing_mfu = -1.0
 
     save_step_interval = max(1, int(args.save_data_interval / world_size / args.batch_size))
@@ -874,16 +886,23 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
         node_rank=NODE_RANK,
         rank=rank,
         flush_interval=args.metrics_flush_interval,
+        append=args.append_output_logs,
     )
     logger.info(
-        "save_step_interval=%s save_data_interval=%s world_size=%s batch_size=%s",
+        "save_step_interval=%s save_data_interval=%s world_size=%s batch_size=%s append_output_logs=%s",
         save_step_interval,
         args.save_data_interval,
         world_size,
         args.batch_size,
+        args.append_output_logs,
     )
-    if update_step:
-        logger.info("resume_update_step=%s", update_step)
+    if update_step or resume_start_epoch or resume_skip_batches:
+        logger.info(
+            "resume_position resume_update_step=%s resume_start_epoch=%s resume_skip_batches=%s",
+            update_step,
+            resume_start_epoch,
+            resume_skip_batches,
+        )
     lr = optimizer.param_groups[0]["lr"]
 
     adaptive_state = None
@@ -937,7 +956,7 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
     last_completed_epoch = 0
     last_completed_step = 0
     last_completed_loss = 0.0
-    for epoch in range(args.epoch):
+    for epoch in range(resume_start_epoch, args.epoch):
 
         # Uncomment this if use DistributedSampler
         t_temp_2_data = time.time()
@@ -950,6 +969,31 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
                 NODE_RANK,
                 logger=logger)
             logger.info(f"Node: {NODE_RANK}, Rank: {rank}, Epoch: {epoch}, Data: {[x.split('/')[-1] for x in file_paths]}")
+            full_num_batches = math.ceil(len(data_pt) / args.batch_size)
+            step_tensor = torch.tensor([full_num_batches], dtype=torch.long, device=device)
+            dist.all_reduce(step_tensor, op=dist.ReduceOp.MIN)
+            max_batch_index = int(step_tensor.item())
+            resume_batch_offset = resume_skip_batches if epoch == resume_start_epoch else 0
+            if resume_batch_offset >= max_batch_index:
+                logger.info(
+                    "resume_skip_epoch_completed epoch=%s resume_skip_batches=%s max_batch_index=%s",
+                    epoch + 1,
+                    resume_batch_offset,
+                    max_batch_index,
+                )
+                continue
+            if resume_batch_offset:
+                rows_before_skip = len(data_pt)
+                skip_rows = min(resume_batch_offset * args.batch_size, rows_before_skip)
+                data_pt = data_pt.iloc[skip_rows:].reset_index(drop=True)
+                logger.info(
+                    "resume_skip_batches epoch=%s skipped_batches=%s skipped_rows=%s rows_before=%s rows_after=%s",
+                    epoch + 1,
+                    resume_batch_offset,
+                    skip_rows,
+                    rows_before_skip,
+                    len(data_pt),
+                )
             nw = max(0, int(args.num_workers))
             dl_kw = dict(
                 dataset=ParquetDataset(data_pt),
@@ -980,14 +1024,14 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
         total_loss_tensor = torch.zeros((), dtype=torch.float32, device=device)
         processed_batches = 0
         num_batches = len(data_loader) # 已经处理过 // args.batch_size
-
-        # 确保 local_step 是一个 tensor，并且在 GPU 上或 CPU 上与进程环境一致
-        step_tensor = torch.tensor([num_batches], dtype=torch.long, device=device)
-        # 使用 all_reduce 进行全局最小值操作
-        dist.all_reduce(step_tensor, op=dist.ReduceOp.MIN)
-        # 返回全局最小值
-        max_batch_index = int(step_tensor.item())
-        logger.info("Node: %s Rank: %s num_batches=%s max_batch_index=%s", NODE_RANK, rank, num_batches, max_batch_index)
+        logger.info(
+            "Node: %s Rank: %s num_batches_remaining=%s max_batch_index=%s resume_batch_offset=%s",
+            NODE_RANK,
+            rank,
+            num_batches,
+            max_batch_index,
+            resume_batch_offset,
+        )
 
         total_update_steps = math.ceil(max_batch_index / args.gradient_accumulation_steps) * args.epoch
         lr_decay_iters = total_update_steps
@@ -997,6 +1041,8 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
                 f"lr_decay_iters ({lr_decay_iters}) must be > warmup_iters ({warmup_iters})"
 
         for batch_index, batch_data in enumerate(data_loader):
+            absolute_batch_index = resume_batch_offset + batch_index
+            absolute_batch_number = absolute_batch_index + 1
             t_temp_1_lr = 0.0
             t_temp_7_loss_other = 0.0
             loss_gep = None
@@ -1009,9 +1055,9 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
             loss_gepc_value = None
             loss_gepc_zero_prob_value = None
 
-            final_step_in_epoch = (batch_index + 1) >= max_batch_index
+            final_step_in_epoch = absolute_batch_number >= max_batch_index
             should_step = (
-                (batch_index + 1) % args.gradient_accumulation_steps == 0
+                absolute_batch_number % args.gradient_accumulation_steps == 0
                 or final_step_in_epoch
             )
             should_log = (iter_num % max(1, args.log_interval) == 0) or final_step_in_epoch
@@ -1026,13 +1072,13 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
             )
             should_log_memory = should_trace_step(
                 args.memory_log_interval,
-                batch_index,
+                absolute_batch_index,
                 should_step=should_step,
                 final_step=final_step_in_epoch,
             )
             should_log_shapes = should_trace_step(
                 args.tensor_shape_log_interval,
-                batch_index,
+                absolute_batch_index,
                 should_step=should_step,
                 final_step=final_step_in_epoch,
             )
@@ -1041,7 +1087,7 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
                     logger,
                     "before_to_device",
                     rank=rank,
-                    extra={"epoch": epoch + 1, "batch": batch_index + 1},
+                    extra={"epoch": epoch + 1, "batch": absolute_batch_number},
                 )
 
             t_temp_3_batchdata = time.time()
@@ -1070,7 +1116,7 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
                     logger,
                     "after_to_device",
                     rank=rank,
-                    extra={"epoch": epoch + 1, "batch": batch_index + 1},
+                    extra={"epoch": epoch + 1, "batch": absolute_batch_number},
                 )
             if ddp:
                 model.require_backward_grad_sync = should_step
@@ -1080,7 +1126,7 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
                     logger,
                     "before_forward",
                     rank=rank,
-                    extra={"epoch": epoch + 1, "batch": batch_index + 1},
+                    extra={"epoch": epoch + 1, "batch": absolute_batch_number},
                 )
             with ctx:
                 run_mvc = bool(args.train_mvc and config.do_mvc)
@@ -1103,7 +1149,7 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
                     logger.info(
                         "TENSOR_SHAPES epoch=%s batch=%s %s",
                         epoch + 1,
-                        batch_index + 1,
+                        absolute_batch_number,
                         json.dumps(tensor_shape_summary(outputs), sort_keys=True),
                     )
                 if should_log_memory:
@@ -1111,7 +1157,7 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
                         logger,
                         "after_forward",
                         rank=rank,
-                        extra={"epoch": epoch + 1, "batch": batch_index + 1},
+                        extra={"epoch": epoch + 1, "batch": absolute_batch_number},
                     )
                 mask_positions = input_gene_values.eq(-1)
                 t_temp_5_forward = time.time() - t_temp_5_forward
@@ -1160,7 +1206,7 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
                         logger,
                         "after_loss",
                         rank=rank,
-                        extra={"epoch": epoch + 1, "batch": batch_index + 1},
+                        extra={"epoch": epoch + 1, "batch": absolute_batch_number},
                     )
 
             # backward and optimization
@@ -1174,7 +1220,7 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
                     logger,
                     "after_backward",
                     rank=rank,
-                    extra={"epoch": epoch + 1, "batch": batch_index + 1},
+                    extra={"epoch": epoch + 1, "batch": absolute_batch_number},
                 )
 
             # for name, param in model.named_parameters():
@@ -1323,16 +1369,16 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
                         logger,
                         "after_optimizer_step",
                         rank=rank,
-                        extra={"epoch": epoch + 1, "batch": batch_index + 1},
+                        extra={"epoch": epoch + 1, "batch": absolute_batch_number},
                     )
 
-                if (batch_index + 1) % save_step_interval == 0:
+                if absolute_batch_number % save_step_interval == 0:
                     lossf = loss.item() * args.gradient_accumulation_steps
                     if rank == 0:
                         if ddp:
-                            save_model(model.module, optimizer, epoch, batch_index + 1, lossf, out_dir, rank, NODE_RANK, s3_remote_dir_path=args.s3_remote_dir_path, logger=logger)
+                            save_model(model.module, optimizer, epoch, absolute_batch_number, lossf, out_dir, rank, NODE_RANK, s3_remote_dir_path=args.s3_remote_dir_path, logger=logger)
                         else:
-                            save_model(model, optimizer, epoch, batch_index + 1, lossf, out_dir, rank, NODE_RANK, s3_remote_dir_path=args.s3_remote_dir_path, logger=logger)
+                            save_model(model, optimizer, epoch, absolute_batch_number, lossf, out_dir, rank, NODE_RANK, s3_remote_dir_path=args.s3_remote_dir_path, logger=logger)
                     metrics_writer.flush()
                     save_log_to_s3(args, out_dir, NODE_RANK, rank, logger=logger)
             else:
@@ -1384,8 +1430,8 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
                 "rank": rank,
                 "local_rank": local_rank,
                 "epoch": epoch + 1,
-                "batch_index": batch_index + 1,
-                "num_batches": num_batches,
+                "batch_index": absolute_batch_number,
+                "num_batches": max_batch_index,
                 "update_step": update_step,
                 "should_step": should_step,
                 "lr": lr,
@@ -1430,8 +1476,8 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
                     NODE_RANK,
                     rank,
                     epoch + 1,
-                    batch_index + 1,
-                    num_batches,
+                    absolute_batch_number,
+                    max_batch_index,
                     lossf,
                     step_ms,
                     mfu_text,
@@ -1443,7 +1489,7 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
                     "profile epoch=%s batch=%s lr_s=%.4f data_load_s=%.4f to_device_s=%.4f forward_s=%.4f "
                     "loss_s=%.4f backward_s=%.4f optimizer_s=%.4f grad_sync_s=%.4f",
                     epoch + 1,
-                    batch_index + 1,
+                    absolute_batch_number,
                     t_temp_1_lr,
                     t_temp_2_data,
                     t_temp_3_batchdata,
@@ -1460,13 +1506,13 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
                 logger.info("max_train_steps_reached=%s", args.max_train_steps)
                 break
 
-            if (batch_index + 1) >= max_batch_index:
+            if absolute_batch_number >= max_batch_index:
                 break
 
         total_loss = (total_loss_tensor / max(1, processed_batches)).item()
         if processed_batches > 0:
             last_completed_epoch = epoch
-            last_completed_step = batch_index + 1
+            last_completed_step = absolute_batch_number
             last_completed_loss = total_loss
         loss_info = f"Node: {NODE_RANK}, Rank: {rank}, Epoch [{epoch + 1}/{args.epoch}], average loss is: {total_loss:.4f} | Learning rate is: {lr}"
         logger.info(loss_info)
@@ -1659,6 +1705,7 @@ def main(args):
         master_process=master_process,
         log_level=args.log_level,
         log_all_ranks=args.log_all_ranks,
+        append=args.append_output_logs,
     )
     logger.info("sys.argv=%s", sys.argv)
     logger.info("args=%s", json.dumps(vars(args), ensure_ascii=False, indent=2, default=json_default))
@@ -1667,7 +1714,7 @@ def main(args):
     logger.info(
         "experiment_controls amp_dtype=%s static_gene_dtype=%s train_mvc=%s gradient_checkpointing=%s "
         "memory_log_interval=%s tensor_shape_log_interval=%s max_train_steps=%s skip_final_save=%s "
-        "ddp_find_unused_parameters=%s",
+        "ddp_find_unused_parameters=%s append_output_logs=%s",
         dtype,
         args.static_gene_dtype,
         args.train_mvc,
@@ -1677,6 +1724,7 @@ def main(args):
         args.max_train_steps,
         args.skip_final_save,
         args.ddp_find_unused_parameters,
+        args.append_output_logs,
     )
     logger.info("output_dir=%s remote_output_dir=%s", os.path.abspath(out_dir), args.s3_remote_dir_path)
     logger.info(
@@ -1986,7 +2034,7 @@ def argumentparser():
                         type=str,
                         default="",
                         help="Optional model state_dict checkpoint to load before training. "
-                             "All ranks must be able to read this path.")
+                             "Rank 0 reads it and broadcasts the loaded weights under DDP.")
     parser.add_argument('--init_optimizer_path',
                         type=str,
                         default="",
@@ -1997,6 +2045,20 @@ def argumentparser():
                         default=0,
                         help="Initial update_step used for LR schedule and metrics. "
                              "0 starts a fresh schedule from the loaded weights.")
+    parser.add_argument('--resume_start_epoch',
+                        type=int,
+                        default=0,
+                        help="Zero-based epoch index to start from when resuming within an output stream.")
+    parser.add_argument('--resume_skip_batches',
+                        type=int,
+                        default=0,
+                        help="Batches already completed in resume_start_epoch. "
+                             "The first trained batch will be resume_skip_batches + 1.")
+    parser.add_argument('--append_output_logs',
+                        type=str2bool,
+                        default=False,
+                        help="Append log/metric files instead of truncating them. "
+                             "Use with a seeded resume output directory.")
     parser.add_argument('--hidden_size',
         type=int,
         default=None)

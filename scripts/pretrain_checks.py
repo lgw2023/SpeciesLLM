@@ -9,6 +9,7 @@ import csv
 import json
 import math
 import re
+import shutil
 import shlex
 import sys
 from collections import Counter, defaultdict
@@ -56,6 +57,12 @@ EMBEDDING_FILES = [
     "2nd_run_macrogene_features_sum_dnaseq.npy",
 ]
 
+CHECKPOINT_STEP_RE = re.compile(r"-step-(\d+)-loss-[^-]+(?:\.optimizer)?\.pt$")
+OUTPUT_NODE_RE = re.compile(r"^(?:metrics|loss_to_log|log)\.(\d+)-")
+CHECKPOINT_NODE_RE = re.compile(r"^SC-node-(\d+)-")
+LOG_PROGRESS_RE = re.compile(r"\[e:\s*\d+,\s*(\d+)/")
+LOG_UPDATE_STEP_RE = re.compile(r"\bupdate_step=(\d+)\b")
+
 
 def fail(title: str, errors: Iterable[str]) -> None:
     print(f"[ERROR] {title}:")
@@ -71,6 +78,159 @@ def print_warnings(title: str, warnings: Iterable[str]) -> None:
     print(f"[WARN] {title}:")
     for item in warnings:
         print(f"  - {item}")
+
+
+def row_resume_step(row: dict[str, object]) -> int | None:
+    for key in ("update_step", "batch_index"):
+        value = row.get(key)
+        if value in (None, ""):
+            continue
+        try:
+            return int(float(value))
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def checkpoint_step(path: Path) -> int | None:
+    match = CHECKPOINT_STEP_RE.search(path.name)
+    if not match:
+        return None
+    return int(match.group(1))
+
+
+def output_file_node_rank(path: Path) -> int | None:
+    for pattern in (OUTPUT_NODE_RE, CHECKPOINT_NODE_RE):
+        match = pattern.search(path.name)
+        if match:
+            return int(match.group(1))
+    return None
+
+
+def seed_jsonl_metrics(source: Path, target: Path, cutoff_step: int) -> tuple[int, int]:
+    read_count = 0
+    written_count = 0
+    with source.open(encoding="utf-8", errors="replace") as src, target.open("w", encoding="utf-8") as dst:
+        for line in src:
+            read_count += 1
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            step = row_resume_step(row)
+            if step is None or step <= cutoff_step:
+                dst.write(json.dumps(row, ensure_ascii=False) + "\n")
+                written_count += 1
+    return read_count, written_count
+
+
+def seed_csv_metrics(source: Path, target: Path, cutoff_step: int) -> tuple[int, int]:
+    read_count = 0
+    written_count = 0
+    with source.open(newline="", encoding="utf-8", errors="replace") as src:
+        reader = csv.DictReader(src)
+        fieldnames = reader.fieldnames or []
+        with target.open("w", newline="", encoding="utf-8") as dst:
+            writer = csv.DictWriter(dst, fieldnames=fieldnames)
+            writer.writeheader()
+            for row in reader:
+                read_count += 1
+                step = row_resume_step(row)
+                if step is None or step <= cutoff_step:
+                    writer.writerow(row)
+                    written_count += 1
+    return read_count, written_count
+
+
+def log_line_steps(line: str) -> list[int]:
+    steps: list[int] = []
+    steps.extend(int(match.group(1)) for match in LOG_PROGRESS_RE.finditer(line))
+    steps.extend(int(match.group(1)) for match in LOG_UPDATE_STEP_RE.finditer(line))
+    checkpoint = CHECKPOINT_STEP_RE.search(line)
+    if checkpoint:
+        steps.append(int(checkpoint.group(1)))
+    return steps
+
+
+def seed_rank_log(source: Path, target: Path, cutoff_step: int) -> tuple[int, int, bool]:
+    read_count = 0
+    written_count = 0
+    truncated = False
+    with source.open(encoding="utf-8", errors="replace") as src, target.open("w", encoding="utf-8") as dst:
+        for line in src:
+            read_count += 1
+            steps = log_line_steps(line)
+            if steps and max(steps) > cutoff_step:
+                truncated = True
+                break
+            dst.write(line)
+            written_count += 1
+    return read_count, written_count, truncated
+
+
+def seed_resume_output(args: argparse.Namespace) -> None:
+    source = args.source_out_dir.resolve()
+    target = args.target_out_dir.resolve()
+    cutoff_step = int(args.cutoff_step)
+    if not source.exists():
+        fail("seed resume output failed", [f"source output directory does not exist: {source}"])
+    if source == target:
+        fail("seed resume output failed", ["source and target output directories must be different"])
+    if target.exists() and any(target.iterdir()):
+        if not args.replace_target:
+            fail(
+                "seed resume output failed",
+                [f"target output directory is not empty: {target}. Pass --replace-target to recreate it."],
+            )
+        shutil.rmtree(target)
+    target.mkdir(parents=True, exist_ok=True)
+
+    counts: Counter[str] = Counter()
+    warnings: list[str] = []
+    for item in sorted(source.iterdir()):
+        if not item.is_file():
+            continue
+        item_node_rank = output_file_node_rank(item)
+        if args.node_rank is not None and item_node_rank is not None and item_node_rank != args.node_rank:
+            counts["files_skipped_other_node"] += 1
+            continue
+        dest = target / item.name
+        if item.name.startswith("metrics.") and item.suffix == ".jsonl":
+            read_count, written_count = seed_jsonl_metrics(item, dest, cutoff_step)
+            counts["metrics_files"] += 1
+            counts["metrics_rows_read"] += read_count
+            counts["metrics_rows_written"] += written_count
+        elif item.name.startswith("loss_to_log.") and item.suffix == ".txt":
+            read_count, written_count = seed_csv_metrics(item, dest, cutoff_step)
+            counts["loss_files"] += 1
+            counts["loss_rows_read"] += read_count
+            counts["loss_rows_written"] += written_count
+        elif item.name.startswith("log.") and item.suffix == ".txt":
+            read_count, written_count, truncated = seed_rank_log(item, dest, cutoff_step)
+            counts["log_files"] += 1
+            counts["log_lines_read"] += read_count
+            counts["log_lines_written"] += written_count
+            if truncated:
+                counts["log_files_truncated"] += 1
+        else:
+            step = checkpoint_step(item)
+            if step is not None:
+                if step <= cutoff_step:
+                    shutil.copy2(item, dest)
+                    counts["checkpoint_files"] += 1
+                else:
+                    counts["checkpoint_files_skipped"] += 1
+            elif item.stat().st_size <= args.copy_other_max_bytes:
+                shutil.copy2(item, dest)
+                counts["other_files"] += 1
+            else:
+                warnings.append(f"skip large unrecognized file: {item}")
+
+    if counts["metrics_files"] == 0:
+        warnings.append(f"no metrics.*.jsonl files found in {source}")
+    print(f"[OK] seeded resume output: {source} -> {target} cutoff_step={cutoff_step}")
+    for key in sorted(counts):
+        print(f"[INFO] {key}={counts[key]}")
+    print_warnings("seed resume output warnings", warnings)
 
 
 def emit_config_env(args: argparse.Namespace) -> None:
@@ -571,6 +731,32 @@ def build_parser() -> argparse.ArgumentParser:
     check_parser.add_argument("--world-size", type=int, required=True)
     check_parser.add_argument("--epoch", type=int, required=True)
     check_parser.set_defaults(func=check_training)
+
+    seed_parser = subparsers.add_parser(
+        "seed-resume-output",
+        help="Copy a training output prefix into a new directory for append-style resume.",
+    )
+    seed_parser.add_argument("--source-out-dir", type=Path, required=True)
+    seed_parser.add_argument("--target-out-dir", type=Path, required=True)
+    seed_parser.add_argument("--cutoff-step", type=int, required=True)
+    seed_parser.add_argument(
+        "--node-rank",
+        type=int,
+        default=None,
+        help="Optional node-rank filter. Copies only log/metric/checkpoint files for this node.",
+    )
+    seed_parser.add_argument(
+        "--replace-target",
+        action="store_true",
+        help="Delete and recreate target-out-dir if it already contains files.",
+    )
+    seed_parser.add_argument(
+        "--copy-other-max-bytes",
+        type=int,
+        default=10 * 1024 * 1024,
+        help="Copy unrecognized files up to this size. Larger files are skipped.",
+    )
+    seed_parser.set_defaults(func=seed_resume_output)
     return parser
 
 
