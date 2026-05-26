@@ -142,6 +142,7 @@ min_lr="${min_lr:-${MIN_LR:-0.000001}}"
 decay_lr="${decay_lr:-${DECAY_LR:-true}}"
 warmup_iters="${warmup_iters:-${WARMUP_ITERS:-2000}}"
 warmup_ratio="${warmup_ratio:-${WARMUP_RATIO:-0.05}}"
+lr_decay_epochs="${lr_decay_epochs:-${LR_DECAY_EPOCHS:-0}}"
 weight_decay="${weight_decay:-${WEIGHT_DECAY:-0.1}}"
 save_data_interval="${save_data_interval:-${SAVE_DATA_INTERVAL:-5120000}}"
 beta1="${beta1:-${BETA1:-0.9}}"
@@ -431,6 +432,7 @@ build_train_args() {
     "--decay_lr=$(bool_arg_value "$decay_lr")"
     "--warmup_iters=${warmup_iters}"
     "--warmup_ratio=${warmup_ratio}"
+    "--lr_decay_epochs=${lr_decay_epochs}"
     "--weight_decay=${weight_decay}"
     "--save_data_interval=${save_data_interval}"
     "--beta1=${beta1}"
@@ -589,7 +591,7 @@ remote_env_assignments() {
     HCCL_WHITELIST_DISABLE ASCEND_TOOLKIT_HOME ASCEND_ENV_SH ASCEND_HOME_PATH
     data_path num_of_used_data emb_path config_json out_path batch_size epoch
     gradient_accumulation_steps gradient_checkpointing learning_rate min_lr decay_lr warmup_iters
-    warmup_ratio weight_decay save_data_interval beta1 beta2 grad_clip
+    warmup_ratio lr_decay_epochs weight_decay save_data_interval beta1 beta2 grad_clip
     adaptive_grad_clip grad_clip_ema_beta grad_clip_ratio grad_skip_ratio grad_skip_max
     grad_clip_min grad_clip_max grad_clip_warmup_steps grad_clip_max_consecutive_skips
     grad_clip_ema_runaway_factor grad_clip_hard_raw_norm_limit max_train_steps

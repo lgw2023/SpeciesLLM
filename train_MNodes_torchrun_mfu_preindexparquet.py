@@ -1033,12 +1033,24 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
             resume_batch_offset,
         )
 
-        total_update_steps = math.ceil(max_batch_index / args.gradient_accumulation_steps) * args.epoch
-        lr_decay_iters = total_update_steps
-        warmup_iters = int(total_update_steps * args.warmup_ratio) if args.warmup_ratio else args.warmup_iters
+        lr_decay_epochs = float(args.lr_decay_epochs) if args.lr_decay_epochs else float(args.epoch)
+        lr_decay_iters = int(math.ceil(
+            math.ceil(max_batch_index / args.gradient_accumulation_steps) * lr_decay_epochs
+        ))
+        warmup_iters = int(lr_decay_iters * args.warmup_ratio) if args.warmup_ratio else args.warmup_iters
         if args.decay_lr:
             assert lr_decay_iters > warmup_iters, \
                 f"lr_decay_iters ({lr_decay_iters}) must be > warmup_iters ({warmup_iters})"
+        logger.info(
+            "lr_schedule decay_lr=%s learning_rate=%s min_lr=%s lr_decay_epochs=%s "
+            "lr_decay_iters=%s warmup_iters=%s",
+            args.decay_lr,
+            args.learning_rate,
+            args.min_lr,
+            lr_decay_epochs,
+            lr_decay_iters,
+            warmup_iters,
+        )
 
         for batch_index, batch_data in enumerate(data_loader):
             absolute_batch_index = resume_batch_offset + batch_index
@@ -1849,6 +1861,12 @@ def argumentparser():
                         type=float,
                         default=0.01,
                         help='if warmup_ratio, then discard warmup_iters')
+    parser.add_argument('--lr_decay_epochs',
+                        type=float,
+                        default=0.0,
+                        help="Epoch-equivalent horizon for the LR decay schedule. "
+                             "0 means use --epoch. Set 1 with --epoch=5 to finish "
+                             "the 1-epoch decay schedule by the end of epoch 1.")
     parser.add_argument('--weight_decay',
                         type=float,
                         default=1e-1)
