@@ -137,6 +137,9 @@ batch_size="${batch_size:-${BATCH_SIZE:-16}}"
 epoch="${epoch:-${EPOCH:-10}}"
 gradient_accumulation_steps="${gradient_accumulation_steps:-${GRADIENT_ACCUMULATION_STEPS:-8}}"
 gradient_checkpointing="${gradient_checkpointing:-${GRADIENT_CHECKPOINTING:-true}}"
+train_mvc="${train_mvc:-${TRAIN_MVC:-true}}"
+runtime_do_mvc="${runtime_do_mvc:-${RUNTIME_DO_MVC:-}}"
+runtime_explicit_zero_prob="${runtime_explicit_zero_prob:-${RUNTIME_EXPLICIT_ZERO_PROB:-}}"
 learning_rate="${learning_rate:-${LEARNING_RATE:-0.00001}}"
 min_lr="${min_lr:-${MIN_LR:-0.000001}}"
 decay_lr="${decay_lr:-${DECAY_LR:-true}}"
@@ -427,6 +430,7 @@ build_train_args() {
     "--epoch=${epoch}"
     "--gradient_accumulation_steps=${gradient_accumulation_steps}"
     "--gradient_checkpointing=${gradient_checkpointing}"
+    "--train_mvc=${train_mvc}"
     "--learning_rate=${learning_rate}"
     "--min_lr=${min_lr}"
     "--decay_lr=$(bool_arg_value "$decay_lr")"
@@ -478,6 +482,12 @@ build_train_args() {
   fi
   if [[ -n "$init_optimizer_path" ]]; then
     TRAIN_ARGS+=("--init_optimizer_path=${init_optimizer_path}")
+  fi
+  if [[ -n "$runtime_do_mvc" ]]; then
+    TRAIN_ARGS+=("--runtime_do_mvc=${runtime_do_mvc}")
+  fi
+  if [[ -n "$runtime_explicit_zero_prob" ]]; then
+    TRAIN_ARGS+=("--runtime_explicit_zero_prob=${runtime_explicit_zero_prob}")
   fi
 }
 
@@ -590,7 +600,8 @@ remote_env_assignments() {
     DRY_RUN LOCAL_NODE_RANK ASCEND_RT_VISIBLE_DEVICES_VALUE HCCL_CONNECT_TIMEOUT HCCL_EXEC_TIMEOUT
     HCCL_WHITELIST_DISABLE ASCEND_TOOLKIT_HOME ASCEND_ENV_SH ASCEND_HOME_PATH
     data_path num_of_used_data emb_path config_json out_path batch_size epoch
-    gradient_accumulation_steps gradient_checkpointing learning_rate min_lr decay_lr warmup_iters
+    gradient_accumulation_steps gradient_checkpointing train_mvc runtime_do_mvc runtime_explicit_zero_prob
+    learning_rate min_lr decay_lr warmup_iters
     warmup_ratio lr_decay_epochs weight_decay save_data_interval beta1 beta2 grad_clip
     adaptive_grad_clip grad_clip_ema_beta grad_clip_ratio grad_skip_ratio grad_skip_max
     grad_clip_min grad_clip_max grad_clip_warmup_steps grad_clip_max_consecutive_skips
