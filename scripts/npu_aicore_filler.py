@@ -57,33 +57,39 @@ def parse_npu_smi_aicore(text, device_id):
     """从 npu-smi info 的文本输出中提取指定 device 的 AICore(%).
 
     npu-smi info 每张卡输出两行数据行 (夹在 === 分隔线之间):
-        第1行: | NPU_ID  Name  | Health | Power  Temp  Hugepages |
-        第2行: | Chip   Device | Bus-Id | AICore(%)  Memory/HBM  |
+        第1行: | 7     910B1       | OK     | Power  Temp  Hugepages |  ← NPU ID
+        第2行: | 0                 | Bus-Id | 61     Mem   HBM       |  ← AICore%
 
-    我们匹配第2行: 用 '|' 分列, 第一列解析出 device_id,
-    第三列的第一个整数就是 AICore(%).
+    解析策略: 先在第1行匹配 device_id, 再从紧接的第2行提取 AICore%.
     """
-    for line in text.splitlines():
+    lines = text.splitlines()
+    found_device = False
+    for line in lines:
         parts = [p.strip() for p in line.split("|") if p.strip()]
         if len(parts) < 3:
+            found_device = False
             continue
-        tokens = parts[0].split()
-        if len(tokens) != 2:
-            continue
-        try:
-            dev_id = int(tokens[1])
-        except ValueError:
-            continue
-        if dev_id != device_id:
-            continue
-        # parts[1] 是 Bus-Id, parts[2] 开头是 AICore%
-        third_tokens = parts[2].split()
-        if not third_tokens:
-            continue
-        try:
-            return int(third_tokens[0])
-        except ValueError:
-            continue
+
+        first_tokens = parts[0].split()
+
+        if not found_device:
+            # 第1行: "7     910B1" → NPU ID = 7
+            if len(first_tokens) >= 2:
+                try:
+                    npu_id = int(first_tokens[0])
+                except ValueError:
+                    continue
+                if npu_id == device_id:
+                    found_device = True
+        else:
+            # 第2行: parts[2] 的第一个 token 就是 AICore%
+            third_tokens = parts[2].split()
+            if third_tokens:
+                try:
+                    return int(third_tokens[0])
+                except ValueError:
+                    pass
+            found_device = False
     return None
 
 
