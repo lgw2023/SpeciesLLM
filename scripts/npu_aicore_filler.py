@@ -1,26 +1,35 @@
 #!/usr/bin/env python3
 """
-NPU AICore 填充脚本 —— 在训练任务的数据加载间隙填补 AICore 空闲。
+NPU AICore 感知填充脚本 —— 通过 npu-smi 实时监测 AICore 利用率，
+仅在利用率低于阈值时提交计算，训练活跃时自动退避。
 
-设计目标:
-  - 极低显存占用 (默认 ~24MB/卡，float16 下 3 个 1024x1024 矩阵)
-  - 不干扰已有训练: 预分配固定 tensor，零额外显存申请
-  - 自适应退让: 定期检测剩余显存，低于阈值自动暂停
-  - 可控强度: 通过 --burst / --sleep_ms 调节计算密度
+架构:
+  ┌──────────────────┐
+  │  监控线程 (daemon) │  每 poll_interval 秒调一次 npu-smi info
+  │  更新 cached %    │  解析目标卡的 AICore(%)
+  └────────┬─────────┘
+           │ 读 cached %
+  ┌────────▼─────────┐
+  │  主线程 决策循环   │  AICore < 阈值 → burst matmul (填空隙)
+  │                   │  AICore >= 阈值 → sleep (让路给训练)
+  └──────────────────┘
+
+显存占用: 3 个 N×N 矩阵, 默认 1024×1024 float16 = ~6MB, 启动后零额外分配。
 
 用法:
-  # 单卡 (在 NPU:3 上跑)
-  python npu_aicore_filler.py --device 3
+  # 单卡
+  python npu_aicore_filler.py --device 0
 
-  # 多卡 (每卡一个进程)
+  # 8 卡并行
   for i in 0 1 2 3 4 5 6 7; do
     python npu_aicore_filler.py --device $i &
   done
 
-  # 轻量模式 (更少计算, 更多 sleep)
-  python npu_aicore_filler.py --device 0 --burst 50 --sleep_ms 20
+  # 保守模式 (更高阈值才触发, 更短 burst)
+  python npu_aicore_filler.py --device 0 --aicore_threshold 15 --burst 30
 
-  # 停止: Ctrl+C 或 kill, 会自动清理显存
+  # 停止
+  pkill -f npu_aicore_filler
 """
 
 import os
@@ -28,6 +37,8 @@ import sys
 import time
 import signal
 import argparse
+import subprocess
+import threading
 
 import torch
 
@@ -38,102 +49,213 @@ except ImportError:
     HAS_NPU = False
 
 
+# ─────────────────────────────────────────────
+#  npu-smi 解析
+# ─────────────────────────────────────────────
+
+def parse_npu_smi_aicore(text, device_id):
+    """从 npu-smi info 的文本输出中提取指定 device 的 AICore(%).
+
+    npu-smi info 每张卡输出两行数据行 (夹在 === 分隔线之间):
+        第1行: | NPU_ID  Name  | Health | Power  Temp  Hugepages |
+        第2行: | Chip   Device | Bus-Id | AICore(%)  Memory/HBM  |
+
+    我们匹配第2行: 用 '|' 分列, 第一列解析出 device_id,
+    第三列的第一个整数就是 AICore(%).
+    """
+    for line in text.splitlines():
+        parts = [p.strip() for p in line.split("|") if p.strip()]
+        if len(parts) < 3:
+            continue
+        tokens = parts[0].split()
+        if len(tokens) != 2:
+            continue
+        try:
+            dev_id = int(tokens[1])
+        except ValueError:
+            continue
+        if dev_id != device_id:
+            continue
+        # parts[1] 是 Bus-Id, parts[2] 开头是 AICore%
+        third_tokens = parts[2].split()
+        if not third_tokens:
+            continue
+        try:
+            return int(third_tokens[0])
+        except ValueError:
+            continue
+    return None
+
+
+def poll_aicore_once(device_id):
+    """调用 npu-smi info, 返回目标卡的 AICore% (int) 或 None."""
+    try:
+        r = subprocess.run(
+            ["npu-smi", "info"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if r.returncode != 0:
+            return None
+        return parse_npu_smi_aicore(r.stdout, device_id)
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return None
+
+
+# ─────────────────────────────────────────────
+#  后台监控线程
+# ─────────────────────────────────────────────
+
+class AICoreMonitor:
+    """Daemon 线程, 定期轮询 npu-smi 并缓存 AICore%.
+
+    主线程通过 .aicore_pct 读取最近一次采样值 (无锁, int 赋值是原子的).
+    """
+
+    def __init__(self, device_id, poll_interval_s=0.5):
+        self.device_id = device_id
+        self.poll_interval_s = poll_interval_s
+        self.aicore_pct = None          # None = 尚未拿到数据
+        self._running = True
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self._thread.start()
+
+    def _loop(self):
+        while self._running:
+            val = poll_aicore_once(self.device_id)
+            if val is not None:
+                self.aicore_pct = val
+            time.sleep(self.poll_interval_s)
+
+    def stop(self):
+        self._running = False
+        self._thread.join(timeout=3)
+
+
+# ─────────────────────────────────────────────
+#  显存工具
+# ─────────────────────────────────────────────
+
 def get_free_memory_gb(device):
     if HAS_NPU:
-        props = torch_npu.npu.get_device_properties(device)
-        total = props.total_memory
+        total = torch_npu.npu.get_device_properties(device).total_memory
         reserved = torch_npu.npu.memory_reserved(device)
-        return (total - reserved) / (1024 ** 3)
     else:
-        props = torch.cuda.get_device_properties(device)
-        total = props.total_mem
+        total = torch.cuda.get_device_properties(device).total_mem
         reserved = torch.cuda.memory_reserved(device)
-        return (total - reserved) / (1024 ** 3)
+    return (total - reserved) / (1024 ** 3)
 
 
 def empty_cache():
-    if HAS_NPU:
-        torch_npu.npu.empty_cache()
-    else:
-        torch.cuda.empty_cache()
+    (torch_npu.npu if HAS_NPU else torch.cuda).empty_cache()
 
 
-def synchronize(device):
-    if HAS_NPU:
-        torch_npu.npu.synchronize(device)
-    else:
-        torch.cuda.synchronize(device)
-
+# ─────────────────────────────────────────────
+#  参数
+# ─────────────────────────────────────────────
 
 def parse_args():
     p = argparse.ArgumentParser(
-        description="NPU AICore filler: 低显存占用的后台计算填充",
+        description="NPU AICore 感知填充: 仅在 AICore 空闲时计算, 训练活跃时自动退避",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p.add_argument("--device", type=int, default=0,
-                   help="NPU/GPU device ID (默认 0)")
-    p.add_argument("--matrix_size", type=int, default=1024,
-                   help="矩阵维度 N (N×N matmul). 默认 1024 → ~24MB 显存")
-    p.add_argument("--burst", type=int, default=200,
-                   help="每轮连续 matmul 次数 (越大→AICore 越满, CPU 开销越低)")
-    p.add_argument("--sleep_ms", type=float, default=5.0,
-                   help="每轮之间的 sleep (ms). 0=全速; 越大→让出越多 AICore 给训练")
-    p.add_argument("--min_free_gb", type=float, default=1.5,
-                   help="剩余显存低于此值(GB)时暂停计算, 等待显存释放")
-    p.add_argument("--check_interval", type=int, default=500,
-                   help="每隔多少轮检查一次显存")
-    p.add_argument("--dtype", type=str, default="float16",
-                   choices=["float16", "bfloat16", "float32"],
-                   help="计算精度. float16 最省显存且最能压 AICore")
-    p.add_argument("--report_interval", type=int, default=2000,
-                   help="每隔多少轮打印一次统计")
-    p.add_argument("--max_seconds", type=int, default=0,
-                   help="最大运行秒数, 0=无限制")
+
+    g_dev = p.add_argument_group("设备与精度")
+    g_dev.add_argument("--device", type=int, default=0,
+                       help="NPU device ID (默认 0)")
+    g_dev.add_argument("--matrix_size", type=int, default=1024,
+                       help="N×N matmul 维度. 1024 → ~6MB 显存")
+    g_dev.add_argument("--dtype", type=str, default="float16",
+                       choices=["float16", "bfloat16", "float32"])
+
+    g_sense = p.add_argument_group("感知调度 (核心)")
+    g_sense.add_argument("--aicore_threshold", type=int, default=45,
+                         help="AICore%% 低于此值时才提交 matmul (默认 45). "
+                              "训练 forward/backward 时通常 >60%%, 数据加载时 <10%%")
+    g_sense.add_argument("--poll_interval", type=float, default=0.1,
+                         help="npu-smi 轮询间隔 (秒). 加上 npu-smi 自身 ~100ms, "
+                              "实际探测周期 ≈ poll_interval + 0.1s. 默认 0.1 → 周期 ~200ms")
+    g_sense.add_argument("--burst", type=int, default=50,
+                         help="每次填充的连续 matmul 次数. 50 次 ≈ 1-2ms, "
+                              "短 burst 让主循环快速回到判断点")
+    g_sense.add_argument("--fill_sleep_ms", type=float, default=1.0,
+                         help="填充轮之间的 sleep (ms). 给训练 kernel 插队的窗口")
+    g_sense.add_argument("--idle_sleep_ms", type=float, default=100.0,
+                         help="AICore 繁忙时的 sleep (ms). 越大→越少干扰训练")
+
+    g_safe = p.add_argument_group("安全保护")
+    g_safe.add_argument("--min_free_gb", type=float, default=5.0,
+                        help="设备剩余显存安全线 (GB). 低于则暂停计算")
+    g_safe.add_argument("--max_usage_mb", type=float, default=1024.0,
+                        help="脚本自身显存上限 (MB). 超过则拒绝启动")
+    g_safe.add_argument("--mem_check_interval", type=int, default=200,
+                        help="每隔多少轮检查一次显存")
+
+    g_misc = p.add_argument_group("其他")
+    g_misc.add_argument("--report_interval", type=int, default=1000,
+                        help="每隔多少轮打印统计")
+    g_misc.add_argument("--max_seconds", type=int, default=0,
+                        help="最大运行秒数, 0=无限制")
+
     return p.parse_args()
 
+
+# ─────────────────────────────────────────────
+#  主流程
+# ─────────────────────────────────────────────
 
 def main():
     args = parse_args()
 
     device_type = "npu" if HAS_NPU else "cuda"
     device = torch.device(f"{device_type}:{args.device}")
-    dtype_map = {
-        "float16": torch.float16,
-        "bfloat16": torch.bfloat16,
-        "float32": torch.float32,
-    }
+    dtype_map = {"float16": torch.float16, "bfloat16": torch.bfloat16, "float32": torch.float32}
     dtype = dtype_map[args.dtype]
     bytes_per_elem = 2 if dtype in (torch.float16, torch.bfloat16) else 4
     N = args.matrix_size
     mem_mb = 3 * N * N * bytes_per_elem / (1024 ** 2)
 
-    # --- 安全检查 ---
+    # ── 启动前校验 ──
     if HAS_NPU:
         torch_npu.npu.set_device(args.device)
     else:
         torch.cuda.set_device(args.device)
 
-    free_gb = get_free_memory_gb(device)
-    print(f"[AICore Filler] device={device}, dtype={args.dtype}, matrix={N}×{N}")
-    print(f"[AICore Filler] 预计显存占用: {mem_mb:.1f} MB (3 个矩阵)")
-    print(f"[AICore Filler] 当前剩余显存: {free_gb:.2f} GB")
-    print(f"[AICore Filler] burst={args.burst}, sleep={args.sleep_ms}ms, min_free={args.min_free_gb}GB")
-
-    if free_gb < args.min_free_gb:
-        print(f"[AICore Filler] 剩余显存 {free_gb:.2f}GB < {args.min_free_gb}GB, 拒绝启动")
+    if mem_mb > args.max_usage_mb:
+        print(f"[Filler] 拒绝: 预计 {mem_mb:.1f}MB > max_usage_mb {args.max_usage_mb:.0f}MB")
         sys.exit(1)
 
-    # --- 预分配 (唯一的显存申请, 之后零分配) ---
+    free_gb = get_free_memory_gb(device)
+    if free_gb < args.min_free_gb:
+        print(f"[Filler] 拒绝: 设备剩余 {free_gb:.2f}GB < min_free_gb {args.min_free_gb:.1f}GB")
+        sys.exit(1)
+
+    # ── npu-smi 连通性检查 ──
+    test_reading = poll_aicore_once(args.device)
+    if test_reading is None:
+        print("[Filler] 错误: npu-smi info 无法获取 AICore%, 请确认 npu-smi 可用")
+        print("[Filler] 尝试运行: npu-smi info")
+        sys.exit(1)
+
+    # ── 预分配 (唯一显存申请) ──
     A = torch.randn(N, N, dtype=dtype, device=device)
     B = torch.randn(N, N, dtype=dtype, device=device)
     C = torch.empty(N, N, dtype=dtype, device=device)
-
     free_after = get_free_memory_gb(device)
-    print(f"[AICore Filler] 分配完成, 剩余显存: {free_after:.2f} GB")
-    print(f"[AICore Filler] 运行中... Ctrl+C 停止")
+
+    print(f"[Filler] device={device}, dtype={args.dtype}, matrix={N}x{N}, 显存={mem_mb:.1f}MB")
+    print(f"[Filler] 设备剩余: {free_after:.2f}GB (安全线 {args.min_free_gb:.1f}GB)")
+    print(f"[Filler] AICore 阈值: <{args.aicore_threshold}% 时填充, >={args.aicore_threshold}% 时退避")
+    print(f"[Filler] 当前 AICore: {test_reading}%")
+    print(f"[Filler] burst={args.burst} (~{args.burst * 30 / 1000:.1f}ms), "
+          f"poll={args.poll_interval}s, fill_sleep={args.fill_sleep_ms}ms, idle_sleep={args.idle_sleep_ms}ms")
     print()
 
-    # --- 信号处理 ---
+    # ── 启动监控线程 ──
+    monitor = AICoreMonitor(args.device, poll_interval_s=args.poll_interval)
+
+    # ── 信号处理 ──
     running = True
 
     def shutdown(sig, frame):
@@ -143,68 +265,83 @@ def main():
     signal.signal(signal.SIGINT, shutdown)
     signal.signal(signal.SIGTERM, shutdown)
 
-    # --- 主循环 ---
+    # ── 主循环 ──
     round_count = 0
     total_matmuls = 0
-    paused = False
+    fill_rounds = 0
+    idle_rounds = 0
+    mem_paused = False
     t_start = time.time()
     t_last_report = t_start
-
-    # 每轮 FLOPS: burst × 2N³
-    flops_per_round = args.burst * 2.0 * (N ** 3)
+    flops_per_burst = args.burst * 2.0 * (N ** 3)
 
     while running:
-        # 定期检查显存
-        if round_count % args.check_interval == 0:
+        # 显存安全检查 (低频)
+        if round_count % args.mem_check_interval == 0:
             free_gb = get_free_memory_gb(device)
             if free_gb < args.min_free_gb:
-                if not paused:
-                    print(f"[AICore Filler] ⚠ 显存不足 ({free_gb:.2f}GB), 暂停计算...")
-                    paused = True
+                if not mem_paused:
+                    print(f"[Filler] 显存不足 ({free_gb:.2f}GB), 暂停...")
+                    mem_paused = True
                 time.sleep(2.0)
                 round_count += 1
                 continue
-            elif paused:
-                print(f"[AICore Filler] ✓ 显存恢复 ({free_gb:.2f}GB), 恢复计算")
-                paused = False
+            elif mem_paused:
+                print(f"[Filler] 显存恢复 ({free_gb:.2f}GB), 继续")
+                mem_paused = False
 
-        # 一轮 burst: 连续 matmul, 写入预分配的 C (零分配)
-        for _ in range(args.burst):
-            torch.mm(A, B, out=C)
-        total_matmuls += args.burst
+        # ── 核心决策: 读 cached AICore% ──
+        aicore = monitor.aicore_pct
+
+        if aicore is not None and aicore < args.aicore_threshold:
+            # AICore 空闲 → 填充
+            for _ in range(args.burst):
+                torch.mm(A, B, out=C)
+            total_matmuls += args.burst
+            fill_rounds += 1
+            if args.fill_sleep_ms > 0:
+                time.sleep(args.fill_sleep_ms / 1000.0)
+        else:
+            # AICore 繁忙 或 数据未就绪 → 退避
+            idle_rounds += 1
+            time.sleep(args.idle_sleep_ms / 1000.0)
+
         round_count += 1
 
         # 定期报告
         if round_count % args.report_interval == 0:
             t_now = time.time()
             dt = t_now - t_last_report
-            if dt > 0:
-                tflops = (args.report_interval * flops_per_round) / dt / 1e12
-                free_gb = get_free_memory_gb(device)
-                elapsed = t_now - t_start
-                print(
-                    f"[AICore Filler] round={round_count:,}, "
-                    f"matmuls={total_matmuls:,}, "
-                    f"~{tflops:.1f} TFLOPS, "
-                    f"free={free_gb:.2f}GB, "
-                    f"elapsed={elapsed:.0f}s"
-                )
+            elapsed = t_now - t_start
+            fill_tflops = (fill_rounds * flops_per_burst) / dt / 1e12 if dt > 0 else 0
+            fill_pct = fill_rounds / max(1, fill_rounds + idle_rounds) * 100
+            cur_aicore = monitor.aicore_pct
+            cur_aicore_s = f"{cur_aicore}%" if cur_aicore is not None else "N/A"
+
+            print(
+                f"[Filler] round={round_count:,}  "
+                f"AICore={cur_aicore_s}  "
+                f"fill/idle={fill_rounds}/{idle_rounds} ({fill_pct:.0f}% fill)  "
+                f"matmuls={total_matmuls:,}  "
+                f"~{fill_tflops:.1f}TFLOPS  "
+                f"elapsed={elapsed:.0f}s"
+            )
+            # 重置区间计数
+            fill_rounds = 0
+            idle_rounds = 0
             t_last_report = t_now
 
-        # 可控让步
-        if args.sleep_ms > 0:
-            time.sleep(args.sleep_ms / 1000.0)
-
-        # 超时检查
+        # 超时
         if args.max_seconds > 0 and (time.time() - t_start) >= args.max_seconds:
-            print(f"[AICore Filler] 达到 max_seconds={args.max_seconds}, 退出")
+            print(f"[Filler] 达到 max_seconds={args.max_seconds}, 退出")
             break
 
-    # --- 清理 ---
+    # ── 清理 ──
+    monitor.stop()
     del A, B, C
     empty_cache()
     elapsed = time.time() - t_start
-    print(f"\n[AICore Filler] 已停止. 共 {total_matmuls:,} 次 matmul, 运行 {elapsed:.1f}s")
+    print(f"\n[Filler] 已停止. matmuls={total_matmuls:,}, 运行 {elapsed:.1f}s")
 
 
 if __name__ == "__main__":
