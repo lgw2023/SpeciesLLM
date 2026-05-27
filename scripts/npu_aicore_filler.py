@@ -182,9 +182,9 @@ def parse_args():
     g_sense.add_argument("--poll_interval", type=float, default=0.1,
                          help="npu-smi 轮询间隔 (秒). 加上 npu-smi 自身 ~100ms, "
                               "实际探测周期 ≈ poll_interval + 0.1s. 默认 0.1 → 周期 ~200ms")
-    g_sense.add_argument("--burst", type=int, default=5,
-                         help="每次填充的连续 matmul 次数. 默认 5 次 × 4096 矩阵 ≈ 2-3ms, "
-                              "短 burst 让主循环快速回到判断点")
+    g_sense.add_argument("--burst", type=int, default=2,
+                         help="每次填充的连续 matmul 次数. 默认 2 次 × 4096 矩阵 ≈ 1ms, "
+                              "最小化状态切换时对训练的干扰")
     g_sense.add_argument("--fill_sleep_ms", type=float, default=1.0,
                          help="填充轮之间的 sleep (ms). 给训练 kernel 插队的窗口")
     g_sense.add_argument("--idle_sleep_ms", type=float, default=100.0,
