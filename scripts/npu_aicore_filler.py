@@ -170,8 +170,8 @@ def parse_args():
     g_dev = p.add_argument_group("设备与精度")
     g_dev.add_argument("--device", type=int, default=0,
                        help="NPU device ID (默认 0)")
-    g_dev.add_argument("--matrix_size", type=int, default=1024,
-                       help="N×N matmul 维度. 1024 → ~6MB 显存")
+    g_dev.add_argument("--matrix_size", type=int, default=4096,
+                       help="N×N matmul 维度. 4096 → ~96MB 显存, 足以打满 Cube 单元")
     g_dev.add_argument("--dtype", type=str, default="float16",
                        choices=["float16", "bfloat16", "float32"])
 
@@ -182,8 +182,8 @@ def parse_args():
     g_sense.add_argument("--poll_interval", type=float, default=0.1,
                          help="npu-smi 轮询间隔 (秒). 加上 npu-smi 自身 ~100ms, "
                               "实际探测周期 ≈ poll_interval + 0.1s. 默认 0.1 → 周期 ~200ms")
-    g_sense.add_argument("--burst", type=int, default=50,
-                         help="每次填充的连续 matmul 次数. 50 次 ≈ 1-2ms, "
+    g_sense.add_argument("--burst", type=int, default=5,
+                         help="每次填充的连续 matmul 次数. 默认 5 次 × 4096 矩阵 ≈ 2-3ms, "
                               "短 burst 让主循环快速回到判断点")
     g_sense.add_argument("--fill_sleep_ms", type=float, default=1.0,
                          help="填充轮之间的 sleep (ms). 给训练 kernel 插队的窗口")
@@ -254,7 +254,8 @@ def main():
     print(f"[Filler] 设备剩余: {free_after:.2f}GB (安全线 {args.min_free_gb:.1f}GB)")
     print(f"[Filler] AICore 阈值: <{args.aicore_threshold}% 时填充, >={args.aicore_threshold}% 时退避")
     print(f"[Filler] 当前 AICore: {test_reading}%")
-    print(f"[Filler] burst={args.burst} (~{args.burst * 30 / 1000:.1f}ms), "
+    est_ms_per_mm = 0.5 if N >= 4096 else 0.03
+    print(f"[Filler] burst={args.burst} (~{args.burst * est_ms_per_mm:.1f}ms), "
           f"poll={args.poll_interval}s, fill_sleep={args.fill_sleep_ms}ms, idle_sleep={args.idle_sleep_ms}ms")
     print()
 
