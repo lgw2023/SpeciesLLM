@@ -5,6 +5,7 @@ import json
 import time
 import math
 import glob
+import gc
 import csv
 import logging
 import argparse
@@ -956,6 +957,7 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
     last_completed_epoch = 0
     last_completed_step = 0
     last_completed_loss = 0.0
+    last_saved_step = -1
     for epoch in range(resume_start_epoch, args.epoch):
 
         # Uncomment this if use DistributedSampler
@@ -1393,6 +1395,7 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
                             save_model(model, optimizer, epoch, absolute_batch_number, lossf, out_dir, rank, NODE_RANK, s3_remote_dir_path=args.s3_remote_dir_path, logger=logger)
                     metrics_writer.flush()
                     save_log_to_s3(args, out_dir, NODE_RANK, rank, logger=logger)
+                    last_saved_step = absolute_batch_number
             else:
                 pass
                 # print(f"rank: {rank} not in step update zero_grad")
@@ -1526,6 +1529,16 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
             last_completed_epoch = epoch
             last_completed_step = absolute_batch_number
             last_completed_loss = total_loss
+            if absolute_batch_number % save_step_interval != 0:
+                logger.info("end_of_epoch_save epoch=%s step=%s", epoch + 1, absolute_batch_number)
+                if rank == 0:
+                    if ddp:
+                        save_model(model.module, optimizer, epoch, absolute_batch_number, total_loss, out_dir, rank, NODE_RANK, s3_remote_dir_path=args.s3_remote_dir_path, logger=logger)
+                    else:
+                        save_model(model, optimizer, epoch, absolute_batch_number, total_loss, out_dir, rank, NODE_RANK, s3_remote_dir_path=args.s3_remote_dir_path, logger=logger)
+                metrics_writer.flush()
+                save_log_to_s3(args, out_dir, NODE_RANK, rank, logger=logger)
+                last_saved_step = absolute_batch_number
         loss_info = f"Node: {NODE_RANK}, Rank: {rank}, Epoch [{epoch + 1}/{args.epoch}], average loss is: {total_loss:.4f} | Learning rate is: {lr}"
         logger.info(loss_info)
         if adaptive_state is not None:
@@ -1555,6 +1568,11 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
                         f"10_sync {t_temp_10_sum_sync:.4f}")
         logger.info(time_checker)
         total_loss = 0
+        # 释放本 epoch 的 in-RAM 分片与 DataLoader：否则下个 epoch 的 ddf.compute()
+        # 会在旧 DataFrame 仍存活时构建新分片，主机内存瞬时翻倍 → 边界 OOM
+        del data_loader
+        del data_pt
+        gc.collect()
         if args.max_train_steps > 0 and iter_num >= args.max_train_steps:
             break
 
@@ -1564,6 +1582,8 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
     NODE_RANK = get_node_rank()
     if args.skip_final_save:
         logger.info("skip_final_save=true")
+    elif last_saved_step == last_completed_step:
+        logger.info("final_save_skipped step=%s already_saved_at_epoch_end", last_completed_step)
     elif rank == 0:
         if ddp:
             save_model(model.module, optimizer, last_completed_epoch, last_completed_step, last_completed_loss, out_dir, rank, NODE_RANK, s3_remote_dir_path=args.s3_remote_dir_path, logger=logger)

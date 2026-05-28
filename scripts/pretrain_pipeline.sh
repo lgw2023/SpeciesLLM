@@ -139,9 +139,9 @@ LOG_LEVEL="${LOG_LEVEL:-INFO}"
 LOG_ALL_RANKS="${LOG_ALL_RANKS:-false}"
 
 # DataLoader：降低 host RAM（主要靠 num_workers / prefetch）
-NUM_WORKERS="${NUM_WORKERS:-8}"
+NUM_WORKERS="${NUM_WORKERS:-4}"
 PREFETCH_FACTOR="${PREFETCH_FACTOR:-1}"
-PERSISTENT_WORKERS="${PERSISTENT_WORKERS:-true}"
+PERSISTENT_WORKERS="${PERSISTENT_WORKERS:-false}"
 PIN_MEMORY="${PIN_MEMORY:-true}"
 
 # 模型结构、label 开关、label 数量和 SEQ_LEN 不在 shell 中写默认值；

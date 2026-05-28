@@ -180,9 +180,9 @@ nan_check_interval="${nan_check_interval:-${NAN_CHECK_INTERVAL:-0}}"
 metrics_flush_interval="${metrics_flush_interval:-${METRICS_FLUSH_INTERVAL:-100}}"
 log_level="${log_level:-${LOG_LEVEL:-INFO}}"
 log_all_ranks="${log_all_ranks:-${LOG_ALL_RANKS:-false}}"
-num_workers="${num_workers:-${NUM_WORKERS:-8}}"
+num_workers="${num_workers:-${NUM_WORKERS:-4}}"
 prefetch_factor="${prefetch_factor:-${PREFETCH_FACTOR:-1}}"
-persistent_workers="${persistent_workers:-${PERSISTENT_WORKERS:-true}}"
+persistent_workers="${persistent_workers:-${PERSISTENT_WORKERS:-false}}"
 pin_memory="${pin_memory:-${PIN_MEMORY:-true}}"
 
 WORKER_MODE=0
