@@ -179,7 +179,21 @@ def load_run(run_dir: Path, prefer_rank: int = 0, max_steps: Optional[int] = Non
     if not records:
         return None
 
-    df_all = pd.DataFrame(records).sort_values("batch_index").reset_index(drop=True)
+    df_all = pd.DataFrame(records)
+
+    # When training is resumed from a checkpoint, the metrics file contains
+    # duplicate update_step values (the resumed run replays the tail of the
+    # previous epoch).  Keep only the last occurrence of each update_step so
+    # the plots show a clean, non-overlapping timeline.
+    if "update_step" in df_all.columns:
+        df_all = (
+            df_all
+            .drop_duplicates(subset="update_step", keep="last")
+            .sort_values("update_step")
+            .reset_index(drop=True)
+        )
+    else:
+        df_all = df_all.sort_values("batch_index").reset_index(drop=True)
 
     if max_steps is not None and "update_step" in df_all.columns:
         df_all = df_all[df_all["update_step"] <= max_steps].reset_index(drop=True)
@@ -291,8 +305,8 @@ def make_figure(runs: dict[str, dict], smooth_window: int = 1) -> plt.Figure:
     _plot(axes[1, 2], runs, "loss", "update_step", "loss_gepc_zero_prob",   "Loss",              "Zero-Prob Loss (GEPC)", sw=sw)
 
     # Row 2: throughput and timing — every batch row is valid
-    _plot(axes[2, 0], runs, "all",  "batch_index", "step_ms",              "Step Time (ms)",    "Step Duration",          sw=sw)
-    _plot(axes[2, 1], runs, "all",  "batch_index", "tokens_per_s",         "Tokens / s (rank)", "Per-Rank Throughput",    sw=sw)
+    _plot(axes[2, 0], runs, "all",  "update_step", "step_ms",              "Step Time (ms)",    "Step Duration",          sw=sw)
+    _plot(axes[2, 1], runs, "all",  "update_step", "tokens_per_s",         "Tokens / s (rank)", "Per-Rank Throughput",    sw=sw)
     _plot(axes[2, 2], runs, "loss", "update_step", "cluster_tokens_per_s_sum", "Tokens / s (cluster)", "Cluster Throughput", sw=sw)
 
     if legend_handles:
@@ -345,7 +359,7 @@ def make_loss_detail_figure(runs: dict[str, dict], smooth_window: int = 1) -> pl
 
 
 def make_timing_figure(runs: dict[str, dict], smooth_window: int = 1) -> plt.Figure:
-    """Detailed timing breakdown per step (x = batch_index, every row)."""
+    """Detailed timing breakdown per step (x = update_step, every row)."""
     timing_cols = [
         ("data_load_s",  "Data Load (s)"),
         ("to_device_s",  "To Device (s)"),
@@ -363,17 +377,17 @@ def make_timing_figure(runs: dict[str, dict], smooth_window: int = 1) -> plt.Fig
 
     for ax, (col, title) in zip(axes_flat, timing_cols):
         ax.set_title(title, fontsize=10)
-        ax.set_xlabel("Batch Index")
+        ax.set_xlabel("Update Step")
         ax.set_ylabel("Seconds")
         for label, run in runs.items():
             df = run["all"]
-            if col not in df.columns or "batch_index" not in df.columns:
+            if col not in df.columns or "update_step" not in df.columns:
                 continue
-            sub = df[["batch_index", col]].dropna()
+            sub = df[["update_step", col]].dropna()
             if sub.empty:
                 continue
             y = smooth(sub[col].values, smooth_window)
-            ax.plot(sub["batch_index"].values, y, label=label, color=colours[label], alpha=0.85)
+            ax.plot(sub["update_step"].values, y, label=label, color=colours[label], alpha=0.85)
         ax.legend(fontsize=8)
 
     # hide unused panel
@@ -698,8 +712,8 @@ def main() -> None:
         n_all = len(result["all"])
         n_loss = len(result["loss"])
         step_range = (
-            f"batch {result['all']['batch_index'].iloc[0]}–{result['all']['batch_index'].iloc[-1]}"
-            if not result["all"].empty else "?"
+            f"step {result['all']['update_step'].iloc[0]}–{result['all']['update_step'].iloc[-1]}"
+            if not result["all"].empty and "update_step" in result["all"].columns else "?"
         )
         subtitle = _make_subtitle(result["args"])
         print(f"  Loaded '{label}': {n_all} rows total, {n_loss} with loss, {step_range}")
