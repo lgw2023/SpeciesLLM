@@ -38,7 +38,7 @@ from torch_npu.npu.amp import GradScaler, autocast
 
 from nanoBERT.utils import GeneVocab, CustomCollate_3GeneEmb
 from nanoBERT.utils import ParquetDataset, LazyParquetDataset, PreindexedParquetDataset
-from nanoBERT.utils import masked_mse_loss, masked_relative_error, criterion_neg_log_bernoulli
+from nanoBERT.utils import masked_mse_loss, masked_huber_loss, masked_relative_error, criterion_neg_log_bernoulli
 from nanoBERT.model.nanoBERTmodel_cellmeta2_plusEncode_adbc import BERTConfig, BERTForPreTraining
 
 try:
@@ -496,10 +496,20 @@ def apply_runtime_overrides(config, args, logger=None):
 
 
 def resolve_amp_dtype(args):
-    if args.amp_dtype == "auto":
-        dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16'
-    else:
+    if args.amp_dtype != "auto":
         dtype = args.amp_dtype
+    else:
+        # torch_npu's `transfer_to_npu` shims torch.cuda.*, so on Ascend NPUs
+        # torch.cuda.is_bf16_supported() can return True even when the device
+        # has no real bf16 support -> 'auto' silently ran the whole stack in an
+        # unsupported/emulated bf16. Only trust the bf16 fast-path on a genuine
+        # CUDA device; otherwise fall back to fp16 (the safe AMP dtype on NPU).
+        # Pass an explicit --amp_dtype (e.g. float32) to override.
+        device_type = (getattr(args, "device_type", None) or "").lower()
+        if device_type == "cuda" and torch.cuda.is_available() and torch.cuda.is_bf16_supported():
+            dtype = 'bfloat16'
+        else:
+            dtype = 'float16'
     return dtype, resolve_torch_dtype(dtype)
 
 
@@ -942,6 +952,21 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
     else:
         logger.info("adaptive_grad_clip=off static_grad_clip=%.4f", grad_clip)
 
+    # Select the regression loss for the GEP/GEPC expression heads. Huber
+    # (smooth-L1) bounds the per-element gradient and is robust to the outlier
+    # expression values that make plain MSE spike once the model reaches low
+    # loss. MSE stays the default for backward compatibility / A-B comparison.
+    if getattr(args, "gep_loss", "mse") == "huber":
+        _huber_delta = float(args.huber_delta)
+
+        def regression_loss(pred, target_, mask_, _delta=_huber_delta):
+            return masked_huber_loss(pred, target_, mask_, delta=_delta)
+
+        logger.info("gep_loss=huber huber_delta=%.4f", _huber_delta)
+    else:
+        regression_loss = masked_mse_loss
+        logger.info("gep_loss=mse")
+
     t_temp_1_sum_lr = 0
     t_temp_2_sum_data = 0
     t_temp_3_sum_batchdata = 0
@@ -1180,7 +1205,7 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
                 t_temp_6_loss_gep = time.time()
                 # compute loss
                 loss = 0.0
-                loss_gep = masked_mse_loss(outputs["model_output"],
+                loss_gep = regression_loss(outputs["model_output"],
                                            target_values,
                                            mask_positions)
                 loss += loss_gep
@@ -1199,7 +1224,7 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
 
                     # print(f"rank: {rank} loss_zero_prob done")
                 if "mvc_output" in outputs:
-                    loss_gepc = masked_mse_loss(outputs["mvc_output"],
+                    loss_gepc = regression_loss(outputs["mvc_output"],
                                                 target_values,
                                                 mask_positions)
                     loss += loss_gepc
@@ -2023,6 +2048,20 @@ def argumentparser():
                         choices=["float32", "float16", "bfloat16", "amp"],
                         default="float32",
                         help="dtype for static gene embedding buffers. Default float32 preserves current behavior.")
+    parser.add_argument('--gep_loss',
+                        type=str,
+                        choices=["mse", "huber"],
+                        default="mse",
+                        help="Regression loss for the GEP/GEPC expression heads. "
+                             "'mse' = original masked MSE. 'huber' = masked smooth-L1 "
+                             "with bounded per-element gradient (robust to outlier "
+                             "expression values that make MSE spike at low loss).")
+    parser.add_argument('--huber_delta',
+                        type=float,
+                        default=1.0,
+                        help="Transition point for --gep_loss=huber. Per-element gradient "
+                             "is capped at delta; smaller = stronger outlier protection. "
+                             "Ignored when --gep_loss=mse.")
     parser.add_argument('--runtime_attn_implementation',
                         type=str,
                         choices=["eager", "sdpa"],

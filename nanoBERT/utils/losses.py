@@ -12,6 +12,25 @@ def masked_mse_loss(
     loss = F.mse_loss(input * mask, target * mask, reduction="sum")
     return loss / mask.sum()
 
+def masked_huber_loss(
+    input: torch.Tensor, target: torch.Tensor, mask: torch.Tensor, delta: float = 1.0
+) -> torch.Tensor:
+    """
+    Compute the masked Huber (smooth-L1) loss between input and target.
+
+    Quadratic for |error| <= delta, linear beyond it, so a single outlier
+    expression value contributes a *bounded* per-element gradient (magnitude
+    <= delta) instead of MSE's unbounded 2*error. This removes the gradient
+    spikes that drive GEP divergence once the model reaches low loss, while
+    behaving like MSE in the well-predicted (|error| <= delta) regime.
+
+    Masked-out positions contribute exactly 0 (error 0 -> Huber 0), mirroring
+    ``masked_mse_loss``; the result is the mean over masked-in positions.
+    """
+    mask = mask.float()
+    loss = F.huber_loss(input * mask, target * mask, reduction="sum", delta=delta)
+    return loss / mask.sum()
+
 def criterion_neg_log_bernoulli(
     input: torch.Tensor, target: torch.Tensor, mask: torch.Tensor
 ) -> torch.Tensor:

@@ -162,6 +162,9 @@ grad_clip_warmup_steps="${grad_clip_warmup_steps:-${GRAD_CLIP_WARMUP_STEPS:-200}
 grad_clip_max_consecutive_skips="${grad_clip_max_consecutive_skips:-${GRAD_CLIP_MAX_CONSECUTIVE_SKIPS:-50}}"
 grad_clip_ema_runaway_factor="${grad_clip_ema_runaway_factor:-${GRAD_CLIP_EMA_RUNAWAY_FACTOR:-2.0}}"
 grad_clip_hard_raw_norm_limit="${grad_clip_hard_raw_norm_limit:-${GRAD_CLIP_HARD_RAW_NORM_LIMIT:-100000000000.0}}"
+amp_dtype="${amp_dtype:-${AMP_DTYPE:-float32}}"
+gep_loss="${gep_loss:-${GEP_LOSS:-mse}}"
+huber_delta="${huber_delta:-${HUBER_DELTA:-1.0}}"
 max_train_steps="${max_train_steps:-${MAX_TRAIN_STEPS:-0}}"
 init_model_path="${init_model_path:-${INIT_MODEL_PATH:-}}"
 init_optimizer_path="${init_optimizer_path:-${INIT_OPTIMIZER_PATH:-}}"
@@ -453,6 +456,9 @@ build_train_args() {
     "--grad_clip_max_consecutive_skips=${grad_clip_max_consecutive_skips}"
     "--grad_clip_ema_runaway_factor=${grad_clip_ema_runaway_factor}"
     "--grad_clip_hard_raw_norm_limit=${grad_clip_hard_raw_norm_limit}"
+    "--amp_dtype=${amp_dtype}"
+    "--gep_loss=${gep_loss}"
+    "--huber_delta=${huber_delta}"
     "--max_train_steps=${max_train_steps}"
     "--resume_update_step=${resume_update_step}"
     "--resume_start_epoch=${resume_start_epoch}"
@@ -605,7 +611,7 @@ remote_env_assignments() {
     warmup_ratio lr_decay_epochs weight_decay save_data_interval beta1 beta2 grad_clip
     adaptive_grad_clip grad_clip_ema_beta grad_clip_ratio grad_skip_ratio grad_skip_max
     grad_clip_min grad_clip_max grad_clip_warmup_steps grad_clip_max_consecutive_skips
-    grad_clip_ema_runaway_factor grad_clip_hard_raw_norm_limit max_train_steps
+    grad_clip_ema_runaway_factor grad_clip_hard_raw_norm_limit amp_dtype gep_loss huber_delta max_train_steps
     init_model_path init_optimizer_path resume_update_step resume_start_epoch resume_skip_batches
     append_output_logs compile
     backend device device_type s3_remote_dir_path
