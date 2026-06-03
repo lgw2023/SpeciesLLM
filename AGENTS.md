@@ -16,6 +16,19 @@ Assume each real node has:
 - 8 Huawei Ascend NPU devices.
 - 64 GB device memory per NPU.
 
+Training runtime stack:
+
+- The real training environment uses Huawei Ascend NPU devices with CANN
+  `8.2.1.RC1`.
+- Training code needs `torch_npu` together with `torch`; do not assume CUDA-based
+  PyTorch behavior, operator coverage, dtype support, or device semantics are the
+  same on Ascend NPU.
+- Do not use `bf16` / `bfloat16` precision for the current NPU+CANN setup unless
+  a task explicitly says this constraint has changed.
+- When changing training code, precision handling, custom operators, or device
+  placement, check for Ascend/CANN/Torch NPU differences instead of relying on
+  CUDA-only assumptions.
+
 Server data layout:
 
 - Stage 2 SpeciesLLM data is stored under

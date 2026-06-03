@@ -6,6 +6,11 @@ import h5py
 import pandas as pd
 import numpy as np
 import torch
+try:  # On Ascend NPU, route torch.cuda.* to the NPU; harmless no-op on CUDA/CPU hosts.
+    import torch_npu  # noqa: F401
+    from torch_npu.contrib import transfer_to_npu  # noqa: F401
+except ImportError:
+    pass
 from torch.utils.data import DataLoader
 from typing import Union, Optional
 from pathlib import Path
