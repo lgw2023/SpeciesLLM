@@ -26,7 +26,7 @@ import tempfile
 from typing import BinaryIO, Iterable
 
 
-DEFAULT_PATTERNS = ("log*txt", "loss_to_log*txt", "metrics*jsonl")
+DEFAULT_PATTERNS = ("log*txt", "loss_to_log*txt", "metrics*jsonl", "run_record.json")
 MANIFEST_NAME = ".speciesllm_training_output_text_manifest.json"
 LEGACY_ARCHIVE_FORMAT_VERSION = 1
 PARALLEL_ARCHIVE_FORMAT_VERSION = 2
@@ -1629,7 +1629,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Losslessly compress/decompress SpeciesLLM training_output text files "
-            "(log*txt, loss_to_log*txt, metrics*jsonl)."
+            "(log*txt, loss_to_log*txt, metrics*jsonl, run_record.json)."
         )
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
