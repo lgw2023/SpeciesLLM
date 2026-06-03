@@ -1049,6 +1049,7 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
         model.train()
         total_loss = 0.0
         total_loss_tensor = torch.zeros((), dtype=torch.float32, device=device)
+        last_step_loss_tensor = torch.zeros((), dtype=torch.float32, device=device)
         processed_batches = 0
         num_batches = len(data_loader) # 已经处理过 // args.batch_size
         logger.info(
@@ -1441,7 +1442,9 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
             samples_per_s = local_batch_size / dt if dt > 0 else 0.0
             tokens_per_s = local_batch_size * args.seq_len / dt if dt > 0 else 0.0
             mfu_value = None if runing_mfu < 0 else runing_mfu
-            total_loss_tensor += loss.detach() * args.gradient_accumulation_steps
+            step_loss_tensor = loss.detach() * args.gradient_accumulation_steps
+            total_loss_tensor += step_loss_tensor
+            last_step_loss_tensor = step_loss_tensor
             processed_batches += 1
 
             if should_collect_scalars:
@@ -1550,17 +1553,18 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
                 break
 
         total_loss = (total_loss_tensor / max(1, processed_batches)).item()
+        last_step_loss = last_step_loss_tensor.item()
         if processed_batches > 0:
             last_completed_epoch = epoch
             last_completed_step = absolute_batch_number
-            last_completed_loss = total_loss
+            last_completed_loss = last_step_loss
             if absolute_batch_number % save_step_interval != 0:
-                logger.info("end_of_epoch_save epoch=%s step=%s", epoch + 1, absolute_batch_number)
+                logger.info("end_of_epoch_save epoch=%s step=%s loss=%.6f epoch_avg_loss=%.6f", epoch + 1, absolute_batch_number, last_step_loss, total_loss)
                 if rank == 0:
                     if ddp:
-                        save_model(model.module, optimizer, epoch, absolute_batch_number, total_loss, out_dir, rank, NODE_RANK, s3_remote_dir_path=args.s3_remote_dir_path, logger=logger)
+                        save_model(model.module, optimizer, epoch, absolute_batch_number, last_step_loss, out_dir, rank, NODE_RANK, s3_remote_dir_path=args.s3_remote_dir_path, logger=logger)
                     else:
-                        save_model(model, optimizer, epoch, absolute_batch_number, total_loss, out_dir, rank, NODE_RANK, s3_remote_dir_path=args.s3_remote_dir_path, logger=logger)
+                        save_model(model, optimizer, epoch, absolute_batch_number, last_step_loss, out_dir, rank, NODE_RANK, s3_remote_dir_path=args.s3_remote_dir_path, logger=logger)
                 metrics_writer.flush()
                 save_log_to_s3(args, out_dir, NODE_RANK, rank, logger=logger)
                 last_saved_step = absolute_batch_number
