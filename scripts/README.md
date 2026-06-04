@@ -156,23 +156,33 @@ training-script argparse defaults, so leaving them unset keeps prior behavior.
 ### First-run inputs with the current training recipe
 
 `scripts/launch_singlenode_1st_inputs_current_recipe.sh` runs one node x 8 NPUs
-with the **early/first-version inputs** but the **current training recipe**, to
-regression-check the current code. The training entry is not modified.
+with the **early/first-version inputs** but the **current repo code and current
+training recipe**, to regression-check whether code changes altered model
+behavior. It drives the existing `scripts/launch_multinode_torchrun.sh` in
+single-node mode (`HOSTS=127.0.0.1`, `NNODES=1`, `SYNC_SELF=0`, so node_rank 0
+runs locally with no ssh/scp) and only sets env/parameters — no launcher or
+training-entry code is modified.
 
 Pinned to the first version (the "necessary file configs"):
 
 - model config `Stage2_macrogene_embeddings/args_1st_run_<size>.json` —
   `seq_len=862`, `use_batch_labels=true`, label dims `12028/11/154/28/143/5/3`;
 - 1st-run macrogene embeddings (862 rows, `Stage1_macrogene_embeddings`);
-- first-batch data in the old 862-macrogene layout.
+- early shuffled training data in the old 862-macrogene layout. By default the
+  wrapper reads `/data/disk1/SpeciesLLM/all_shuffled_data`, whose expected files
+  are `shuffled_part_*.parquet`.
 
 Everything else follows the current recipe, matching
+the second resumed run in
 `training_output_100m_data_1_2_3_E2_huber_fp32_from_scratch_20260529_160058`:
 `gep_loss=huber` (`huber_delta=5.0`), `amp_dtype=float32`, `lr 1e-6 -> 1e-7`,
-`warmup_ratio=0.10`, `beta2=0.98`, `epoch=5`, `adaptive_grad_clip=true` with
-norm-skip + aborts off (`grad_skip_ratio=0`, `grad_skip_max=0`,
-`max_consecutive_skips=0`, `ema_runaway_factor=0`) and the `1e8` hard raw-norm
-fuse kept, `compile=false`, `batch 512 x grad_accum 1`.
+`warmup_iters=2000`, `warmup_ratio=0.10`, `beta2=0.98`, `epoch=5`,
+`adaptive_grad_clip=true` with norm-skip + aborts off (`grad_skip_ratio=0`,
+`grad_skip_max=0`, `max_consecutive_skips=0`, `ema_runaway_factor=0`) and the
+`1e8` hard raw-norm fuse kept, `compile=false`, `batch 512 x grad_accum 1`.
+Resume/init-only values from that run (`INIT_MODEL_PATH`, `RESUME_*`,
+`APPEND_OUTPUT_LOGS=true`) are intentionally not defaults here because this
+wrapper starts a fresh early-data run.
 
 `MODEL_SIZE` selects the model structure: `100m` (default, matches the cited
 reference) or `500m` (matches the early first-version config). The training
@@ -182,20 +192,28 @@ arrays are exposed under those names: by default the wrapper symlinks
 Override `SRC_EMB_PATH` (dir with `1st_run_*.npy`) or `EMB_PATH` (dir already
 using `2nd_run_*` names) as needed.
 
-`DATA_PATH` must be the flattened, training-ready first-batch parquet dir whose
-samples carry 862 macrogene features (collate raises if features != `seq_len`).
+`DATA_PATH` defaults to `/data/disk1/SpeciesLLM/all_shuffled_data` and may be
+overridden with any flattened, training-ready early parquet dir whose samples
+carry 862 macrogene features (collate raises if features != `seq_len`).
 
 ```bash
-DATA_PATH=/data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData/<first_batch_flatten_862> \
 bash scripts/launch_singlenode_1st_inputs_current_recipe.sh
 # 500M structure instead of 100M:
 DATA_PATH=... MODEL_SIZE=500m bash scripts/launch_singlenode_1st_inputs_current_recipe.sh
 ```
 
-Preview the assembled command without running by adding `DRY_RUN=1`. The cited
-run used 3 nodes (global batch `3*8*512*1=12288`); on one node set
-`GRADIENT_ACCUMULATION_STEPS=3` to match it. If `batch 512` OOMs at `seq_len=862`,
-lower `BATCH_SIZE` and raise `GRADIENT_ACCUMULATION_STEPS` proportionally.
+The grad-control family is set explicitly because the multi-node launcher's own
+defaults differ from this recipe (e.g. `GRAD_CLIP_MAX=0.5`, `GRAD_SKIP_RATIO=100`,
+`GRAD_CLIP_HARD_RAW_NORM_LIMIT=1e11`, `COMPILE=true`).
+
+Training runs **detached** (the launcher backgrounds node_rank 0 via `nohup`);
+follow it at `torchrun_logs/node_rank0.log`. Preview the assembled command
+without launching by adding `DRY_RUN=1`. The cited run used 3 nodes (global batch
+`3*8*512*1=12288`); this wrapper keeps `GRADIENT_ACCUMULATION_STEPS=1` to match
+the recorded argument value. Set it to `3` only if matching effective global
+batch is more important than matching the reference argument list. If `batch 512`
+OOMs at `seq_len=862`, lower `BATCH_SIZE` and raise
+`GRADIENT_ACCUMULATION_STEPS` proportionally.
 
 ## DDP gradient synchronization probe
 
