@@ -281,11 +281,14 @@ if __name__ == "__main__":
     data_path = "/ibex/scratch/projects/c2307/codes/SpeciesLLM/test_data_inte/"
     emb_path = "/ibex/scratch/projects/c2307/macrogene"
     model_path = "out/best_model_epoch_1.pth"
-    seq_len = 862
     batch_size = 1
     esm_embeddings = np.load(emb_path + "/1st_run_macrogene_features_sum_esm2.npy")
     desc_embeddings = np.load(emb_path + "/1st_run_macrogene_features_sum_gene_desc.npy")
     dna_embeddings = np.load(emb_path + "/1st_run_macrogene_features_sum_dnaseq.npy")
+    # #macrogenes == seq_len == GEP regression-target dim. Derive it from the
+    # loaded feature matrix (rows = macrogenes) instead of hardcoding, so it can
+    # never drift from the embeddings actually loaded (1st-run=862, 2nd-run=640).
+    seq_len = esm_embeddings.shape[0]
     file_name = "human_macrogene_1234.parquet"
     data_file = data_path + file_name
 

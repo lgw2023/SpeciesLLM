@@ -228,9 +228,14 @@ def main():
 
     glob_valmax = fdf["val_max"].replace(-np.inf, np.nan).dropna()
     if len(glob_valmax):
+        med = glob_valmax.median()
+        ratio = (glob_valmax.max() / med) if med else float("inf")
+        verdict = ("BIG SPREAD -> likely scale inconsistency / unnormalized shards"
+                   if ratio >= 3 else
+                   "tight (max/median < 3x) -> consistent scale across files, no outlier shards")
         print(f"\n[stat] per-file val_max distribution: "
-              f"median={glob_valmax.median():.3g}  p95={glob_valmax.quantile(.95):.3g}  "
-              f"max={glob_valmax.max():.3g}   <- big spread => scale inconsistency between files")
+              f"median={med:.3g}  p95={glob_valmax.quantile(.95):.3g}  "
+              f"max={glob_valmax.max():.3g}  (max/median={ratio:.2f}x) -> {verdict}")
     if not ddf.empty:
         print(f"\n=== TOP {args.top} dataset_id by max X value (trace the source) ===")
         print(ddf.head(args.top).to_string(index=False))

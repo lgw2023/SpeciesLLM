@@ -40,6 +40,10 @@ s3_remote_dir_path="s3://bucket-3028/public/SpeciesLLM-Training/"
 data_path=./all_flatten_data
 emb_path=./macrogene_embeddings_1stage
 out_path="training_output"
+# seq_len = #macrogenes = rows of the *_macrogene_features_sum_*.npy you load
+# (1st-run=862, current 2nd-run=640). Must match the embeddings AND the data X
+# length or collate raises. Prefer the --config_json path (launch_*_torchrun.sh),
+# which derives seq_len = vocab_size-1 instead of hardcoding the number here.
 seq_len=862
 batch_size=16
 backend='hccl'

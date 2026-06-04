@@ -6,6 +6,11 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd -P)"
 
 cd "$PROJECT_ROOT"
 
+# NOTE: --seq_len below = #macrogenes = rows of *_macrogene_features_sum_*.npy
+# (this example uses the 1st-run value 862; the current 2nd-run is 640). It must
+# match the embeddings AND the data X length or collate raises. The current
+# pipeline instead passes --config_json and derives seq_len = vocab_size-1
+# (see scripts/launch_singlenode_torchrun.sh / launch_multinode_torchrun.sh).
 exec torchrun \
   --nproc_per_node=8 \
   --nnodes=3 \

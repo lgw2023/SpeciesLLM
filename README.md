@@ -16,6 +16,24 @@ This design decouples two responsibilities:
 - **Macrogene Layer**: aligns gene spaces across species
 - **Embedding Backbone**: learns cell state representations
 
+### Macrogene count / `seq_len` (single source of truth)
+
+The number of macrogenes **N** is the model's sequence length and the length of
+every cell's expression vector `X` (the GEP regression target). It is not a free
+constant — it is fixed by the macrogene feature matrices and must agree everywhere:
+
+- **Source of truth**: rows of `Stage2_macrogene_embeddings/2nd_run_macrogene_features_sum_*.npy`.
+- Encoded in the model config as `vocab_size = N + 1` (the `+1` is the CLS token).
+  Training derives `seq_len = vocab_size − 1` (`scripts/pretrain_config.py`);
+  preflight asserts the `.npy` row count `== seq_len`; the collator raises if any
+  cell's `X` length `!= seq_len`.
+- **Current (2nd) run: N = 640.** The earlier **1st run used N = 862**
+  (`Stage1_macrogene_embeddings`, `args_1st_run_*.json`), so scripts pinned to
+  1st-run inputs (e.g. `scripts/launch_singlenode_1st_inputs_current_recipe.sh`)
+  legitimately say 862. The two are not interchangeable.
+- **Do not hardcode the number.** Pass `--config_json` (preferred, used by
+  `scripts/launch_*_torchrun.sh`) or read it from the `.npy` shape.
+
 ## Model Architecture
 
 The model (`BERTForPreTraining`) is built on BERT with several key extensions:
