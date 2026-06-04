@@ -146,6 +146,103 @@ Single-node command:
 bash scripts/launch_singlenode_torchrun.sh
 ```
 
+The launcher now also exposes `ADAPTIVE_GRAD_CLIP`, `LR_DECAY_EPOCHS`, and the
+full adaptive grad-clip family (`GRAD_CLIP_RATIO`, `GRAD_SKIP_RATIO`,
+`GRAD_SKIP_MAX`, `GRAD_CLIP_MIN/MAX`, `GRAD_CLIP_WARMUP_STEPS`,
+`GRAD_CLIP_MAX_CONSECUTIVE_SKIPS`, `GRAD_CLIP_EMA_RUNAWAY_FACTOR`,
+`GRAD_CLIP_HARD_RAW_NORM_LIMIT`) as env passthroughs. Their defaults match the
+training-script argparse defaults, so leaving them unset keeps prior behavior.
+
+### First-run inputs with the current training recipe
+
+`scripts/launch_singlenode_1st_inputs_current_recipe.sh` runs one node x 8 NPUs
+with the **early/first-version inputs** but the **current training recipe**, to
+regression-check the current code. The training entry is not modified.
+
+Pinned to the first version (the "necessary file configs"):
+
+- model config `Stage2_macrogene_embeddings/args_1st_run_<size>.json` —
+  `seq_len=862`, `use_batch_labels=true`, label dims `12028/11/154/28/143/5/3`;
+- 1st-run macrogene embeddings (862 rows, `Stage1_macrogene_embeddings`);
+- first-batch data in the old 862-macrogene layout.
+
+Everything else follows the current recipe, matching
+`training_output_100m_data_1_2_3_E2_huber_fp32_from_scratch_20260529_160058`:
+`gep_loss=huber` (`huber_delta=5.0`), `amp_dtype=float32`, `lr 1e-6 -> 1e-7`,
+`warmup_ratio=0.10`, `beta2=0.98`, `epoch=5`, `adaptive_grad_clip=true` with
+norm-skip + aborts off (`grad_skip_ratio=0`, `grad_skip_max=0`,
+`max_consecutive_skips=0`, `ema_runaway_factor=0`) and the `1e8` hard raw-norm
+fuse kept, `compile=false`, `batch 512 x grad_accum 1`.
+
+`MODEL_SIZE` selects the model structure: `100m` (default, matches the cited
+reference) or `500m` (matches the early first-version config). The training
+script hardcodes the `2nd_run_macrogene_features_sum_*.npy` names, so the 1st-run
+arrays are exposed under those names: by default the wrapper symlinks
+`Stage1_macrogene_embeddings/1st_run_*.npy` into a sibling `*_as_2nd_run` dir.
+Override `SRC_EMB_PATH` (dir with `1st_run_*.npy`) or `EMB_PATH` (dir already
+using `2nd_run_*` names) as needed.
+
+`DATA_PATH` must be the flattened, training-ready first-batch parquet dir whose
+samples carry 862 macrogene features (collate raises if features != `seq_len`).
+
+```bash
+DATA_PATH=/data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData/<first_batch_flatten_862> \
+bash scripts/launch_singlenode_1st_inputs_current_recipe.sh
+# 500M structure instead of 100M:
+DATA_PATH=... MODEL_SIZE=500m bash scripts/launch_singlenode_1st_inputs_current_recipe.sh
+```
+
+Preview the assembled command without running by adding `DRY_RUN=1`. The cited
+run used 3 nodes (global batch `3*8*512*1=12288`); on one node set
+`GRADIENT_ACCUMULATION_STEPS=3` to match it. If `batch 512` OOMs at `seq_len=862`,
+lower `BATCH_SIZE` and raise `GRADIENT_ACCUMULATION_STEPS` proportionally.
+
+## DDP gradient synchronization probe
+
+Use this before real training when you need to verify that Ascend
+NPU/CANN/torch_npu DDP really synchronizes gradients during `loss.backward()`.
+The probe uses a one-parameter model and rank-specific targets, so expected
+gradients are deterministic and do not require real datasets.
+
+Single-node 8-card test:
+
+```bash
+bash scripts/run_ddp_grad_sync_probe.sh single
+```
+
+`single` mode does not load `.env` by default, so three-node variables such as
+`MASTER_ADDR` or `WORKDIR` do not accidentally override the local 8-card probe.
+Pass `LOAD_ENV_FILE=1` only if you intentionally want to read `.env`.
+
+Expected key line for 8 ranks:
+
+```text
+PASS ddp_backward: observed=[-9.0, -9.0, -9.0, -9.0, -9.0, -9.0, -9.0, -9.0] expected=global average -9.0
+```
+
+Three-node 24-card test, run from the master node:
+
+```bash
+HOSTS=host0,host1,host2 \
+MASTER_ADDR=host0 \
+WORKDIR=/data/disk1/SpeciesLLM \
+bash scripts/run_ddp_grad_sync_probe.sh multinode
+```
+
+Use the same host order and SSH settings as `scripts/launch_multinode_torchrun.sh`.
+The local node runs in the foreground; remote node logs are written under:
+
+```text
+ddp_grad_probe_logs/node_rank1.log
+ddp_grad_probe_logs/node_rank2.log
+```
+
+Expected key line for 24 ranks:
+
+```text
+PASS ddp_backward: observed=[-25.0, ...] expected=global average -25.0
+```
+
 ModelArts command:
 
 ```bash
