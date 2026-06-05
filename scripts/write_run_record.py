@@ -75,9 +75,15 @@ def main() -> int:
     status_short = run_git(git_repo, "status", "--short")
     diff = run_git(git_repo, "diff", "HEAD", "--no-ext-diff")
     diff_stat = run_git(git_repo, "diff", "HEAD", "--stat")
+    commit_subject = run_git(git_repo, "log", "-1", "--pretty=format:%s")
+    describe = run_git(git_repo, "describe", "--tags", "--always", "--dirty")
+    recent_log = run_git(
+        git_repo, "log", "-n", "20", "--date=short", "--pretty=format:%h %ad %s"
+    )
+    recent_commits = recent_log.split("\n") if recent_log else []
 
     record = {
-        "schema_version": 1,
+        "schema_version": 2,
         "created_at_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
         "host": socket.gethostname(),
         "cwd": str(repo),
@@ -90,6 +96,9 @@ def main() -> int:
             "branch": run_git(git_repo, "branch", "--show-current"),
             "commit": commit,
             "commit_short": commit[:12] if commit else "",
+            "commit_subject": commit_subject,
+            "describe": describe,
+            "recent_commits": recent_commits,
             "is_dirty": bool(status_short),
             "status_short": status_short,
             "diff_stat": diff_stat,
