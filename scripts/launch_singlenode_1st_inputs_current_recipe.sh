@@ -10,7 +10,7 @@ set -euo pipefail
 #
 #   * INPUTS pinned to the early / first-version files ("necessary file configs"):
 #       - 1st-run macrogene embeddings (862 rows, Stage1_macrogene_embeddings),
-#         exposed under the 2nd_run_* names the training script hardcodes
+#         exposed under the selected 2nd_run_* names
 #       - early shuffled training data in the old 862-macrogene layout
 #       - model config args_1st_run_<size>.json (seq_len=862,
 #         use_batch_labels=true, label dims 12028/11/154/28/143/5/3)
@@ -57,10 +57,17 @@ esac
 
 # --- resolve embeddings: build 2nd_run_* symlinks from 1st_run_* if needed ---
 SRC_EMB_PATH="${SRC_EMB_PATH:-${PROJECT_ROOT}/Stage1_macrogene_embeddings}"
+GENE_EMBEDDING_MODALITIES="${GENE_EMBEDDING_MODALITIES:-esm2,gene_desc,dnaseq}"
 if [[ -z "${EMB_PATH:-}" ]]; then
   EMB_PATH="${SRC_EMB_PATH%/}_as_2nd_run"
   mkdir -p "$EMB_PATH"
-  for f in esm2 gene_desc dnaseq; do
+  IFS=',' read -r -a embedding_modalities <<< "$GENE_EMBEDDING_MODALITIES"
+  for raw_modality in "${embedding_modalities[@]}"; do
+    f="${raw_modality//[[:space:]]/}"
+    case "$f" in
+      esm2|gene_desc|dnaseq) ;;
+      *) echo "[ERROR] unsupported GENE_EMBEDDING_MODALITIES item: $f" >&2; exit 1 ;;
+    esac
     src="${SRC_EMB_PATH%/}/1st_run_macrogene_features_sum_${f}.npy"
     dst="${EMB_PATH%/}/2nd_run_macrogene_features_sum_${f}.npy"
     [[ -f "$src" ]] || { echo "[ERROR] missing 1st-run embedding: $src" >&2; exit 1; }
@@ -73,6 +80,7 @@ fi
 
 # --- inputs (UPPERCASE env is read by launch_multinode_torchrun.sh) ---
 export DATA_PATH EMB_PATH
+export GENE_EMBEDDING_MODALITIES
 export MODEL_CONFIG_JSON="${MODEL_CONFIG_JSON:-${PROJECT_ROOT}/Stage2_macrogene_embeddings/args_1st_run_${MODEL_SIZE}.json}"
 export OUT_PATH="${OUT_PATH:-training_output_${MODEL_SIZE}_1st_inputs_current_recipe}"
 export NUM_OF_USED_DATA="${NUM_OF_USED_DATA:-0}"

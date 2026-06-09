@@ -25,6 +25,42 @@ from .util import grad_reverse
 from .util import DomainSpecificBatchNorm1d
 
 
+DEFAULT_GENE_EMBEDDING_MODALITIES = ("esm2", "gene_desc", "dnaseq")
+GENE_EMBEDDING_DIMS = {
+    "esm2": 1280,
+    "gene_desc": 1280,
+    "dnaseq": 2560,
+}
+
+
+def normalize_gene_embedding_modalities(modalities):
+    if modalities is None:
+        return DEFAULT_GENE_EMBEDDING_MODALITIES
+    if isinstance(modalities, str):
+        raw_modalities = [item.strip() for item in modalities.split(",")]
+    else:
+        raw_modalities = [str(item).strip() for item in modalities]
+    normalized = tuple(item for item in raw_modalities if item)
+    if not normalized:
+        raise ValueError("gene_embedding_modalities must contain at least one modality")
+    invalid = [item for item in normalized if item not in GENE_EMBEDDING_DIMS]
+    if invalid:
+        allowed = ", ".join(GENE_EMBEDDING_DIMS)
+        raise ValueError(
+            f"Unsupported gene embedding modality: {', '.join(invalid)}. "
+            f"Allowed values: {allowed}"
+        )
+    duplicates = []
+    seen = set()
+    for item in normalized:
+        if item in seen and item not in duplicates:
+            duplicates.append(item)
+        seen.add(item)
+    if duplicates:
+        raise ValueError(f"Duplicate gene embedding modalities: {', '.join(duplicates)}")
+    return normalized
+
+
 class LayerNorm(nn.Module):
     """ LayerNorm but with an optional bias. PyTorch doesn't support simply bias=False """
 
@@ -492,21 +528,33 @@ class ClsDecoder(nn.Module):
 
 
 class EnhancedFusion(nn.Module):
-    def __init__(self, output_dim: int = 640):
+    def __init__(self, output_dim: int = 640, modalities=DEFAULT_GENE_EMBEDDING_MODALITIES):
         super().__init__()
+        self.modalities = normalize_gene_embedding_modalities(modalities)
         self.norm_esm = nn.LayerNorm(1280)
         self.norm_desc = nn.LayerNorm(1280)
         self.norm_dna = nn.LayerNorm(2560)
-        self.linear = nn.Linear(5120,
+        input_dim = sum(GENE_EMBEDDING_DIMS[modality] for modality in self.modalities)
+        self.linear = nn.Linear(input_dim,
                                 output_dim)
         self.final_norm = nn.LayerNorm(output_dim)
 
     def forward(self, esm_emb, desc_emb, dna_emb):
-        esm_emb = self.norm_esm(esm_emb)
-        desc_emb = self.norm_desc(desc_emb)
-        dna_emb = self.norm_dna(dna_emb)
-        x = torch.cat([esm_emb, desc_emb * 0.8, dna_emb * 0.45],
-                      dim=2)  # shape is (batch, seq_len, 5120)
+        parts = []
+        for modality in self.modalities:
+            if modality == "esm2":
+                if esm_emb is None:
+                    raise ValueError("esm2 embeddings are required by gene_embedding_modalities")
+                parts.append(self.norm_esm(esm_emb))
+            elif modality == "gene_desc":
+                if desc_emb is None:
+                    raise ValueError("gene_desc embeddings are required by gene_embedding_modalities")
+                parts.append(self.norm_desc(desc_emb) * 0.8)
+            elif modality == "dnaseq":
+                if dna_emb is None:
+                    raise ValueError("dnaseq embeddings are required by gene_embedding_modalities")
+                parts.append(self.norm_dna(dna_emb) * 0.45)
+        x = torch.cat(parts, dim=2)
         return self.final_norm(self.linear(x))
 
 
@@ -589,6 +637,7 @@ class BERTConfig:
     _attn_implementation: str = "eager"  # attention implementation, either "eager" or "sdpa"
     mvc_decoder_style: str = "inner product"
     num_cls: int = 1
+    gene_embedding_modalities: Union[str, Tuple[str, ...]] = DEFAULT_GENE_EMBEDDING_MODALITIES
     ## these parameters need further confirm
     chunk_size_feed_forward: int = None
     explicit_zero_prob: bool = False
@@ -601,13 +650,19 @@ class BERTModel(nn.Module):
         assert config.vocab_size is not None
         assert config.max_position_embeddings is not None
         self.config = config
+        self.config.gene_embedding_modalities = normalize_gene_embedding_modalities(
+            self.config.gene_embedding_modalities
+        )
         self.gradient_checkpointing = False
 
         self.gene_encoder = GeneEncoder(config.vocab_size,
                                         config.hidden_size)
         self.value_encoder = ContinuousValueEncoder(config.hidden_size,
                                                     dropout=config.hidden_dropout_prob)
-        self.enhanced_fusion = EnhancedFusion(output_dim=config.hidden_size)
+        self.enhanced_fusion = EnhancedFusion(
+            output_dim=config.hidden_size,
+            modalities=self.config.gene_embedding_modalities,
+        )
 
         # self.position_encoder = PositionalEncoding(config.hidden_size, dropout=config.hidden_dropout_prob, len=config.max_position_embeddings)
         self.drop = nn.Dropout(config.hidden_dropout_prob)
@@ -645,8 +700,8 @@ class BERTModel(nn.Module):
             module.bias.data.zero_()
             module.weight.data.fill_(1.0)
 
-    def forward(self, src: torch.Tensor, values: torch.Tensor, esm_embeddings: torch.Tensor,
-            desc_embeddings: torch.Tensor, dna_embeddings: torch.Tensor, batch_labels: Optional[torch.Tensor] = None,
+    def forward(self, src: torch.Tensor, values: torch.Tensor, esm_embeddings: Optional[torch.Tensor],
+            desc_embeddings: Optional[torch.Tensor], dna_embeddings: Optional[torch.Tensor], batch_labels: Optional[torch.Tensor] = None,
             attention_mask: Optional[torch.FloatTensor] = None, output_attentions: Optional[bool] = False,
             output_hidden_states: Optional[bool] = False, ) -> torch.Tensor:
         device = src.device
@@ -794,24 +849,36 @@ class BERTForPreTraining(nn.Module):
     def set_static_gene_inputs(
             self,
             gene_ids: Union[torch.Tensor, Any],
-            esm_embeddings: Union[torch.Tensor, Any],
-            desc_embeddings: Union[torch.Tensor, Any],
-            dna_embeddings: Union[torch.Tensor, Any],
+            esm_embeddings: Optional[Union[torch.Tensor, Any]],
+            desc_embeddings: Optional[Union[torch.Tensor, Any]],
+            dna_embeddings: Optional[Union[torch.Tensor, Any]],
             cls_id: int = 0,
             append_cls: bool = True,
             dtype: torch.dtype = torch.float32,
     ) -> None:
         device = next(self.parameters()).device
+        modalities = normalize_gene_embedding_modalities(self.config.gene_embedding_modalities)
         src = torch.as_tensor(gene_ids, dtype=torch.long, device=device)
-        esm = torch.as_tensor(esm_embeddings, dtype=dtype, device=device)
-        desc = torch.as_tensor(desc_embeddings, dtype=dtype, device=device)
-        dna = torch.as_tensor(dna_embeddings, dtype=dtype, device=device)
+
+        def selected_tensor(modality: str, embeddings):
+            if modality not in modalities:
+                return torch.empty(0, dtype=dtype, device=device)
+            if embeddings is None:
+                raise ValueError(f"{modality} embeddings are required by gene_embedding_modalities")
+            return torch.as_tensor(embeddings, dtype=dtype, device=device)
+
+        esm = selected_tensor("esm2", esm_embeddings)
+        desc = selected_tensor("gene_desc", desc_embeddings)
+        dna = selected_tensor("dnaseq", dna_embeddings)
 
         if append_cls:
             src = torch.cat([torch.tensor([cls_id], dtype=torch.long, device=device), src], dim=0)
-            esm = torch.cat([torch.zeros((1, esm.shape[1]), dtype=esm.dtype, device=device), esm], dim=0)
-            desc = torch.cat([torch.zeros((1, desc.shape[1]), dtype=desc.dtype, device=device), desc], dim=0)
-            dna = torch.cat([torch.zeros((1, dna.shape[1]), dtype=dna.dtype, device=device), dna], dim=0)
+            if esm.numel() != 0:
+                esm = torch.cat([torch.zeros((1, esm.shape[1]), dtype=esm.dtype, device=device), esm], dim=0)
+            if desc.numel() != 0:
+                desc = torch.cat([torch.zeros((1, desc.shape[1]), dtype=desc.dtype, device=device), desc], dim=0)
+            if dna.numel() != 0:
+                dna = torch.cat([torch.zeros((1, dna.shape[1]), dtype=dna.dtype, device=device), dna], dim=0)
 
         self.static_src = src.unsqueeze(0)
         self.static_esm_embeddings = esm.unsqueeze(0)
@@ -834,23 +901,30 @@ class BERTForPreTraining(nn.Module):
             dna_embeddings: Optional[torch.Tensor],
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         batch_size = values.shape[0]
+        modalities = normalize_gene_embedding_modalities(self.config.gene_embedding_modalities)
         src = self._static_or_value(src, self.static_src, batch_size, "src")
-        esm_embeddings = self._static_or_value(
+
+        def resolve_modality(modality: str, value: Optional[torch.Tensor], static_value: torch.Tensor, name: str):
+            if modality not in modalities:
+                return None
+            return self._static_or_value(value, static_value, batch_size, name)
+
+        esm_embeddings = resolve_modality(
+            "esm2",
             esm_embeddings,
             self.static_esm_embeddings,
-            batch_size,
             "esm_embeddings",
         )
-        desc_embeddings = self._static_or_value(
+        desc_embeddings = resolve_modality(
+            "gene_desc",
             desc_embeddings,
             self.static_desc_embeddings,
-            batch_size,
             "desc_embeddings",
         )
-        dna_embeddings = self._static_or_value(
+        dna_embeddings = resolve_modality(
+            "dnaseq",
             dna_embeddings,
             self.static_dna_embeddings,
-            batch_size,
             "dna_embeddings",
         )
 
@@ -861,7 +935,7 @@ class BERTForPreTraining(nn.Module):
                 ("desc_embeddings", desc_embeddings),
                 ("dna_embeddings", dna_embeddings),
         ):
-            if tensor.shape[1] != values.shape[1]:
+            if tensor is not None and tensor.shape[1] != values.shape[1]:
                 raise ValueError(f"{name} seq_len {tensor.shape[1]} does not match values seq_len {values.shape[1]}")
         return src, esm_embeddings, desc_embeddings, dna_embeddings
 

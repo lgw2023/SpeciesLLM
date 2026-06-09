@@ -163,6 +163,7 @@ grad_clip_max_consecutive_skips="${grad_clip_max_consecutive_skips:-${GRAD_CLIP_
 grad_clip_ema_runaway_factor="${grad_clip_ema_runaway_factor:-${GRAD_CLIP_EMA_RUNAWAY_FACTOR:-2.0}}"
 grad_clip_hard_raw_norm_limit="${grad_clip_hard_raw_norm_limit:-${GRAD_CLIP_HARD_RAW_NORM_LIMIT:-100000000000.0}}"
 amp_dtype="${amp_dtype:-${AMP_DTYPE:-float32}}"
+gene_embedding_modalities="${gene_embedding_modalities:-${GENE_EMBEDDING_MODALITIES:-esm2,gene_desc,dnaseq}}"
 gep_loss="${gep_loss:-${GEP_LOSS:-mse}}"
 huber_delta="${huber_delta:-${HUBER_DELTA:-1.0}}"
 max_train_steps="${max_train_steps:-${MAX_TRAIN_STEPS:-0}}"
@@ -427,6 +428,7 @@ build_train_args() {
     "--data_path=${data_path}"
     "--num_of_used_data=${num_of_used_data}"
     "--emb_path=${emb_path}"
+    "--gene_embedding_modalities=${gene_embedding_modalities}"
     "--config_json=${config_json}"
     "--out_path=${out_path}"
     "--batch_size=${batch_size}"
@@ -606,6 +608,7 @@ remote_env_assignments() {
     DRY_RUN LOCAL_NODE_RANK ASCEND_RT_VISIBLE_DEVICES_VALUE HCCL_CONNECT_TIMEOUT HCCL_EXEC_TIMEOUT
     HCCL_WHITELIST_DISABLE ASCEND_TOOLKIT_HOME ASCEND_ENV_SH ASCEND_HOME_PATH
     data_path num_of_used_data emb_path config_json out_path batch_size epoch
+    gene_embedding_modalities
     gradient_accumulation_steps gradient_checkpointing train_mvc runtime_do_mvc runtime_explicit_zero_prob
     learning_rate min_lr decay_lr warmup_iters
     warmup_ratio lr_decay_epochs weight_decay save_data_interval beta1 beta2 grad_clip
@@ -644,7 +647,7 @@ run_launcher() {
   log "NNODES=${NNODES}, NPROC_PER_NODE=${NPROC_PER_NODE}, MASTER=${MASTER_ADDR}:${MASTER_PORT}"
   log "WORKDIR=${WORKDIR}, remote_script=${remote_self}"
   log "TRAIN_DATASET=${TRAIN_DATASET}, data_path=${data_path}, emb_path=${emb_path}"
-  log "config_json=${config_json}"
+  log "config_json=${config_json}, gene_embedding_modalities=${gene_embedding_modalities}"
   log "max_train_steps=${max_train_steps}, adaptive_grad_clip=${adaptive_grad_clip}"
   log "SYNC_SELF=${SYNC_SELF}, DRY_RUN=${DRY_RUN}, LOCAL_NODE_RANK=${LOCAL_NODE_RANK}"
 

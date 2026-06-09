@@ -186,7 +186,8 @@ wrapper starts a fresh early-data run.
 
 `MODEL_SIZE` selects the model structure: `100m` (default, matches the cited
 reference) or `500m` (matches the early first-version config). The training
-script hardcodes the `2nd_run_macrogene_features_sum_*.npy` names, so the 1st-run
+script reads the `2nd_run_macrogene_features_sum_*.npy` files selected by
+`GENE_EMBEDDING_MODALITIES` (default `esm2,gene_desc,dnaseq`), so the 1st-run
 arrays are exposed under those names: by default the wrapper symlinks
 `Stage1_macrogene_embeddings/1st_run_*.npy` into a sibling `*_as_2nd_run` dir.
 Override `SRC_EMB_PATH` (dir with `1st_run_*.npy`) or `EMB_PATH` (dir already

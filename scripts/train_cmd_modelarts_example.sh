@@ -21,6 +21,7 @@ exec torchrun \
   --data_path=./all_flatten_data \
   --num_of_used_data=0 \
   --emb_path=./macrogene_embeddings \
+  --gene_embedding_modalities=esm2,gene_desc,dnaseq \
   --seq_len=862 \
   --out_path=training_output \
   --batch_size=16 \

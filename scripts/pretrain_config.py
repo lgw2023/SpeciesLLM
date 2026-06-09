@@ -49,11 +49,57 @@ LABEL_LIMIT_FIELDS = {
     "sex": "num_sex_labels",
 }
 
+DEFAULT_GENE_EMBEDDING_MODALITIES = ("esm2", "gene_desc", "dnaseq")
+GENE_EMBEDDING_FILES = {
+    "esm2": "2nd_run_macrogene_features_sum_esm2.npy",
+    "gene_desc": "2nd_run_macrogene_features_sum_gene_desc.npy",
+    "dnaseq": "2nd_run_macrogene_features_sum_dnaseq.npy",
+}
+
 
 def shell_value(value: Any) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
     return str(value)
+
+
+def parse_gene_embedding_modalities(value: Any | None) -> tuple[str, ...]:
+    if value is None:
+        return DEFAULT_GENE_EMBEDDING_MODALITIES
+    if isinstance(value, str):
+        raw_modalities = [item.strip() for item in value.split(",")]
+    else:
+        raw_modalities = [str(item).strip() for item in value]
+
+    modalities = [item for item in raw_modalities if item]
+    if not modalities:
+        raise ValueError("gene_embedding_modalities must contain at least one modality")
+
+    invalid = [item for item in modalities if item not in GENE_EMBEDDING_FILES]
+    if invalid:
+        allowed = ", ".join(GENE_EMBEDDING_FILES)
+        raise ValueError(
+            f"Unsupported gene embedding modality: {', '.join(invalid)}. "
+            f"Allowed values: {allowed}"
+        )
+
+    seen = set()
+    duplicates = []
+    for item in modalities:
+        if item in seen and item not in duplicates:
+            duplicates.append(item)
+        seen.add(item)
+    if duplicates:
+        raise ValueError(f"Duplicate gene embedding modalities: {', '.join(duplicates)}")
+
+    return tuple(modalities)
+
+
+def gene_embedding_files_for_modalities(modalities: Any | None) -> list[tuple[str, str]]:
+    return [
+        (modality, GENE_EMBEDDING_FILES[modality])
+        for modality in parse_gene_embedding_modalities(modalities)
+    ]
 
 
 def load_model_config(config_path: Path) -> dict[str, Any]:

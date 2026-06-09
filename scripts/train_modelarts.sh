@@ -16,6 +16,7 @@ usage() {
     echo "  --s3_remote_dir_path=<value>       Directory of s3 bucket to store model results."
     echo "  --data_path=<value>                Directory of sc data."
     echo "  --emb_path=<value>                 Directory of emb data."
+    echo "  --gene_embedding_modalities=<value> Comma-separated gene embedding modalities."
     echo "  --seq_len=<value>                  seq_len."
     echo "  --batch_size=<value>               batch_size."
     echo "  --epoch=<value>                    epoch."
@@ -39,6 +40,7 @@ usage() {
 s3_remote_dir_path="s3://bucket-3028/public/SpeciesLLM-Training/"
 data_path=./all_flatten_data
 emb_path=./macrogene_embeddings_1stage
+gene_embedding_modalities=esm2,gene_desc,dnaseq
 out_path="training_output"
 # seq_len = #macrogenes = rows of the *_macrogene_features_sum_*.npy you load
 # (1st-run=862, current 2nd-run=640). Must match the embeddings AND the data X
@@ -123,6 +125,10 @@ for arg in "$@"; do
             ;;
         --emb_path=*)
             emb_path="${arg#*=}"
+            shift
+            ;;
+        --gene_embedding_modalities=*)
+            gene_embedding_modalities="${arg#*=}"
             shift
             ;;
         --seq_len=*)
@@ -479,6 +485,7 @@ echo "Output directory: $full_s3_remote_dir_path"
 cmd_args="--data_path=$data_path \
     --num_of_used_data=$num_of_used_data \
     --emb_path=$emb_path \
+    --gene_embedding_modalities=$gene_embedding_modalities \
     --seq_len=$seq_len \
     --out_path=$out_path \
     --batch_size=$batch_size \

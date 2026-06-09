@@ -23,15 +23,19 @@ import pyarrow.parquet as pq
 try:
     from pretrain_config import (
         MODEL_CONFIG_FIELD_MAP,
+        gene_embedding_files_for_modalities,
         label_limits_from_config,
         load_model_config,
+        parse_gene_embedding_modalities,
         shell_value,
     )
 except ModuleNotFoundError:  # pragma: no cover - used when imported as a package.
     from scripts.pretrain_config import (
         MODEL_CONFIG_FIELD_MAP,
+        gene_embedding_files_for_modalities,
         label_limits_from_config,
         load_model_config,
+        parse_gene_embedding_modalities,
         shell_value,
     )
 
@@ -49,12 +53,6 @@ REQUIRED_PARQUET_COLUMNS = [
     "tech_sample",
     "species",
     "idx",
-]
-
-EMBEDDING_FILES = [
-    "2nd_run_macrogene_features_sum_esm2.npy",
-    "2nd_run_macrogene_features_sum_gene_desc.npy",
-    "2nd_run_macrogene_features_sum_dnaseq.npy",
 ]
 
 CHECKPOINT_STEP_RE = re.compile(r"-step-(\d+)-loss-[^-]+(?:\.optimizer)?\.pt$")
@@ -376,6 +374,10 @@ def validate_flat_file(
 
 def validate_data(args: argparse.Namespace) -> None:
     args.command_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        gene_embedding_modalities = parse_gene_embedding_modalities(args.gene_embedding_modalities)
+    except ValueError as exc:
+        fail("invalid gene embedding modalities", [str(exc)])
     if args.config_json is not None:
         config = load_model_config(args.config_json)
         seq_len = int(config["seq_len"])
@@ -493,17 +495,17 @@ def validate_data(args: argparse.Namespace) -> None:
             print(f"[INFO] wrote distributed file plan: {plan_path}")
 
     if args.emb_path.exists():
-        for name in EMBEDDING_FILES:
+        for modality, name in gene_embedding_files_for_modalities(gene_embedding_modalities):
             path = args.emb_path / name
             if not path.exists():
-                errors.append(f"missing embedding file: {path}")
+                errors.append(f"missing {modality} embedding file: {path}")
                 continue
             arr = np.load(path, mmap_mode="r")
             if arr.ndim != 2:
                 errors.append(f"{path}: expected 2D embedding array, got shape={arr.shape}")
             if arr.shape[0] != seq_len:
                 errors.append(f"{path}: first dimension {arr.shape[0]} != seq_len {seq_len}")
-            print(f"[INFO] embedding {name}: shape={arr.shape}, dtype={arr.dtype}")
+            print(f"[INFO] embedding {modality} {name}: shape={arr.shape}, dtype={arr.dtype}")
     elif args.require_embeddings:
         errors.append(f"embedding directory does not exist: {args.emb_path}")
     else:
@@ -515,6 +517,7 @@ def validate_data(args: argparse.Namespace) -> None:
         "total_rows": int(sum(file_rows)),
         "world_size": args.world_size,
         "seq_len": seq_len,
+        "gene_embedding_modalities": list(gene_embedding_modalities),
         "species_distribution": dict(sorted(species_counter.items())),
     }
     print(json.dumps(summary, indent=2, sort_keys=True))
@@ -726,6 +729,12 @@ def build_parser() -> argparse.ArgumentParser:
     validate_parser.add_argument("--max-validate-rows-per-file", type=int, required=True)
     validate_parser.add_argument("--max-validate-files", type=int, required=True)
     validate_parser.add_argument("--require-embeddings", action="store_true")
+    validate_parser.add_argument(
+        "--gene-embedding-modalities",
+        default="esm2,gene_desc,dnaseq",
+        help="Comma-separated embedding modalities to require/check. "
+             "Default esm2,gene_desc,dnaseq preserves the current three-way check.",
+    )
     add_common_label_args(validate_parser)
     validate_parser.set_defaults(func=validate_data)
 

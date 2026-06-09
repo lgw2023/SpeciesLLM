@@ -42,9 +42,17 @@ from nanoBERT.utils import masked_mse_loss, masked_huber_loss, masked_relative_e
 from nanoBERT.model.nanoBERTmodel_cellmeta2_plusEncode_adbc import BERTConfig, BERTForPreTraining
 
 try:
-    from scripts.pretrain_config import load_model_config
+    from scripts.pretrain_config import (
+        gene_embedding_files_for_modalities,
+        load_model_config,
+        parse_gene_embedding_modalities,
+    )
 except ModuleNotFoundError:
-    from pretrain_config import load_model_config
+    from pretrain_config import (
+        gene_embedding_files_for_modalities,
+        load_model_config,
+        parse_gene_embedding_modalities,
+    )
 
 import dask
 import dask.dataframe as dd
@@ -435,6 +443,21 @@ CONFIG_ARG_FIELD_MAP = {
     "chunk_size_feed_forward": "chunk_size_feed_forward",
     "explicit_zero_prob": "explicit_zero_prob",
 }
+
+
+def load_gene_embeddings(emb_path, modalities, seq_len):
+    embeddings = {}
+    for modality, filename in gene_embedding_files_for_modalities(modalities):
+        path = Path(emb_path) / filename
+        if not path.exists():
+            raise FileNotFoundError(f"Missing {modality} embedding file: {path}")
+        arr = np.load(path)
+        if arr.ndim != 2:
+            raise ValueError(f"{path}: expected 2D embedding array, got shape={arr.shape}")
+        if arr.shape[0] != seq_len:
+            raise ValueError(f"{path}: first dimension {arr.shape[0]} != seq_len {seq_len}")
+        embeddings[modality] = arr
+    return embeddings
 
 
 def apply_config_json(args):
@@ -852,6 +875,7 @@ def build_bertconfig(vocab, seq_len, args):
                         cell_emb_style=value_or_default(args.cell_emb_style, "cls"),
                         chunk_size_feed_forward=value_or_default(args.chunk_size_feed_forward, 0),
                         explicit_zero_prob=str2bool(args.explicit_zero_prob) if args.explicit_zero_prob is not None else True,
+                        gene_embedding_modalities=getattr(args, "gene_embedding_modalities", None),
                         )
 
     return config
@@ -1720,9 +1744,10 @@ def main(args):
     src = np.arange(1, seq_len + 1)
     #######################################
     # original reading section
-    esm_embeddings = np.load(emb_path + "/2nd_run_macrogene_features_sum_esm2.npy")
-    desc_embeddings = np.load(emb_path + "/2nd_run_macrogene_features_sum_gene_desc.npy")
-    dna_embeddings = np.load(emb_path + "/2nd_run_macrogene_features_sum_dnaseq.npy")
+    gene_embeddings = load_gene_embeddings(emb_path, args.gene_embedding_modalities, seq_len)
+    esm_embeddings = gene_embeddings.get("esm2")
+    desc_embeddings = gene_embeddings.get("gene_desc")
+    dna_embeddings = gene_embeddings.get("dnaseq")
     #######################################
 
     # Build vocabulary
@@ -1773,11 +1798,13 @@ def main(args):
     logger.info("runtime_config_overrides=%s", json.dumps(runtime_overrides, sort_keys=True))
     logger.info("model_config=%s", config)
     logger.info(
-        "experiment_controls amp_dtype=%s static_gene_dtype=%s train_mvc=%s gradient_checkpointing=%s "
+        "experiment_controls amp_dtype=%s static_gene_dtype=%s gene_embedding_modalities=%s "
+        "train_mvc=%s gradient_checkpointing=%s "
         "memory_log_interval=%s tensor_shape_log_interval=%s max_train_steps=%s skip_final_save=%s "
         "ddp_find_unused_parameters=%s append_output_logs=%s",
         dtype,
         args.static_gene_dtype,
+        ",".join(args.gene_embedding_modalities),
         args.train_mvc,
         args.gradient_checkpointing,
         args.memory_log_interval,
@@ -1869,6 +1896,11 @@ def argumentparser():
     parser.add_argument("--emb_path",
                         type=str,
                         required=True)
+    parser.add_argument("--gene_embedding_modalities",
+                        type=str,
+                        default="esm2,gene_desc,dnaseq",
+                        help="Comma-separated static gene embedding modalities to use. "
+                             "Default esm2,gene_desc,dnaseq preserves the current three-way fusion.")
     parser.add_argument("--config_json",
                         type=str,
                         default=None,
@@ -2232,7 +2264,8 @@ def argumentparser():
     args = parser.parse_args()
     try:
         apply_config_json(args)
-    except ValueError as exc:
+        args.gene_embedding_modalities = parse_gene_embedding_modalities(args.gene_embedding_modalities)
+    except (SystemExit, ValueError) as exc:
         parser.error(str(exc))
     return args
 

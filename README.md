@@ -41,7 +41,7 @@ The model (`BERTForPreTraining`) is built on BERT with several key extensions:
 ### Input Encoding
 - **GeneEncoder**: maps macrogene IDs to embeddings
 - **ContinuousValueEncoder**: encodes continuous expression values via `Linear → ReLU → Linear → LayerNorm`
-- **EnhancedFusion**: fuses three gene pre-trained embeddings (ESM2 protein, gene description text, DNA sequence) with weighted concatenation + linear projection
+- **EnhancedFusion**: fuses selected gene pre-trained embeddings with weighted concatenation + linear projection; default is ESM2 protein, gene description text, and DNA sequence
 
 ### Cell Metadata Injection
 Seven cell-level metadata types are independently encoded and summed, then concatenated to each gene position's hidden state:
