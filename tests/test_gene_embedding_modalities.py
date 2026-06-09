@@ -92,3 +92,68 @@ def test_two_way_ablation_forward_does_not_require_gene_desc_embeddings():
 
     assert model.bert.enhanced_fusion.linear.in_features == 3840
     assert outputs["model_output"].shape == (batch_size, seq_len + 1)
+
+
+def test_two_way_ablation_train_losses_use_all_trainable_parameters():
+    module = _load_adbc_model_module()
+    torch.manual_seed(123)
+    seq_len = 3
+    batch_size = 2
+    config = module.BERTConfig(
+        vocab_size=seq_len + 2,
+        hidden_size=16,
+        num_hidden_layers=1,
+        num_attention_heads=4,
+        intermediate_size=32,
+        hidden_dropout_prob=0.0,
+        attention_probs_dropout_prob=0.0,
+        max_position_embeddings=seq_len + 1,
+        initializer_range=0.02,
+        use_batch_labels=False,
+        use_species_labels=False,
+        use_tissue_labels=False,
+        use_seqmethod_labels=False,
+        use_disease_labels=False,
+        use_sex_labels=False,
+        use_age_labels=False,
+        do_mvc=True,
+        do_cls=False,
+        explicit_zero_prob=True,
+        gene_embedding_modalities=("esm2", "dnaseq"),
+    )
+    model = module.BERTForPreTraining(config)
+
+    esm = np.zeros((seq_len, 1280), dtype=np.float32)
+    dna = np.zeros((seq_len, 2560), dtype=np.float32)
+    model.set_static_gene_inputs(
+        np.arange(1, seq_len + 1),
+        esm,
+        None,
+        dna,
+        cls_id=0,
+        append_cls=True,
+    )
+
+    values = torch.ones((batch_size, seq_len + 1), dtype=torch.float32)
+    values[:, 1] = -1.0
+    target = torch.zeros_like(values)
+    mask = values.eq(-1).float()
+    outputs = model(values=values, MVC=True)
+
+    zero_prob = outputs["model_zero_prob"].clamp(1e-6, 1 - 1e-6)
+    mvc_zero_prob = outputs["mvc_zero_probs"].clamp(1e-6, 1 - 1e-6)
+    loss = ((outputs["model_output"] - target).pow(2) * mask).sum()
+    loss = loss - (zero_prob.log() * mask).sum()
+    loss = loss + ((outputs["mvc_output"] - target).pow(2) * mask).sum()
+    loss = loss - (mvc_zero_prob.log() * mask).sum()
+    loss.backward()
+
+    parameter_names = dict(model.named_parameters())
+    unused = [
+        name
+        for name, parameter in model.named_parameters()
+        if parameter.requires_grad and parameter.grad is None
+    ]
+    assert "bert.enhanced_fusion.norm_desc.weight" not in parameter_names
+    assert "bert.enhanced_fusion.norm_desc.bias" not in parameter_names
+    assert unused == []

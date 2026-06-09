@@ -531,9 +531,9 @@ class EnhancedFusion(nn.Module):
     def __init__(self, output_dim: int = 640, modalities=DEFAULT_GENE_EMBEDDING_MODALITIES):
         super().__init__()
         self.modalities = normalize_gene_embedding_modalities(modalities)
-        self.norm_esm = nn.LayerNorm(1280)
-        self.norm_desc = nn.LayerNorm(1280)
-        self.norm_dna = nn.LayerNorm(2560)
+        self.norm_esm = nn.LayerNorm(1280) if "esm2" in self.modalities else None
+        self.norm_desc = nn.LayerNorm(1280) if "gene_desc" in self.modalities else None
+        self.norm_dna = nn.LayerNorm(2560) if "dnaseq" in self.modalities else None
         input_dim = sum(GENE_EMBEDDING_DIMS[modality] for modality in self.modalities)
         self.linear = nn.Linear(input_dim,
                                 output_dim)
