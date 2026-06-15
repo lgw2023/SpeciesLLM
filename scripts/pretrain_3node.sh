@@ -571,6 +571,34 @@ sync_code_and_data_to_workers() {
   done
 }
 
+sync_resume_checkpoint_file_to_workers() {
+  local label="$1"
+  local source_path="$2"
+  [[ -n "$source_path" ]] || return 0
+
+  local resolved_path target_dir host
+  resolved_path="$(resolve_workdir_path "$source_path")"
+  [[ -f "$resolved_path" ]] || die "Missing ${label} on master: ${resolved_path}"
+  target_dir="$(dirname "$resolved_path")"
+
+  split_hosts
+  for host in "${HOSTS_ARR[@]}"; do
+    if [[ "$host" == "$MASTER_ADDR" ]]; then
+      echo "[SYNC] skip master host ${host}; ${label} is already local"
+      continue
+    fi
+
+    echo "[SYNC] ${label} -> ${host}:${resolved_path}"
+    ssh_run "$host" "mkdir -p $(shell_quote "$target_dir")"
+    rsync_to_host "$resolved_path" "$host" "$resolved_path" -aH
+  done
+}
+
+sync_resume_checkpoints_to_workers() {
+  sync_resume_checkpoint_file_to_workers INIT_MODEL_PATH "$INIT_MODEL_PATH"
+  sync_resume_checkpoint_file_to_workers INIT_OPTIMIZER_PATH "$INIT_OPTIMIZER_PATH"
+}
+
 check_remote_paths() {
   split_hosts
 
@@ -706,6 +734,7 @@ bash scripts/pretrain_pipeline.sh "$PREP_ACTION"
 
 local_mkdirs
 sync_code_and_data_to_workers
+sync_resume_checkpoints_to_workers
 check_remote_paths
 seed_resume_outputs
 
