@@ -13,6 +13,7 @@ import datetime
 import warnings
 import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
 import scanpy as sc
 try:
     import moxing as mox
@@ -773,6 +774,230 @@ def read_parquet_delayed(fp):
     return dask.dataframe.read_parquet(fp, engine="pyarrow", memory_map=True)
 
 
+def summarize_file_names(file_paths, limit=8):
+    names = [os.path.basename(fp) for fp in file_paths]
+    if len(names) <= limit:
+        return names
+    head_count = max(1, limit // 2)
+    tail_count = max(1, limit - head_count)
+    omitted = len(names) - head_count - tail_count
+    return names[:head_count] + [f"...({omitted} omitted)..."] + names[-tail_count:]
+
+
+def file_paths_for_indices(train_data_filelist, file_indices):
+    if not train_data_filelist:
+        raise FileNotFoundError(f"No parquet files found in {train_data_filelist}")
+    file_paths = deepcopy(train_data_filelist)
+    return [file_paths[i] for i in file_indices]
+
+
+def parquet_num_rows(file_path):
+    return int(pq.read_metadata(file_path).num_rows)
+
+
+def parquet_row_counts(file_paths):
+    return [parquet_num_rows(fp) for fp in file_paths]
+
+
+def load_parquet_file_paths(file_paths, rank, NODE_RANK, logger=None, chunk_label=None):
+    if not file_paths:
+        raise ValueError("load_parquet_file_paths requires at least one parquet file")
+    label = f" {chunk_label}" if chunk_label else ""
+    log_or_print(
+        logger,
+        "info",
+        f"[Node {NODE_RANK} Rank {rank}]{label} will read {len(file_paths)} files: "
+        f"{summarize_file_names(file_paths)}",
+    )
+    delayed_reads = [read_parquet(fp) for fp in file_paths]
+    ddf = dd.from_delayed(delayed_reads)
+    pdf = ddf.compute()
+    log_or_print(logger, "info", f"[Node {NODE_RANK} Rank {rank}]{label} total rows read: {len(pdf)}")
+    return pdf
+
+
+def make_parquet_data_loader(data_pt, args, collate_fn, rank, logger=None, chunk_label=None):
+    nw = max(0, int(args.num_workers))
+    dl_kw = dict(
+        dataset=ParquetDataset(data_pt),
+        batch_size=args.batch_size,
+        collate_fn=collate_fn,
+        shuffle=False,
+        drop_last=False,
+        num_workers=nw,
+        pin_memory=args.pin_memory,
+    )
+    if nw > 0:
+        dl_kw["prefetch_factor"] = max(1, int(args.prefetch_factor))
+        dl_kw["persistent_workers"] = bool(args.persistent_workers)
+    data_loader = DataLoader(**dl_kw)
+    log_or_print(
+        logger,
+        "info",
+        "DataLoader rank=%s%s rows=%s num_batches=%s num_workers=%s prefetch_factor=%s "
+        "persistent_workers=%s pin_memory=%s"
+        % (
+            rank,
+            f" {chunk_label}" if chunk_label else "",
+            len(data_pt),
+            len(data_loader),
+            nw,
+            dl_kw.get("prefetch_factor", "n/a"),
+            dl_kw.get("persistent_workers", False),
+            dl_kw["pin_memory"],
+        ),
+    )
+    return data_loader
+
+
+def iter_parquet_data_loader_batches(data_loader, resume_batch_offset, max_batch_index, data_load_s=0.0):
+    absolute_batch_index = resume_batch_offset
+    first_batch = True
+    for batch_data in data_loader:
+        if absolute_batch_index >= max_batch_index:
+            break
+        yield absolute_batch_index, batch_data, data_load_s if first_batch else 0.0
+        first_batch = False
+        absolute_batch_index += 1
+
+
+def iter_chunked_parquet_batches(
+    args,
+    file_paths,
+    rows_by_file,
+    rank,
+    NODE_RANK,
+    collate_fn,
+    logger,
+    resume_batch_offset,
+    max_batch_index,
+):
+    chunk_files = max(1, int(args.parquet_chunk_files))
+    train_row_start = resume_batch_offset * args.batch_size
+    train_row_stop = max_batch_index * args.batch_size
+    absolute_batch_index = resume_batch_offset
+    rows_before_chunk = 0
+    local_train_row_stop = min(sum(rows_by_file), train_row_stop)
+    carryover = None
+    pending_data_load_s = 0.0
+    total_chunks = int(math.ceil(len(file_paths) / chunk_files)) if file_paths else 0
+
+    try:
+        for chunk_index, file_start in enumerate(range(0, len(file_paths), chunk_files), start=1):
+            chunk_paths = file_paths[file_start:file_start + chunk_files]
+            chunk_rows = int(sum(rows_by_file[file_start:file_start + chunk_files]))
+            chunk_row_start = rows_before_chunk
+            chunk_row_end = rows_before_chunk + chunk_rows
+            rows_before_chunk = chunk_row_end
+
+            effective_start = max(chunk_row_start, train_row_start)
+            effective_end = min(chunk_row_end, train_row_stop)
+            chunk_label = f"chunk={chunk_index}/{total_chunks}"
+
+            if effective_start >= effective_end:
+                logger.info(
+                    "parquet_chunk_skip %s rows=%s row_range=[%s,%s) train_row_range=[%s,%s)",
+                    chunk_label,
+                    chunk_rows,
+                    chunk_row_start,
+                    chunk_row_end,
+                    train_row_start,
+                    train_row_stop,
+                )
+                continue
+
+            t_load = time.time()
+            data_pt = load_parquet_file_paths(chunk_paths, rank, NODE_RANK, logger=logger, chunk_label=chunk_label)
+            if len(data_pt) != chunk_rows:
+                logger.warning(
+                    "parquet_chunk_row_count_mismatch %s metadata_rows=%s loaded_rows=%s",
+                    chunk_label,
+                    chunk_rows,
+                    len(data_pt),
+                )
+
+            drop_head = int(effective_start - chunk_row_start)
+            keep_rows = int(effective_end - effective_start)
+            if drop_head or keep_rows < len(data_pt):
+                sliced = data_pt.iloc[drop_head:drop_head + keep_rows].reset_index(drop=True)
+                del data_pt
+                data_pt = sliced
+                gc.collect()
+
+            if carryover is not None and len(carryover) > 0:
+                combined = pd.concat([carryover, data_pt], ignore_index=True)
+                del carryover
+                del data_pt
+                carryover = None
+                data_pt = combined
+                gc.collect()
+
+            data_load_s = time.time() - t_load
+            pending_data_load_s += data_load_s
+            is_last_relevant_chunk = effective_end >= local_train_row_stop
+            if is_last_relevant_chunk:
+                data_for_loader = data_pt
+                data_pt = None
+            else:
+                full_batch_rows = (len(data_pt) // args.batch_size) * args.batch_size
+                if full_batch_rows == 0:
+                    carryover = data_pt
+                    data_pt = None
+                    logger.info(
+                        "parquet_chunk_carryover_all %s rows=%s pending_data_load_s=%.4f",
+                        chunk_label,
+                        len(carryover),
+                        pending_data_load_s,
+                    )
+                    continue
+                data_for_loader = data_pt.iloc[:full_batch_rows].reset_index(drop=True)
+                carryover = data_pt.iloc[full_batch_rows:].reset_index(drop=True)
+                del data_pt
+                data_pt = None
+                gc.collect()
+                logger.info(
+                    "parquet_chunk_carryover_tail %s train_rows=%s carryover_rows=%s",
+                    chunk_label,
+                    len(data_for_loader),
+                    len(carryover),
+                )
+
+            if len(data_for_loader) == 0:
+                del data_for_loader
+                gc.collect()
+                continue
+
+            data_loader = make_parquet_data_loader(
+                data_for_loader,
+                args,
+                collate_fn,
+                rank,
+                logger=logger,
+                chunk_label=chunk_label,
+            )
+            try:
+                first_batch = True
+                for batch_data in data_loader:
+                    if absolute_batch_index >= max_batch_index:
+                        break
+                    yield absolute_batch_index, batch_data, pending_data_load_s if first_batch else 0.0
+                    if first_batch:
+                        pending_data_load_s = 0.0
+                    first_batch = False
+                    absolute_batch_index += 1
+            finally:
+                del data_loader
+                del data_for_loader
+                gc.collect()
+
+            if absolute_batch_index >= max_batch_index:
+                break
+    finally:
+        if carryover is not None:
+            del carryover
+            gc.collect()
+
+
 def load_data_for_rank(folder_path, rank, world_size, logger=None):
     file_paths = sorted(glob.glob(f"{folder_path}/*.parquet"))
     if not file_paths:
@@ -1008,23 +1233,48 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
     last_completed_loss = 0.0
     last_saved_step = -1
     for epoch in range(resume_start_epoch, args.epoch):
-
-        # Uncomment this if use DistributedSampler
-        t_temp_2_data = time.time()
+        data_pt = None
+        data_loader = None
+        batch_iter = None
+        use_chunked_parquet = int(args.parquet_chunk_files) > 0
+        resume_batch_offset = resume_skip_batches if epoch == resume_start_epoch else 0
         if ddp:
             train_sampler.set_epoch(epoch)
-            data_pt, file_paths = load_data_for_rank_with_DistributedFileSampler(
-                train_data_filelist,
-                train_sampler,
-                rank,
+            file_paths = file_paths_for_indices(train_data_filelist, train_sampler)
+            logger.info(
+                "Node: %s, Rank: %s, Epoch: %s, file_count=%s, files=%s",
                 NODE_RANK,
-                logger=logger)
-            logger.info(f"Node: {NODE_RANK}, Rank: {rank}, Epoch: {epoch}, Data: {[x.split('/')[-1] for x in file_paths]}")
-            full_num_batches = math.ceil(len(data_pt) / args.batch_size)
+                rank,
+                epoch,
+                len(file_paths),
+                summarize_file_names(file_paths),
+            )
+            if use_chunked_parquet:
+                t_metadata = time.time()
+                rows_by_file = parquet_row_counts(file_paths)
+                t_metadata = time.time() - t_metadata
+                full_num_batches = math.ceil(sum(rows_by_file) / args.batch_size)
+                logger.info(
+                    "parquet_chunking=on chunk_files=%s total_rows=%s full_num_batches=%s metadata_s=%.4f",
+                    args.parquet_chunk_files,
+                    sum(rows_by_file),
+                    full_num_batches,
+                    t_metadata,
+                )
+                t_temp_2_sum_data += t_metadata
+            else:
+                t_temp_2_data = time.time()
+                data_pt = load_parquet_file_paths(
+                    file_paths,
+                    rank,
+                    NODE_RANK,
+                    logger=logger,
+                    chunk_label="full_epoch",
+                )
+                full_num_batches = math.ceil(len(data_pt) / args.batch_size)
             step_tensor = torch.tensor([full_num_batches], dtype=torch.long, device=device)
             dist.all_reduce(step_tensor, op=dist.ReduceOp.MIN)
             max_batch_index = int(step_tensor.item())
-            resume_batch_offset = resume_skip_batches if epoch == resume_start_epoch else 0
             if resume_batch_offset >= max_batch_index:
                 logger.info(
                     "resume_skip_epoch_completed epoch=%s resume_skip_batches=%s max_batch_index=%s",
@@ -1032,50 +1282,63 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
                     resume_batch_offset,
                     max_batch_index,
                 )
+                if data_pt is not None:
+                    del data_pt
+                    gc.collect()
                 continue
-            if resume_batch_offset:
-                rows_before_skip = len(data_pt)
-                skip_rows = min(resume_batch_offset * args.batch_size, rows_before_skip)
-                data_pt = data_pt.iloc[skip_rows:].reset_index(drop=True)
-                logger.info(
-                    "resume_skip_batches epoch=%s skipped_batches=%s skipped_rows=%s rows_before=%s rows_after=%s",
-                    epoch + 1,
+            if use_chunked_parquet:
+                batch_iter = iter_chunked_parquet_batches(
+                    args,
+                    file_paths,
+                    rows_by_file,
+                    rank,
+                    NODE_RANK,
+                    collate_fn,
+                    logger,
                     resume_batch_offset,
-                    skip_rows,
-                    rows_before_skip,
-                    len(data_pt),
+                    max_batch_index,
                 )
-            nw = max(0, int(args.num_workers))
-            dl_kw = dict(
-                dataset=ParquetDataset(data_pt),
-                batch_size=args.batch_size,
-                collate_fn=collate_fn,
-                shuffle=False,
-                drop_last=False,
-                num_workers=nw,
-                pin_memory=args.pin_memory,
-            )
-            if nw > 0:
-                dl_kw["prefetch_factor"] = max(1, int(args.prefetch_factor))
-                dl_kw["persistent_workers"] = bool(args.persistent_workers)
-            logger.info(
-                "DataLoader rank=%s num_workers=%s prefetch_factor=%s persistent_workers=%s pin_memory=%s",
-                rank,
-                nw,
-                dl_kw.get("prefetch_factor", "n/a"),
-                dl_kw.get("persistent_workers", False),
-                dl_kw["pin_memory"],
-            )
-            data_loader = DataLoader(**dl_kw)
-        t_temp_2_data = time.time() - t_temp_2_data
-        t_temp_2_sum_data += t_temp_2_data
+            else:
+                if resume_batch_offset:
+                    rows_before_skip = len(data_pt)
+                    skip_rows = min(resume_batch_offset * args.batch_size, rows_before_skip)
+                    sliced = data_pt.iloc[skip_rows:].reset_index(drop=True)
+                    del data_pt
+                    data_pt = sliced
+                    gc.collect()
+                    logger.info(
+                        "resume_skip_batches epoch=%s skipped_batches=%s skipped_rows=%s rows_before=%s rows_after=%s",
+                        epoch + 1,
+                        resume_batch_offset,
+                        skip_rows,
+                        rows_before_skip,
+                        len(data_pt),
+                    )
+                data_loader = make_parquet_data_loader(
+                    data_pt,
+                    args,
+                    collate_fn,
+                    rank,
+                    logger=logger,
+                    chunk_label="full_epoch",
+                )
+                t_temp_2_data = time.time() - t_temp_2_data
+                batch_iter = iter_parquet_data_loader_batches(
+                    data_loader,
+                    resume_batch_offset,
+                    max_batch_index,
+                    data_load_s=t_temp_2_data,
+                )
+        t_temp_2_data = 0.0
+        if batch_iter is None:
+            raise RuntimeError("No training batch iterator was created; run with torchrun/DDP enabled.")
 
         model.train()
         total_loss = 0.0
         total_loss_tensor = torch.zeros((), dtype=torch.float32, device=device)
         last_step_loss_tensor = torch.zeros((), dtype=torch.float32, device=device)
         processed_batches = 0
-        num_batches = len(data_loader) # 已经处理过 // args.batch_size
+        num_batches = max(0, max_batch_index - resume_batch_offset)
         logger.info(
             "Node: %s Rank: %s num_batches_remaining=%s max_batch_index=%s resume_batch_offset=%s",
             NODE_RANK,
@@ -1104,8 +1367,9 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
             warmup_iters,
         )
 
-        for batch_index, batch_data in enumerate(data_loader):
-            absolute_batch_index = resume_batch_offset + batch_index
+        for absolute_batch_index, batch_data, t_temp_2_data in batch_iter:
+            if t_temp_2_data:
+                t_temp_2_sum_data += t_temp_2_data
             absolute_batch_number = absolute_batch_index + 1
             t_temp_1_lr = 0.0
             t_temp_7_loss_other = 0.0
@@ -1576,6 +1840,15 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
             if absolute_batch_number >= max_batch_index:
                 break
 
+        batch_iter_close = getattr(batch_iter, "close", None)
+        if batch_iter_close is not None:
+            batch_iter_close()
+        if data_loader is not None:
+            del data_loader
+        if data_pt is not None:
+            del data_pt
+        gc.collect()
+
         total_loss = (total_loss_tensor / max(1, processed_batches)).item()
         last_step_loss = last_step_loss_tensor.item()
         if processed_batches > 0:
@@ -1621,11 +1894,6 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
                         f"10_sync {t_temp_10_sum_sync:.4f}")
         logger.info(time_checker)
         total_loss = 0
-        # 释放本 epoch 的 in-RAM 分片与 DataLoader：否则下个 epoch 的 ddf.compute()
-        # 会在旧 DataFrame 仍存活时构建新分片，主机内存瞬时翻倍 → 边界 OOM
-        del data_loader
-        del data_pt
-        gc.collect()
         if args.max_train_steps > 0 and iter_num >= args.max_train_steps:
             break
 
@@ -1800,6 +2068,7 @@ def main(args):
     logger.info(
         "experiment_controls amp_dtype=%s static_gene_dtype=%s gene_embedding_modalities=%s "
         "train_mvc=%s gradient_checkpointing=%s "
+        "parquet_chunk_files=%s "
         "memory_log_interval=%s tensor_shape_log_interval=%s max_train_steps=%s skip_final_save=%s "
         "ddp_find_unused_parameters=%s append_output_logs=%s",
         dtype,
@@ -1807,6 +2076,7 @@ def main(args):
         ",".join(args.gene_embedding_modalities),
         args.train_mvc,
         args.gradient_checkpointing,
+        args.parquet_chunk_files,
         args.memory_log_interval,
         args.tensor_shape_log_interval,
         args.max_train_steps,
@@ -2066,6 +2336,14 @@ def argumentparser():
         type=str2bool,
         default=True,
         help="DataLoader pin_memory (pinned CPU pages for faster H2D-style copies). Default True.",
+    )
+    parser.add_argument(
+        '--parquet_chunk_files',
+        type=int,
+        default=64,
+        help="Load this many parquet files per rank at a time. "
+             "This caps host RAM by replacing the old full-epoch pandas load with file chunks. "
+             "Set 0 to restore the old full-epoch load.",
     )
     parser.add_argument('--log_level',
                         type=str,

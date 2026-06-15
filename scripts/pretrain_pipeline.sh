@@ -147,6 +147,7 @@ NUM_WORKERS="${NUM_WORKERS:-4}"
 PREFETCH_FACTOR="${PREFETCH_FACTOR:-1}"
 PERSISTENT_WORKERS="${PERSISTENT_WORKERS:-false}"
 PIN_MEMORY="${PIN_MEMORY:-true}"
+PARQUET_CHUNK_FILES="${PARQUET_CHUNK_FILES:-64}"
 
 # 模型结构、label 开关、label 数量和 SEQ_LEN 不在 shell 中写默认值；
 # load_model_config_from_json 会从 MODEL_CONFIG_JSON 严格加载，缺字段立即退出。
@@ -476,6 +477,7 @@ train_args() {
     "--prefetch_factor=${PREFETCH_FACTOR}"
     "--persistent_workers=${PERSISTENT_WORKERS}"
     "--pin_memory=${PIN_MEMORY}"
+    "--parquet_chunk_files=${PARQUET_CHUNK_FILES}"
   )
   if [[ -n "$S3_REMOTE_DIR_PATH" ]]; then
     TRAIN_ARGS+=("--s3_remote_dir_path=${S3_REMOTE_DIR_PATH}")
@@ -618,6 +620,7 @@ write_launcher_script() {
     print_export PREFETCH_FACTOR "$PREFETCH_FACTOR"
     print_export PERSISTENT_WORKERS "$PERSISTENT_WORKERS"
     print_export PIN_MEMORY "$PIN_MEMORY"
+    print_export PARQUET_CHUNK_FILES "$PARQUET_CHUNK_FILES"
     print_export ASCEND_RT_VISIBLE_DEVICES_VALUE "$ASCEND_RT_VISIBLE_DEVICES_VALUE"
     print_export HCCL_CONNECT_TIMEOUT "$HCCL_CONNECT_TIMEOUT"
     print_export HCCL_EXEC_TIMEOUT "$HCCL_EXEC_TIMEOUT"

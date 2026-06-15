@@ -188,6 +188,7 @@ num_workers="${num_workers:-${NUM_WORKERS:-4}}"
 prefetch_factor="${prefetch_factor:-${PREFETCH_FACTOR:-1}}"
 persistent_workers="${persistent_workers:-${PERSISTENT_WORKERS:-false}}"
 pin_memory="${pin_memory:-${PIN_MEMORY:-true}}"
+parquet_chunk_files="${parquet_chunk_files:-${PARQUET_CHUNK_FILES:-64}}"
 
 WORKER_MODE=0
 if [[ "${1:-}" == "--worker" ]]; then
@@ -225,7 +226,8 @@ Important environment variables:
   DATA_ROOT, EMB_ROOT, DATA_PATH/data_path, EMB_PATH/emb_path
   MODEL_CONFIG_JSON/config_json, BATCH_SIZE/batch_size
   NUM_WORKERS/num_workers, PREFETCH_FACTOR/prefetch_factor,
-  PERSISTENT_WORKERS/persistent_workers, PIN_MEMORY/pin_memory
+  PERSISTENT_WORKERS/persistent_workers, PIN_MEMORY/pin_memory,
+  PARQUET_CHUNK_FILES/parquet_chunk_files
 USAGE
 }
 
@@ -480,6 +482,7 @@ build_train_args() {
     "--prefetch_factor=${prefetch_factor}"
     "--persistent_workers=${persistent_workers}"
     "--pin_memory=${pin_memory}"
+    "--parquet_chunk_files=${parquet_chunk_files}"
   )
 
   if [[ -n "$s3_remote_dir_path" ]]; then
@@ -619,7 +622,7 @@ remote_env_assignments() {
     append_output_logs compile
     backend device device_type s3_remote_dir_path
     log_interval profile_interval nan_check_interval metrics_flush_interval log_level log_all_ranks
-    num_workers prefetch_factor persistent_workers pin_memory
+    num_workers prefetch_factor persistent_workers pin_memory parquet_chunk_files
   )
 
   printf "NODE_RANK=%s " "$(shell_quote "$rank")"
