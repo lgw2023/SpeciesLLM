@@ -95,6 +95,24 @@ RESULT_FIELDNAMES = [
     "zero_prob_on_nonzero_target_mean",
 ]
 
+TRAJECTORY_METRICS = [
+    "loss_gep",
+    "loss_zero_prob",
+    "loss_gepc",
+    "gep_pred_mean",
+    "gep_pred_std",
+    "gep_pred_p95",
+    "gep_pred_p99",
+    "signed_err_mean",
+    "abs_err_p95",
+    "abs_err_p99",
+    "frac_abs_err_gt_20",
+    "zero_prob_on_zero_target_mean",
+    "zero_prob_on_nonzero_target_mean",
+]
+
+TRAJECTORY_FIELDNAMES = ["ckpt", *TRAJECTORY_METRICS]
+
 
 class EvalAccumulator:
     def __init__(self, collect_distributions: bool) -> None:
@@ -315,6 +333,25 @@ def setup_logger() -> logging.Logger:
 
 def clean_csv_row(row: dict[str, object]) -> dict[str, object]:
     return {key: ("" if value is None else value) for key, value in row.items()}
+
+
+def mean_metric(rows: list[dict[str, object]], metric: str) -> float | None:
+    values = []
+    for row in rows:
+        value = row.get(metric)
+        if value is None:
+            continue
+        value = float(value)
+        if not math.isnan(value):
+            values.append(value)
+    return sum(values) / len(values) if values else None
+
+
+def build_trajectory_row(checkpoint_name: str, checkpoint_rows: list[dict[str, object]]) -> dict[str, object]:
+    row: dict[str, object] = {"ckpt": checkpoint_name}
+    for metric in TRAJECTORY_METRICS:
+        row[metric] = mean_metric(checkpoint_rows, metric)
+    return row
 
 
 def build_model(args: argparse.Namespace, device: str, logger: logging.Logger):
@@ -602,9 +639,12 @@ def main() -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
     csv_path = output_dir / f"{args.output_prefix}.csv"
     jsonl_path = output_dir / f"{args.output_prefix}.jsonl"
+    trajectory_csv_path = output_dir / f"{args.output_prefix}_trajectory.csv"
+    trajectory_jsonl_path = output_dir / f"{args.output_prefix}_trajectory.jsonl"
 
     logger.info("device=%s checkpoints=%s file_sets=%s", device, len(checkpoints), len(file_sets))
     logger.info("csv=%s jsonl=%s", csv_path, jsonl_path)
+    logger.info("trajectory_csv=%s trajectory_jsonl=%s", trajectory_csv_path, trajectory_jsonl_path)
 
     model, config, collate_fn, dtype, ptdtype = build_model(args, device, logger)
     ctx = nullcontext() if args.device_type == "cpu" or dtype == "float32" else torch.autocast(
@@ -614,15 +654,24 @@ def main() -> int:
     regression_loss = regression_loss_fn(args)
 
     rows = []
-    with csv_path.open("w", newline="", encoding="utf-8") as csv_file, jsonl_path.open("w", encoding="utf-8") as jsonl_file:
+    trajectory_rows = []
+    with (
+        csv_path.open("w", newline="", encoding="utf-8") as csv_file,
+        jsonl_path.open("w", encoding="utf-8") as jsonl_file,
+        trajectory_csv_path.open("w", newline="", encoding="utf-8") as trajectory_csv_file,
+        trajectory_jsonl_path.open("w", encoding="utf-8") as trajectory_jsonl_file,
+    ):
         writer = csv.DictWriter(csv_file, fieldnames=RESULT_FIELDNAMES)
         writer.writeheader()
+        trajectory_writer = csv.DictWriter(trajectory_csv_file, fieldnames=TRAJECTORY_FIELDNAMES)
+        trajectory_writer.writeheader()
 
         for checkpoint_name, checkpoint_path in checkpoints:
             checkpoint_path = str(Path(checkpoint_path).expanduser())
             logger.info("loading_checkpoint name=%s path=%s", checkpoint_name, checkpoint_path)
             load_model_checkpoint(model, checkpoint_path, device, logger, ddp=False, rank=0)
             model.eval()
+            checkpoint_rows = []
 
             for file_set_index, (file_set_name, file_paths) in enumerate(file_sets):
                 seed = args.seed + file_set_index
@@ -657,6 +706,7 @@ def main() -> int:
                     **accum.to_row(),
                 }
                 rows.append(row)
+                checkpoint_rows.append(row)
                 writer.writerow(clean_csv_row({field: row.get(field) for field in RESULT_FIELDNAMES}))
                 csv_file.flush()
                 jsonl_file.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
@@ -673,13 +723,29 @@ def main() -> int:
                     row.get("frac_abs_err_gt_5"),
                 )
 
-    print("\ncheckpoint,file_set,loss_gep,loss_zero_prob,loss_gepc,abs_err_p95,frac_abs_err_gt_5")
-    for row in rows:
-        print(
-            f"{row['checkpoint']},{row['file_set']},{row.get('loss_gep')},"
-            f"{row.get('loss_zero_prob')},{row.get('loss_gepc')},"
-            f"{row.get('abs_err_p95')},{row.get('frac_abs_err_gt_5')}"
-        )
+            trajectory_row = build_trajectory_row(checkpoint_name, checkpoint_rows)
+            trajectory_rows.append(trajectory_row)
+            trajectory_writer.writerow(
+                clean_csv_row({field: trajectory_row.get(field) for field in TRAJECTORY_FIELDNAMES})
+            )
+            trajectory_csv_file.flush()
+            trajectory_jsonl_file.write(json.dumps(trajectory_row, ensure_ascii=False, sort_keys=True) + "\n")
+            trajectory_jsonl_file.flush()
+            logger.info(
+                "TRAJECTORY checkpoint=%s loss_gep=%s loss_zero_prob=%s loss_gepc=%s "
+                "gep_pred_std=%s gep_pred_p99=%s frac_abs_err_gt_20=%s",
+                checkpoint_name,
+                trajectory_row.get("loss_gep"),
+                trajectory_row.get("loss_zero_prob"),
+                trajectory_row.get("loss_gepc"),
+                trajectory_row.get("gep_pred_std"),
+                trajectory_row.get("gep_pred_p99"),
+                trajectory_row.get("frac_abs_err_gt_20"),
+            )
+
+    print("\n" + ",".join(TRAJECTORY_FIELDNAMES))
+    for row in trajectory_rows:
+        print(",".join("" if row.get(field) is None else str(row.get(field)) for field in TRAJECTORY_FIELDNAMES))
     return 0
 
 
