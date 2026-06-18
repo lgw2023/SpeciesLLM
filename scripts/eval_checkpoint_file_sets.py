@@ -3,8 +3,10 @@
 
 This is intentionally separate from the training loop: it loads one model
 checkpoint at a time, evaluates named parquet file sets with fixed MLM masks,
-and writes aggregate loss/residual summaries. It does not load optimizer state
-or update model parameters.
+and writes aggregate loss/residual, activation-variance, and parameter-norm
+summaries. Activation ``feature_std`` fields measure variation across evaluated
+samples for each feature, averaged over features. The probe does not load
+optimizer state or update model parameters.
 """
 
 from __future__ import annotations
@@ -17,6 +19,7 @@ import logging
 import math
 import os
 import random
+import re
 import sys
 import time
 from collections import defaultdict
@@ -93,6 +96,42 @@ RESULT_FIELDNAMES = [
     "zero_prob_p99",
     "zero_prob_on_zero_target_mean",
     "zero_prob_on_nonzero_target_mean",
+    "masked_sequence_output_feature_std",
+    "masked_decoder_input_feature_std",
+    "cell_emb_feature_std",
+    "gep_head_hidden_feature_std",
+    "zero_head_hidden_feature_std",
+    "zero_logits_std",
+    "gep_head_weight_norm",
+    "gep_head_bias_mean",
+    "gep_head_bias_std",
+    "zero_head_weight_norm",
+    "zero_head_bias_mean",
+    "zero_head_bias_std",
+    "shared_projection_norm",
+    "last_shared_encoder_norm",
+    "last_shared_encoder_layer",
+]
+
+ACTIVATION_METRICS = [
+    "masked_sequence_output_feature_std",
+    "masked_decoder_input_feature_std",
+    "cell_emb_feature_std",
+    "gep_head_hidden_feature_std",
+    "zero_head_hidden_feature_std",
+    "zero_logits_std",
+]
+
+PARAMETER_METRICS = [
+    "gep_head_weight_norm",
+    "gep_head_bias_mean",
+    "gep_head_bias_std",
+    "zero_head_weight_norm",
+    "zero_head_bias_mean",
+    "zero_head_bias_std",
+    "shared_projection_norm",
+    "last_shared_encoder_norm",
+    "last_shared_encoder_layer",
 ]
 
 TRAJECTORY_METRICS = [
@@ -109,14 +148,152 @@ TRAJECTORY_METRICS = [
     "frac_abs_err_gt_20",
     "zero_prob_on_zero_target_mean",
     "zero_prob_on_nonzero_target_mean",
+    *ACTIVATION_METRICS,
+    *PARAMETER_METRICS,
 ]
 
 TRAJECTORY_FIELDNAMES = ["ckpt", *TRAJECTORY_METRICS]
 
 
+class FeatureMoments:
+    """Track variability across samples for every feature without retaining activations."""
+
+    def __init__(self) -> None:
+        self.count = 0
+        self.sum: torch.Tensor | None = None
+        self.sum_sq: torch.Tensor | None = None
+
+    def update(self, tensor: torch.Tensor) -> None:
+        if tensor.numel() == 0:
+            return
+        values = tensor.detach().float()
+        if values.ndim == 0:
+            values = values.reshape(1, 1)
+        elif values.ndim == 1:
+            values = values.reshape(-1, 1)
+        else:
+            values = values.reshape(-1, values.shape[-1])
+
+        batch_sum = values.sum(dim=0).cpu().double()
+        batch_sum_sq = values.square().sum(dim=0).cpu().double()
+        if self.sum is None:
+            self.sum = batch_sum
+            self.sum_sq = batch_sum_sq
+        else:
+            if self.sum.shape != batch_sum.shape:
+                raise ValueError(f"Activation feature shape changed: {self.sum.shape} -> {batch_sum.shape}")
+            self.sum += batch_sum
+            self.sum_sq += batch_sum_sq
+        self.count += int(values.shape[0])
+
+    def feature_std_mean(self) -> float | None:
+        if self.count == 0 or self.sum is None or self.sum_sq is None:
+            return None
+        mean = self.sum / self.count
+        variance = (self.sum_sq / self.count - mean.square()).clamp_min(0.0)
+        return float(variance.sqrt().mean())
+
+
+class ForwardActivationProbe:
+    """Capture the tensors that distinguish the token decoder path from MVC."""
+
+    def __init__(self, model) -> None:
+        self.tensors: dict[str, torch.Tensor] = {}
+        self.handles = []
+        self.handles.append(model.bert.register_forward_hook(self._output_hook("sequence_output")))
+        self.handles.append(model.decoder.register_forward_pre_hook(self._input_hook("decoder_input")))
+        self.handles.append(model.decoder.fc[-2].register_forward_hook(self._output_hook("gep_head_hidden")))
+        if hasattr(model.decoder, "zero_logit"):
+            self.handles.append(
+                model.decoder.zero_logit[-2].register_forward_hook(self._output_hook("zero_head_hidden"))
+            )
+            self.handles.append(
+                model.decoder.zero_logit[-1].register_forward_hook(self._output_hook("zero_logits"))
+            )
+        if hasattr(model, "mvc_decoder"):
+            self.handles.append(model.mvc_decoder.register_forward_pre_hook(self._input_hook("cell_emb")))
+
+    @staticmethod
+    def _first_tensor(value) -> torch.Tensor | None:
+        if torch.is_tensor(value):
+            return value
+        if isinstance(value, (tuple, list)):
+            for item in value:
+                tensor = ForwardActivationProbe._first_tensor(item)
+                if tensor is not None:
+                    return tensor
+        return None
+
+    def _output_hook(self, name: str):
+        def hook(_module, _inputs, output) -> None:
+            tensor = self._first_tensor(output)
+            if tensor is not None:
+                self.tensors[name] = tensor
+
+        return hook
+
+    def _input_hook(self, name: str):
+        def hook(_module, inputs) -> None:
+            tensor = self._first_tensor(inputs)
+            if tensor is not None:
+                self.tensors[name] = tensor
+
+        return hook
+
+    def clear(self) -> None:
+        self.tensors.clear()
+
+    def validate(self, *, explicit_zero_prob: bool, run_mvc: bool) -> None:
+        expected = {"sequence_output", "decoder_input", "gep_head_hidden"}
+        if explicit_zero_prob:
+            expected.update({"zero_head_hidden", "zero_logits"})
+        if run_mvc:
+            expected.add("cell_emb")
+        missing = sorted(expected.difference(self.tensors))
+        if missing:
+            raise RuntimeError(f"Activation hooks did not capture expected tensors: {missing}")
+
+    def close(self) -> None:
+        for handle in self.handles:
+            handle.remove()
+        self.handles.clear()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, _exc_type, _exc_value, _traceback) -> None:
+        self.close()
+
+
+class ActivationAccumulator:
+    MASKED_TENSORS = {
+        "sequence_output": "masked_sequence_output_feature_std",
+        "decoder_input": "masked_decoder_input_feature_std",
+        "gep_head_hidden": "gep_head_hidden_feature_std",
+        "zero_head_hidden": "zero_head_hidden_feature_std",
+        "zero_logits": "zero_logits_std",
+    }
+
+    def __init__(self) -> None:
+        self.moments = {metric: FeatureMoments() for metric in ACTIVATION_METRICS}
+
+    def update(self, tensors: dict[str, torch.Tensor], mask_positions: torch.Tensor) -> None:
+        for tensor_name, metric_name in self.MASKED_TENSORS.items():
+            tensor = tensors.get(tensor_name)
+            if tensor is not None:
+                self.moments[metric_name].update(tensor[mask_positions])
+        cell_emb = tensors.get("cell_emb")
+        if cell_emb is not None:
+            self.moments["cell_emb_feature_std"].update(cell_emb)
+
+    def to_row(self) -> dict[str, float | None]:
+        return {name: moments.feature_std_mean() for name, moments in self.moments.items()}
+
+
 class EvalAccumulator:
-    def __init__(self, collect_distributions: bool) -> None:
+    def __init__(self, collect_distributions: bool, collect_activations: bool) -> None:
         self.collect_distributions = collect_distributions
+        self.activation_accumulator = ActivationAccumulator() if collect_activations else None
         self.loss_sums = defaultdict(float)
         self.mask_count = 0
         self.batch_count = 0
@@ -178,6 +355,14 @@ class EvalAccumulator:
             self.zero_prob_on_zero_sum += float(zero_prob[zero_target_mask].sum())
         if nonzero_target_mask.any():
             self.zero_prob_on_nonzero_sum += float(zero_prob[nonzero_target_mask].sum())
+
+    def update_activations(
+        self,
+        tensors: dict[str, torch.Tensor],
+        mask_positions: torch.Tensor,
+    ) -> None:
+        if self.activation_accumulator is not None:
+            self.activation_accumulator.update(tensors, mask_positions)
 
     def _cat(self, name: str) -> torch.Tensor | None:
         parts = self.values.get(name)
@@ -271,6 +456,10 @@ class EvalAccumulator:
         row["zero_prob_on_nonzero_target_mean"] = (
             self.zero_prob_on_nonzero_sum / self.nonzero_target_count if self.nonzero_target_count else None
         )
+        if self.activation_accumulator is None:
+            row.update({name: None for name in ACTIVATION_METRICS})
+        else:
+            row.update(self.activation_accumulator.to_row())
         return row
 
 
@@ -347,11 +536,102 @@ def mean_metric(rows: list[dict[str, object]], metric: str) -> float | None:
     return sum(values) / len(values) if values else None
 
 
-def build_trajectory_row(checkpoint_name: str, checkpoint_rows: list[dict[str, object]]) -> dict[str, object]:
+def build_trajectory_row(
+    checkpoint_name: str,
+    checkpoint_rows: list[dict[str, object]],
+    parameter_stats: dict[str, float | int | None],
+) -> dict[str, object]:
     row: dict[str, object] = {"ckpt": checkpoint_name}
     for metric in TRAJECTORY_METRICS:
-        row[metric] = mean_metric(checkpoint_rows, metric)
+        if metric in parameter_stats:
+            row[metric] = parameter_stats[metric]
+        else:
+            row[metric] = mean_metric(checkpoint_rows, metric)
     return row
+
+
+def select_named_parameters(model, predicate) -> list[tuple[str, torch.Tensor]]:
+    return [(name, parameter) for name, parameter in model.named_parameters() if predicate(name)]
+
+
+def parameter_l2_norm(items: list[tuple[str, torch.Tensor]]) -> float | None:
+    if not items:
+        return None
+    sum_sq = 0.0
+    for _name, parameter in items:
+        sum_sq += float(parameter.detach().float().square().sum().cpu())
+    return math.sqrt(sum_sq)
+
+
+def parameter_mean_std(items: list[tuple[str, torch.Tensor]]) -> tuple[float | None, float | None]:
+    if not items:
+        return None, None
+    count = 0
+    total = 0.0
+    total_sq = 0.0
+    for _name, parameter in items:
+        values = parameter.detach().float()
+        count += values.numel()
+        total += float(values.sum().cpu())
+        total_sq += float(values.square().sum().cpu())
+    mean = total / count
+    variance = max(0.0, total_sq / count - mean * mean)
+    return mean, math.sqrt(variance)
+
+
+def summarize_model_parameters(model, *, explicit_zero_prob: bool) -> dict[str, float | int | None]:
+    gep_weight = select_named_parameters(
+        model,
+        lambda name: name.startswith("decoder.fc.") and name.endswith(".weight"),
+    )
+    gep_bias = select_named_parameters(
+        model,
+        lambda name: name.startswith("decoder.fc.") and name.endswith(".bias"),
+    )
+    zero_weight = select_named_parameters(
+        model,
+        lambda name: name.startswith("decoder.zero_logit.") and name.endswith(".weight"),
+    )
+    zero_bias = select_named_parameters(
+        model,
+        lambda name: name.startswith("decoder.zero_logit.") and name.endswith(".bias"),
+    )
+    shared_projection = select_named_parameters(
+        model,
+        lambda name: name.startswith("bert.value_encoder.") or name.startswith("bert.enhanced_fusion."),
+    )
+
+    layer_ids = []
+    for name, _parameter in model.named_parameters():
+        match = re.match(r"^bert\.h\.(\d+)\.", name)
+        if match:
+            layer_ids.append(int(match.group(1)))
+    last_layer = max(layer_ids) if layer_ids else None
+    last_encoder = select_named_parameters(
+        model,
+        lambda name: last_layer is not None and name.startswith(f"bert.h.{last_layer}."),
+    )
+
+    gep_bias_mean, gep_bias_std = parameter_mean_std(gep_bias)
+    zero_bias_mean, zero_bias_std = parameter_mean_std(zero_bias)
+    stats = {
+        "gep_head_weight_norm": parameter_l2_norm(gep_weight),
+        "gep_head_bias_mean": gep_bias_mean,
+        "gep_head_bias_std": gep_bias_std,
+        "zero_head_weight_norm": parameter_l2_norm(zero_weight),
+        "zero_head_bias_mean": zero_bias_mean,
+        "zero_head_bias_std": zero_bias_std,
+        "shared_projection_norm": parameter_l2_norm(shared_projection),
+        "last_shared_encoder_norm": parameter_l2_norm(last_encoder),
+        "last_shared_encoder_layer": last_layer,
+    }
+    required = ["gep_head_weight_norm", "shared_projection_norm", "last_shared_encoder_norm"]
+    if explicit_zero_prob:
+        required.append("zero_head_weight_norm")
+    missing = [name for name in required if stats[name] is None]
+    if missing:
+        raise RuntimeError(f"Could not match expected checkpoint parameters: {missing}")
+    return stats
 
 
 def build_model(args: argparse.Namespace, device: str, logger: logging.Logger):
@@ -447,6 +727,7 @@ def evaluate_file_set(
     file_paths: list[str],
     device: str,
     logger: logging.Logger,
+    activation_probe: ForwardActivationProbe | None,
 ) -> EvalAccumulator:
     rows_by_file = parquet_row_counts(file_paths)
     max_batch_index = int(math.ceil(sum(rows_by_file) / args.batch_size))
@@ -473,13 +754,18 @@ def evaluate_file_set(
         max_batch_index=max_batch_index,
     )
 
-    accum = EvalAccumulator(collect_distributions=args.collect_distributions)
+    accum = EvalAccumulator(
+        collect_distributions=args.collect_distributions,
+        collect_activations=activation_probe is not None,
+    )
     model.eval()
     run_mvc = bool(args.train_mvc and config.do_mvc)
 
     with torch.no_grad():
         for batch_index, batch_data, _data_load_s in batch_iter:
             moved = move_batch_to_device(batch_data, config, device)
+            if activation_probe is not None:
+                activation_probe.clear()
             with ctx:
                 outputs = model(
                     values=moved["values"],
@@ -531,6 +817,12 @@ def evaluate_file_set(
                 outputs["model_output"][mask_positions],
                 outputs["model_zero_prob"][mask_positions] if config.explicit_zero_prob else None,
             )
+            if activation_probe is not None:
+                activation_probe.validate(
+                    explicit_zero_prob=bool(config.explicit_zero_prob),
+                    run_mvc=run_mvc,
+                )
+                accum.update_activations(activation_probe.tensors, mask_positions)
 
             if args.log_every_batches > 0 and accum.batch_count % args.log_every_batches == 0:
                 logger.info(
@@ -565,6 +857,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=1234)
     parser.add_argument("--log_every_batches", type=int, default=50)
     parser.add_argument("--collect_distributions", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--collect_activations", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--amp_dtype", choices=["auto", "float16", "bfloat16", "float32"], default="float32")
     parser.add_argument("--static_gene_dtype", choices=["float32", "float16", "bfloat16", "amp"], default="float32")
     parser.add_argument("--gep_loss", choices=["mse", "huber"], default="huber")
@@ -655,7 +948,9 @@ def main() -> int:
 
     rows = []
     trajectory_rows = []
+    activation_probe_context = ForwardActivationProbe(model) if args.collect_activations else nullcontext(None)
     with (
+        activation_probe_context as activation_probe,
         csv_path.open("w", newline="", encoding="utf-8") as csv_file,
         jsonl_path.open("w", encoding="utf-8") as jsonl_file,
         trajectory_csv_path.open("w", newline="", encoding="utf-8") as trajectory_csv_file,
@@ -671,6 +966,19 @@ def main() -> int:
             logger.info("loading_checkpoint name=%s path=%s", checkpoint_name, checkpoint_path)
             load_model_checkpoint(model, checkpoint_path, device, logger, ddp=False, rank=0)
             model.eval()
+            parameter_stats = summarize_model_parameters(
+                model,
+                explicit_zero_prob=bool(config.explicit_zero_prob),
+            )
+            logger.info(
+                "PARAMS checkpoint=%s gep_head_weight_norm=%s zero_head_weight_norm=%s "
+                "shared_projection_norm=%s last_shared_encoder_norm=%s",
+                checkpoint_name,
+                parameter_stats["gep_head_weight_norm"],
+                parameter_stats["zero_head_weight_norm"],
+                parameter_stats["shared_projection_norm"],
+                parameter_stats["last_shared_encoder_norm"],
+            )
             checkpoint_rows = []
 
             for file_set_index, (file_set_name, file_paths) in enumerate(file_sets):
@@ -694,6 +1002,7 @@ def main() -> int:
                     file_paths,
                     device,
                     logger,
+                    activation_probe,
                 )
                 elapsed = time.time() - start
                 row = {
@@ -704,6 +1013,7 @@ def main() -> int:
                     "num_files": len(file_paths),
                     "seconds": elapsed,
                     **accum.to_row(),
+                    **parameter_stats,
                 }
                 rows.append(row)
                 checkpoint_rows.append(row)
@@ -723,7 +1033,7 @@ def main() -> int:
                     row.get("frac_abs_err_gt_5"),
                 )
 
-            trajectory_row = build_trajectory_row(checkpoint_name, checkpoint_rows)
+            trajectory_row = build_trajectory_row(checkpoint_name, checkpoint_rows, parameter_stats)
             trajectory_rows.append(trajectory_row)
             trajectory_writer.writerow(
                 clean_csv_row({field: trajectory_row.get(field) for field in TRAJECTORY_FIELDNAMES})
@@ -733,14 +1043,17 @@ def main() -> int:
             trajectory_jsonl_file.flush()
             logger.info(
                 "TRAJECTORY checkpoint=%s loss_gep=%s loss_zero_prob=%s loss_gepc=%s "
-                "gep_pred_std=%s gep_pred_p99=%s frac_abs_err_gt_20=%s",
+                "gep_pred_std=%s sequence_output_std=%s decoder_input_std=%s "
+                "cell_emb_std=%s zero_logits_std=%s",
                 checkpoint_name,
                 trajectory_row.get("loss_gep"),
                 trajectory_row.get("loss_zero_prob"),
                 trajectory_row.get("loss_gepc"),
                 trajectory_row.get("gep_pred_std"),
-                trajectory_row.get("gep_pred_p99"),
-                trajectory_row.get("frac_abs_err_gt_20"),
+                trajectory_row.get("masked_sequence_output_feature_std"),
+                trajectory_row.get("masked_decoder_input_feature_std"),
+                trajectory_row.get("cell_emb_feature_std"),
+                trajectory_row.get("zero_logits_std"),
             )
 
     print("\n" + ",".join(TRAJECTORY_FIELDNAMES))
