@@ -14,6 +14,7 @@ import json
 import math
 import re
 import shlex
+import statistics
 from pathlib import Path
 from typing import Any
 
@@ -58,6 +59,40 @@ PARAM_FIELDNAMES = [
     "last_shared_encoder_tensors",
 ]
 
+LOSS_GRAD_POINT_FIELDNAMES = [
+    "step",
+    "loss_gep",
+    "loss_zero_prob",
+    "loss_gepc",
+    "loss_gepc_zero_prob",
+    "raw_grad_norm",
+    "was_clipped",
+    "clip_coef",
+]
+
+LOSS_GRAD_CORRELATION_FIELDNAMES = [
+    "loss",
+    "num_points",
+    "pearson_r_with_raw_grad_norm",
+]
+
+CLIP_STREAK_FIELDNAMES = [
+    "start_step",
+    "end_step",
+    "num_grad_steps",
+    "clipped_steps",
+    "clip_rate",
+    "clip_run_count",
+    "longest_consecutive_clipped_steps",
+    "first_clipped_step",
+    "last_clipped_step",
+    "raw_grad_norm_mean",
+    "raw_grad_norm_p50",
+    "raw_grad_norm_p90",
+    "raw_grad_norm_p95",
+    "raw_grad_norm_max",
+]
+
 
 def parse_steps(value: str) -> list[int]:
     steps = [int(item.strip()) for item in value.split(",") if item.strip()]
@@ -85,6 +120,31 @@ def clean_csv_row(row: dict[str, Any]) -> dict[str, Any]:
 
 def mean(values: list[float]) -> float | None:
     return sum(values) / len(values) if values else None
+
+
+def percentile(values: list[float], quantile: float) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    position = (len(ordered) - 1) * quantile
+    lower = math.floor(position)
+    upper = math.ceil(position)
+    if lower == upper:
+        return ordered[lower]
+    fraction = position - lower
+    return ordered[lower] * (1.0 - fraction) + ordered[upper] * fraction
+
+
+def pearson_r(xs: list[float], ys: list[float]) -> float | None:
+    if len(xs) != len(ys) or len(xs) < 2:
+        return None
+    mean_x = statistics.fmean(xs)
+    mean_y = statistics.fmean(ys)
+    covariance = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys))
+    variance_x = sum((x - mean_x) ** 2 for x in xs)
+    variance_y = sum((y - mean_y) ** 2 for y in ys)
+    denominator = math.sqrt(variance_x * variance_y)
+    return covariance / denominator if denominator else None
 
 
 def parse_run_record_resume_step(path: Path) -> int | None:
@@ -211,6 +271,109 @@ def aggregate_metrics(metrics_path: Path, windows: list[dict[str, int | str]]) -
         )
         rows.append(row)
     return rows
+
+
+def extract_loss_grad_points(
+    metrics_path: Path,
+    start_step: int,
+    end_step: int,
+    resume_update_step: int,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+    start_update_step = resume_update_step + start_step
+    end_update_step = resume_update_step + end_step
+    loss_points = []
+    grad_steps = []
+
+    with metrics_path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            update_step = row.get("update_step")
+            if update_step is None:
+                continue
+            update_step = int(update_step)
+            if not (start_update_step < update_step <= end_update_step):
+                continue
+
+            raw_grad_norm = row.get("grad_norm_raw")
+            if raw_grad_norm is None:
+                continue
+            raw_grad_norm = float(raw_grad_norm)
+            step = update_step - resume_update_step
+            was_clipped = row.get("grad_action") == "clip"
+            clip_coef = 1.0
+            if was_clipped:
+                threshold = row.get("grad_clip_threshold")
+                clip_coef = float(threshold) / raw_grad_norm if threshold is not None and raw_grad_norm > 0 else None
+            elif row.get("grad_action") in ("skip_nan", "skip_norm"):
+                clip_coef = None
+
+            grad_steps.append(
+                {
+                    "step": step,
+                    "raw_grad_norm": raw_grad_norm,
+                    "was_clipped": was_clipped,
+                }
+            )
+            if row.get("loss_gep") is not None:
+                loss_points.append(
+                    {
+                        "step": step,
+                        "loss_gep": float(row["loss_gep"]),
+                        "loss_zero_prob": float(row["loss_zero_prob"]),
+                        "loss_gepc": float(row["loss_gepc"]),
+                        "loss_gepc_zero_prob": float(row["loss_gepc_zero_prob"]),
+                        "raw_grad_norm": raw_grad_norm,
+                        "was_clipped": was_clipped,
+                        "clip_coef": clip_coef,
+                    }
+                )
+
+    correlations = []
+    grad_at_loss_points = [row["raw_grad_norm"] for row in loss_points]
+    for loss_name in ("loss_gep", "loss_zero_prob", "loss_gepc", "loss_gepc_zero_prob"):
+        loss_values = [row[loss_name] for row in loss_points]
+        correlations.append(
+            {
+                "loss": loss_name,
+                "num_points": len(loss_values),
+                "pearson_r_with_raw_grad_norm": pearson_r(loss_values, grad_at_loss_points),
+            }
+        )
+
+    clip_run_count = 0
+    longest_clip_run = 0
+    current_clip_run = 0
+    clipped_step_values = []
+    for row in grad_steps:
+        if row["was_clipped"]:
+            clipped_step_values.append(row["step"])
+            current_clip_run += 1
+            if current_clip_run == 1:
+                clip_run_count += 1
+            longest_clip_run = max(longest_clip_run, current_clip_run)
+        else:
+            current_clip_run = 0
+
+    raw_norms = [row["raw_grad_norm"] for row in grad_steps]
+    streak_summary = {
+        "start_step": start_step,
+        "end_step": end_step,
+        "num_grad_steps": len(grad_steps),
+        "clipped_steps": len(clipped_step_values),
+        "clip_rate": len(clipped_step_values) / len(grad_steps) if grad_steps else None,
+        "clip_run_count": clip_run_count,
+        "longest_consecutive_clipped_steps": longest_clip_run,
+        "first_clipped_step": clipped_step_values[0] if clipped_step_values else None,
+        "last_clipped_step": clipped_step_values[-1] if clipped_step_values else None,
+        "raw_grad_norm_mean": mean(raw_norms),
+        "raw_grad_norm_p50": percentile(raw_norms, 0.50),
+        "raw_grad_norm_p90": percentile(raw_norms, 0.90),
+        "raw_grad_norm_p95": percentile(raw_norms, 0.95),
+        "raw_grad_norm_max": max(raw_norms) if raw_norms else None,
+    }
+    return loss_points, correlations, streak_summary
 
 
 def unwrap_checkpoint_state(checkpoint: Any) -> dict[str, Any]:
@@ -371,6 +534,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--steps", type=parse_steps, default=parse_steps("8320,8736,9152"))
     parser.add_argument("--resume-update-step", default="auto")
     parser.add_argument("--steps-are-global", action="store_true")
+    parser.add_argument(
+        "--loss-grad-window",
+        type=parse_steps,
+        default=parse_steps("8736,9152"),
+        help="Two local checkpoint steps for detailed loss/grad and clip-streak output.",
+    )
     parser.add_argument("--checkpoint", action="append", type=parse_checkpoint_spec, default=[])
     parser.add_argument("--skip-param-norms", action="store_true")
     parser.add_argument("--output-dir", type=Path, default=None)
@@ -392,15 +561,37 @@ def main() -> int:
     resume_update_step = resolve_resume_update_step(args)
     windows = build_windows(args.steps, resume_update_step)
     metric_rows = aggregate_metrics(metrics_path, windows)
+    if len(args.loss_grad_window) != 2:
+        raise ValueError("--loss-grad-window must contain exactly two comma-separated steps")
+    loss_grad_start, loss_grad_end = args.loss_grad_window
+    loss_grad_points, loss_grad_correlations, clip_streak_summary = extract_loss_grad_points(
+        metrics_path,
+        loss_grad_start,
+        loss_grad_end,
+        resume_update_step,
+    )
 
     metrics_csv = output_dir / f"{args.output_prefix}_metrics_windows.csv"
     metrics_jsonl = output_dir / f"{args.output_prefix}_metrics_windows.jsonl"
     write_rows(metrics_csv, METRIC_FIELDNAMES, metric_rows)
     write_jsonl(metrics_jsonl, metric_rows)
 
+    loss_grad_csv = output_dir / f"{args.output_prefix}_loss_grad_points.csv"
+    loss_grad_jsonl = output_dir / f"{args.output_prefix}_loss_grad_points.jsonl"
+    correlation_csv = output_dir / f"{args.output_prefix}_loss_grad_correlations.csv"
+    clip_streak_csv = output_dir / f"{args.output_prefix}_clip_streak.csv"
+    write_rows(loss_grad_csv, LOSS_GRAD_POINT_FIELDNAMES, loss_grad_points)
+    write_jsonl(loss_grad_jsonl, loss_grad_points)
+    write_rows(correlation_csv, LOSS_GRAD_CORRELATION_FIELDNAMES, loss_grad_correlations)
+    write_rows(clip_streak_csv, CLIP_STREAK_FIELDNAMES, [clip_streak_summary])
+
     print(f"resume_update_step={resume_update_step}")
     print(f"metrics_csv={metrics_csv}")
     print(f"metrics_jsonl={metrics_jsonl}")
+    print(f"loss_grad_csv={loss_grad_csv}")
+    print(f"loss_grad_jsonl={loss_grad_jsonl}")
+    print(f"correlation_csv={correlation_csv}")
+    print(f"clip_streak_csv={clip_streak_csv}")
 
     param_rows = []
     if not args.skip_param_norms:

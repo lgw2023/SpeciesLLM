@@ -116,6 +116,21 @@ METRIC_FIELDNAMES = [
     "cluster_tokens_per_s_sum",
 ]
 
+PER_LOSS_GRAD_FIELDNAMES = [
+    "time",
+    "epoch",
+    "batch_index",
+    "update_step",
+    "grad_norm_total",
+    "grad_norm_from_loss_gep",
+    "grad_norm_from_loss_zero",
+    "grad_norm_from_loss_gepc",
+    "grad_norm_from_loss_gepc_zero",
+    "raw_grad_norm",
+    "was_clipped",
+    "clip_coef",
+]
+
 
 class RankContextFilter(logging.Filter):
     def __init__(self, node_rank, rank, local_rank):
@@ -333,6 +348,48 @@ class AdaptiveGradClipState:
                     % (self.ema, self.ema_runaway_factor, self.ema_contribution_cap))
         return None
 
+    def restore_from_metrics(self, metrics_path, update_step):
+        matching_row = None
+        with open(metrics_path, encoding="utf-8") as handle:
+            for line in handle:
+                if not line.strip():
+                    continue
+                row = json.loads(line)
+                if row.get("update_step") == update_step:
+                    matching_row = row
+        if matching_row is None or matching_row.get("grad_norm_ema") is None:
+            raise ValueError(
+                f"No adaptive grad-clip state for update_step={update_step} in {metrics_path}"
+            )
+        self.ema = float(matching_row["grad_norm_ema"])
+        self.observed = max(1, self.warmup_steps)
+        self.skipped = int(matching_row.get("skipped_count_cum") or 0)
+        self.clipped = int(matching_row.get("clipped_count_cum") or 0)
+        self.consecutive_skips = int(matching_row.get("consecutive_skips") or 0)
+        self.consecutive_clips = int(matching_row.get("consecutive_clips") or 0)
+        self.max_consecutive_skips_seen = self.consecutive_skips
+        self.max_consecutive_clips_seen = self.consecutive_clips
+
+    def state_values(self):
+        return [
+            float(self.ema),
+            float(self.observed),
+            float(self.skipped),
+            float(self.clipped),
+            float(self.consecutive_skips),
+            float(self.consecutive_clips),
+        ]
+
+    def load_state_values(self, values):
+        self.ema = float(values[0])
+        self.observed = int(values[1])
+        self.skipped = int(values[2])
+        self.clipped = int(values[3])
+        self.consecutive_skips = int(values[4])
+        self.consecutive_clips = int(values[5])
+        self.max_consecutive_skips_seen = self.consecutive_skips
+        self.max_consecutive_clips_seen = self.consecutive_clips
+
 
 class StreamingMetricsWriter:
     def __init__(self, out_dir, node_rank, rank, flush_interval=100, append=False):
@@ -364,6 +421,59 @@ class StreamingMetricsWriter:
         self.flush()
         self.jsonl_file.close()
         self.csv_file.close()
+
+
+class PerLossGradProbeWriter:
+    def __init__(self, out_dir, append=False):
+        self.jsonl_path = os.path.join(out_dir, "per_loss_grad_probe.jsonl")
+        self.csv_path = os.path.join(out_dir, "per_loss_grad_probe.csv")
+        csv_has_rows = append and os.path.exists(self.csv_path) and os.path.getsize(self.csv_path) > 0
+        self.jsonl_file = open(self.jsonl_path, "a" if append else "w", encoding="utf-8")
+        self.csv_file = open(self.csv_path, "a" if append else "w", newline="", encoding="utf-8")
+        self.csv_writer = csv.DictWriter(self.csv_file, fieldnames=PER_LOSS_GRAD_FIELDNAMES)
+        if not csv_has_rows:
+            self.csv_writer.writeheader()
+
+    def write(self, row):
+        clean_row = {field: row.get(field, None) for field in PER_LOSS_GRAD_FIELDNAMES}
+        self.jsonl_file.write(json.dumps(clean_row, ensure_ascii=False, default=json_default) + "\n")
+        self.csv_writer.writerow(clean_row)
+        self.jsonl_file.flush()
+        self.csv_file.flush()
+
+    def close(self):
+        self.jsonl_file.close()
+        self.csv_file.close()
+
+
+def should_probe_per_loss_grad(args, should_step, next_update_step):
+    if not should_step or args.per_loss_grad_probe_interval <= 0:
+        return False
+    start = args.per_loss_grad_probe_start_update_step
+    end = args.per_loss_grad_probe_end_update_step
+    if not (start < next_update_step <= end):
+        return False
+    return (next_update_step - start) % args.per_loss_grad_probe_interval == 0 or next_update_step == end
+
+
+def collect_per_loss_grad_norms(losses, shared_projection_output, world_size):
+    result = {}
+    distributed = world_size > 1 and dist.is_available() and dist.is_initialized()
+    for loss_name, loss_tensor in losses.items():
+        if loss_tensor is None:
+            result[loss_name] = None
+            continue
+        gradient = torch.autograd.grad(
+            loss_tensor,
+            shared_projection_output,
+            retain_graph=True,
+        )[0]
+        norm_square = gradient.detach().float().pow(2).sum()
+        if distributed:
+            dist.all_reduce(norm_square, op=dist.ReduceOp.SUM)
+            norm_square.div_(world_size)
+        result[loss_name] = math.sqrt(float(norm_square.detach()))
+    return result
 
 
 def distributed_step_summary(local_values, device, world_size):
@@ -1148,6 +1258,31 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
         flush_interval=args.metrics_flush_interval,
         append=args.append_output_logs,
     )
+    per_loss_grad_probe_writer = None
+    shared_projection_output = {}
+    shared_projection_hook = None
+    if args.per_loss_grad_probe_interval > 0:
+        if args.per_loss_grad_probe_end_update_step <= args.per_loss_grad_probe_start_update_step:
+            raise ValueError(
+                "per-loss grad probe requires end_update_step > start_update_step"
+            )
+        def capture_shared_projection_output(_module, _inputs, output):
+            shared_projection_output["tensor"] = output
+
+        shared_projection_hook = raw_model.bert.enhanced_fusion.register_forward_hook(
+            capture_shared_projection_output
+        )
+        if rank == 0:
+            per_loss_grad_probe_writer = PerLossGradProbeWriter(
+                out_dir,
+                append=args.append_output_logs,
+            )
+        logger.info(
+            "per_loss_grad_probe=on start_update_step=%s end_update_step=%s interval=%s target=shared_projection_output",
+            args.per_loss_grad_probe_start_update_step,
+            args.per_loss_grad_probe_end_update_step,
+            args.per_loss_grad_probe_interval,
+        )
     logger.info(
         "save_step_interval=%s save_data_interval=%s world_size=%s batch_size=%s append_output_logs=%s",
         save_step_interval,
@@ -1180,6 +1315,31 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
             ema_runaway_factor=args.grad_clip_ema_runaway_factor,
             hard_raw_norm_limit=args.grad_clip_hard_raw_norm_limit,
         )
+        if args.adaptive_grad_clip_resume_metrics:
+            if rank == 0:
+                adaptive_state.restore_from_metrics(
+                    args.adaptive_grad_clip_resume_metrics,
+                    update_step,
+                )
+            if ddp:
+                state_tensor = torch.tensor(
+                    adaptive_state.state_values() if rank == 0 else [0.0] * 6,
+                    dtype=torch.float32,
+                    device=device,
+                )
+                dist.broadcast(state_tensor, src=0)
+                adaptive_state.load_state_values(state_tensor.cpu().tolist())
+            logger.info(
+                "adaptive_grad_clip_state_restored metrics=%s update_step=%s ema=%.4f "
+                "skipped=%s clipped=%s consecutive_skips=%s consecutive_clips=%s",
+                args.adaptive_grad_clip_resume_metrics,
+                update_step,
+                adaptive_state.ema,
+                adaptive_state.skipped,
+                adaptive_state.clipped,
+                adaptive_state.consecutive_skips,
+                adaptive_state.consecutive_clips,
+            )
         logger.info(
             "adaptive_grad_clip=on beta=%.4f clip_ratio=%.2f skip_ratio=%.2f min_clip=%.4f "
             "max_clip=%.4f skip_max=%.4e warmup_steps=%s static_fallback=%.4f "
@@ -1382,11 +1542,19 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
             loss_zero_prob_value = None
             loss_gepc_value = None
             loss_gepc_zero_prob_value = None
+            per_loss_grad_probe_values = None
+            per_loss_grad_probe_update_step = None
 
             final_step_in_epoch = absolute_batch_number >= max_batch_index
             should_step = (
                 absolute_batch_number % args.gradient_accumulation_steps == 0
                 or final_step_in_epoch
+            )
+            next_update_step = update_step + 1
+            probe_per_loss_grad = should_probe_per_loss_grad(
+                args,
+                should_step,
+                next_update_step,
             )
             should_log = (iter_num % max(1, args.log_interval) == 0) or final_step_in_epoch
             should_profile = (
@@ -1537,12 +1705,39 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
                         extra={"epoch": epoch + 1, "batch": absolute_batch_number},
                     )
 
+            if probe_per_loss_grad:
+                per_loss_grad_probe_update_step = next_update_step
+                projection_output = shared_projection_output.get("tensor")
+                if projection_output is None:
+                    raise RuntimeError("shared projection forward hook did not capture an output tensor")
+                accumulation_divisor = max(1, int(args.gradient_accumulation_steps))
+                per_loss_grad_probe_values = collect_per_loss_grad_norms(
+                    {
+                        "grad_norm_total": loss,
+                        "grad_norm_from_loss_gep": loss_gep / accumulation_divisor,
+                        "grad_norm_from_loss_zero": (
+                            loss_zero_prob / accumulation_divisor if loss_zero_prob is not None else None
+                        ),
+                        "grad_norm_from_loss_gepc": (
+                            loss_gepc / accumulation_divisor if loss_gepc is not None else None
+                        ),
+                        "grad_norm_from_loss_gepc_zero": (
+                            loss_gepc_zero_prob / accumulation_divisor
+                            if loss_gepc_zero_prob is not None else None
+                        ),
+                    },
+                    projection_output,
+                    world_size,
+                )
+
             # backward and optimization
             t_temp_8_backward = time.time()
             scaler.scale(loss).backward()
             # print(f"rank: {rank} scaler backward done")
             t_temp_8_backward = time.time() - t_temp_8_backward
             t_temp_8_sum_backward += t_temp_8_backward
+            if shared_projection_hook is not None:
+                shared_projection_output.clear()
             if should_log_memory:
                 log_npu_memory(
                     logger,
@@ -1691,6 +1886,30 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
                     scaler.update()
                     optimizer.zero_grad()
                 update_step += 1
+                if per_loss_grad_probe_values is not None and per_loss_grad_probe_writer is not None:
+                    clip_coef = 1.0
+                    if grad_action == "clip":
+                        clip_coef = (
+                            grad_clip_threshold_value / grad_norm_raw_value
+                            if grad_clip_threshold_value is not None
+                            and grad_norm_raw_value is not None
+                            and grad_norm_raw_value > 0
+                            else None
+                        )
+                    elif grad_action in ("skip_nan", "skip_norm"):
+                        clip_coef = None
+                    per_loss_grad_probe_writer.write(
+                        {
+                            "time": datetime.datetime.now().isoformat(timespec="seconds"),
+                            "epoch": epoch + 1,
+                            "batch_index": absolute_batch_number,
+                            "update_step": per_loss_grad_probe_update_step,
+                            **per_loss_grad_probe_values,
+                            "raw_grad_norm": grad_norm_raw_value,
+                            "was_clipped": grad_action == "clip",
+                            "clip_coef": clip_coef,
+                        }
+                    )
                 # print(f"rank: {rank} step update zero_grad done")
                 if should_log_memory:
                     log_npu_memory(
@@ -1898,6 +2117,10 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
             break
 
     metrics_writer.close()
+    if per_loss_grad_probe_writer is not None:
+        per_loss_grad_probe_writer.close()
+    if shared_projection_hook is not None:
+        shared_projection_hook.remove()
     save_log_to_s3(args, out_dir, NODE_RANK, rank, logger=logger)
 
     NODE_RANK = get_node_rank()
@@ -2282,6 +2505,10 @@ def argumentparser():
                         default=0.0,
                         help="Safety net: abort when any single raw grad norm exceeds this absolute cap. "
                              "0 disables. Use as a physical fuse far above the normal regime (e.g. 1e11 for 500M).")
+    parser.add_argument('--adaptive_grad_clip_resume_metrics',
+                        type=str,
+                        default="",
+                        help="Optional prior metrics JSONL used to restore adaptive clip state at --resume_update_step.")
     parser.add_argument('--compile',
                         type=str2bool,
                         default=False)
@@ -2409,6 +2636,18 @@ def argumentparser():
                         type=int,
                         default=0,
                         help="Log output tensor shapes every N local batches. 0 disables.")
+    parser.add_argument('--per_loss_grad_probe_start_update_step',
+                        type=int,
+                        default=0,
+                        help="Exclusive global update-step start for per-loss gradient probes.")
+    parser.add_argument('--per_loss_grad_probe_end_update_step',
+                        type=int,
+                        default=0,
+                        help="Inclusive global update-step end for per-loss gradient probes.")
+    parser.add_argument('--per_loss_grad_probe_interval',
+                        type=int,
+                        default=0,
+                        help="Probe per-loss gradients every N optimizer updates inside the configured window. 0 disables.")
     parser.add_argument('--max_train_steps',
                         type=int,
                         default=0,
