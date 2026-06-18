@@ -162,7 +162,6 @@ grad_clip_warmup_steps="${grad_clip_warmup_steps:-${GRAD_CLIP_WARMUP_STEPS:-200}
 grad_clip_max_consecutive_skips="${grad_clip_max_consecutive_skips:-${GRAD_CLIP_MAX_CONSECUTIVE_SKIPS:-50}}"
 grad_clip_ema_runaway_factor="${grad_clip_ema_runaway_factor:-${GRAD_CLIP_EMA_RUNAWAY_FACTOR:-2.0}}"
 grad_clip_hard_raw_norm_limit="${grad_clip_hard_raw_norm_limit:-${GRAD_CLIP_HARD_RAW_NORM_LIMIT:-100000000000.0}}"
-adaptive_grad_clip_resume_metrics="${adaptive_grad_clip_resume_metrics:-${ADAPTIVE_GRAD_CLIP_RESUME_METRICS:-}}"
 amp_dtype="${amp_dtype:-${AMP_DTYPE:-float32}}"
 gene_embedding_modalities="${gene_embedding_modalities:-${GENE_EMBEDDING_MODALITIES:-esm2,gene_desc,dnaseq}}"
 gep_loss="${gep_loss:-${GEP_LOSS:-mse}}"
@@ -173,9 +172,6 @@ init_optimizer_path="${init_optimizer_path:-${INIT_OPTIMIZER_PATH:-}}"
 resume_update_step="${resume_update_step:-${RESUME_UPDATE_STEP:-0}}"
 resume_start_epoch="${resume_start_epoch:-${RESUME_START_EPOCH:-0}}"
 resume_skip_batches="${resume_skip_batches:-${RESUME_SKIP_BATCHES:-0}}"
-per_loss_grad_probe_start_update_step="${per_loss_grad_probe_start_update_step:-${PER_LOSS_GRAD_PROBE_START_UPDATE_STEP:-0}}"
-per_loss_grad_probe_end_update_step="${per_loss_grad_probe_end_update_step:-${PER_LOSS_GRAD_PROBE_END_UPDATE_STEP:-0}}"
-per_loss_grad_probe_interval="${per_loss_grad_probe_interval:-${PER_LOSS_GRAD_PROBE_INTERVAL:-0}}"
 append_output_logs="${append_output_logs:-${APPEND_OUTPUT_LOGS:-false}}"
 compile="${compile:-${COMPILE:-true}}"
 backend="${backend:-${BACKEND:-hccl}}"
@@ -464,7 +460,6 @@ build_train_args() {
     "--grad_clip_max_consecutive_skips=${grad_clip_max_consecutive_skips}"
     "--grad_clip_ema_runaway_factor=${grad_clip_ema_runaway_factor}"
     "--grad_clip_hard_raw_norm_limit=${grad_clip_hard_raw_norm_limit}"
-    "--adaptive_grad_clip_resume_metrics=${adaptive_grad_clip_resume_metrics}"
     "--amp_dtype=${amp_dtype}"
     "--gep_loss=${gep_loss}"
     "--huber_delta=${huber_delta}"
@@ -472,9 +467,6 @@ build_train_args() {
     "--resume_update_step=${resume_update_step}"
     "--resume_start_epoch=${resume_start_epoch}"
     "--resume_skip_batches=${resume_skip_batches}"
-    "--per_loss_grad_probe_start_update_step=${per_loss_grad_probe_start_update_step}"
-    "--per_loss_grad_probe_end_update_step=${per_loss_grad_probe_end_update_step}"
-    "--per_loss_grad_probe_interval=${per_loss_grad_probe_interval}"
     "--append_output_logs=${append_output_logs}"
     "--compile=$(bool_arg_value "$compile")"
     "--backend=${backend}"
@@ -625,10 +617,8 @@ remote_env_assignments() {
     warmup_ratio lr_decay_epochs weight_decay save_data_interval beta1 beta2 grad_clip
     adaptive_grad_clip grad_clip_ema_beta grad_clip_ratio grad_skip_ratio grad_skip_max
     grad_clip_min grad_clip_max grad_clip_warmup_steps grad_clip_max_consecutive_skips
-    grad_clip_ema_runaway_factor grad_clip_hard_raw_norm_limit adaptive_grad_clip_resume_metrics
-    amp_dtype gep_loss huber_delta max_train_steps
+    grad_clip_ema_runaway_factor grad_clip_hard_raw_norm_limit amp_dtype gep_loss huber_delta max_train_steps
     init_model_path init_optimizer_path resume_update_step resume_start_epoch resume_skip_batches
-    per_loss_grad_probe_start_update_step per_loss_grad_probe_end_update_step per_loss_grad_probe_interval
     append_output_logs compile
     backend device device_type s3_remote_dir_path
     log_interval profile_interval nan_check_interval metrics_flush_interval log_level log_all_ranks
