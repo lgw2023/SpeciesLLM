@@ -122,6 +122,10 @@ export BETA2="${BETA2:-0.98}"
 export AMP_DTYPE="${AMP_DTYPE:-float32}"
 export GEP_LOSS="${GEP_LOSS:-huber}"
 export HUBER_DELTA="${HUBER_DELTA:-5.0}"
+export GEP_LOSS_WEIGHT="${GEP_LOSS_WEIGHT:-1.0}"
+export ZERO_PROB_LOSS_WEIGHT="${ZERO_PROB_LOSS_WEIGHT:-1.0}"
+export GEPC_LOSS_WEIGHT="${GEPC_LOSS_WEIGHT:-0.1}"
+export GEPC_ZERO_PROB_LOSS_WEIGHT="${GEPC_ZERO_PROB_LOSS_WEIGHT:-0.1}"
 
 # adaptive grad clip ON, norm-skip + aborts OFF, keep the 1e8 hard fuse
 export GRAD_CLIP="${GRAD_CLIP:-1.0}"

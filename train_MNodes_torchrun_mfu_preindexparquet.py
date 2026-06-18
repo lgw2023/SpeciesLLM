@@ -39,7 +39,13 @@ from torch_npu.npu.amp import GradScaler, autocast
 
 from nanoBERT.utils import GeneVocab, CustomCollate_3GeneEmb
 from nanoBERT.utils import ParquetDataset, LazyParquetDataset, PreindexedParquetDataset
-from nanoBERT.utils import masked_mse_loss, masked_huber_loss, masked_relative_error, criterion_neg_log_bernoulli
+from nanoBERT.utils import (
+    criterion_neg_log_bernoulli,
+    masked_huber_loss,
+    masked_mse_loss,
+    masked_relative_error,
+)
+from nanoBERT.utils.loss_composition import combine_pretraining_losses
 from nanoBERT.model.nanoBERTmodel_cellmeta2_plusEncode_adbc import BERTConfig, BERTForPreTraining
 
 try:
@@ -1215,6 +1221,13 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
     else:
         regression_loss = masked_mse_loss
         logger.info("gep_loss=mse")
+    logger.info(
+        "loss_weights gep=%.4f zero_prob=%.4f gepc=%.4f gepc_zero_prob=%.4f",
+        args.gep_loss_weight,
+        args.zero_prob_loss_weight,
+        args.gepc_loss_weight,
+        args.gepc_zero_prob_loss_weight,
+    )
 
     t_temp_1_sum_lr = 0
     t_temp_2_sum_data = 0
@@ -1493,11 +1506,9 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
 
                 t_temp_6_loss_gep = time.time()
                 # compute loss
-                loss = 0.0
                 loss_gep = regression_loss(outputs["model_output"],
                                            target_values,
                                            mask_positions)
-                loss += loss_gep
                 # print(f"rank: {rank} loss_gep done")
                 t_temp_6_loss_gep = time.time() - t_temp_6_loss_gep
                 t_temp_6_sum_loss_gep += t_temp_6_loss_gep
@@ -1509,24 +1520,27 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
                     loss_zero_prob = criterion_neg_log_bernoulli(outputs["model_zero_prob"],
                                                                  target_values,
                                                                  mask_positions)
-                    loss += loss_zero_prob
-
                     # print(f"rank: {rank} loss_zero_prob done")
                 if "mvc_output" in outputs:
                     loss_gepc = regression_loss(outputs["mvc_output"],
                                                 target_values,
                                                 mask_positions)
-                    loss += loss_gepc
-
                     # print(f"rank: {rank} mvc_output done")
                 if "mvc_output" in outputs and config.explicit_zero_prob:
                     loss_gepc_zero_prob = criterion_neg_log_bernoulli(outputs["mvc_zero_probs"],
                                                                       target_values,
                                                                       mask_positions)
-                    loss += loss_gepc_zero_prob
-
                     # print(f"rank: {rank} loss_gepc_zero_prob done")
-                loss = loss / args.gradient_accumulation_steps
+                loss = combine_pretraining_losses(
+                    loss_gep=loss_gep,
+                    loss_zero_prob=loss_zero_prob,
+                    loss_gepc=loss_gepc,
+                    loss_gepc_zero_prob=loss_gepc_zero_prob,
+                    gep_weight=args.gep_loss_weight,
+                    zero_prob_weight=args.zero_prob_loss_weight,
+                    gepc_weight=args.gepc_loss_weight,
+                    gepc_zero_prob_weight=args.gepc_zero_prob_loss_weight,
+                ) / args.gradient_accumulation_steps
                 t_temp_7_loss_other = time.time() - t_temp_7_loss_other
                 t_temp_7_sum_loss_gep_zero_prob += t_temp_7_loss_other
                 if should_log_memory:
@@ -2372,10 +2386,26 @@ def argumentparser():
                              "expression values that make MSE spike at low loss).")
     parser.add_argument('--huber_delta',
                         type=float,
-                        default=1.0,
+                        default=5.0,
                         help="Transition point for --gep_loss=huber. Per-element gradient "
                              "is capped at delta; smaller = stronger outlier protection. "
                              "Ignored when --gep_loss=mse.")
+    parser.add_argument('--gep_loss_weight',
+                        type=float,
+                        default=1.0,
+                        help="Weight for the primary GEP regression loss.")
+    parser.add_argument('--zero_prob_loss_weight',
+                        type=float,
+                        default=1.0,
+                        help="Weight for the primary explicit zero-probability loss.")
+    parser.add_argument('--gepc_loss_weight',
+                        type=float,
+                        default=0.1,
+                        help="Weight for the GEPC regression loss.")
+    parser.add_argument('--gepc_zero_prob_loss_weight',
+                        type=float,
+                        default=0.1,
+                        help="Weight for the GEPC explicit zero-probability loss.")
     parser.add_argument('--runtime_attn_implementation',
                         type=str,
                         choices=["eager", "sdpa"],

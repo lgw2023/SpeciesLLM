@@ -165,7 +165,11 @@ grad_clip_hard_raw_norm_limit="${grad_clip_hard_raw_norm_limit:-${GRAD_CLIP_HARD
 amp_dtype="${amp_dtype:-${AMP_DTYPE:-float32}}"
 gene_embedding_modalities="${gene_embedding_modalities:-${GENE_EMBEDDING_MODALITIES:-esm2,gene_desc,dnaseq}}"
 gep_loss="${gep_loss:-${GEP_LOSS:-mse}}"
-huber_delta="${huber_delta:-${HUBER_DELTA:-1.0}}"
+huber_delta="${huber_delta:-${HUBER_DELTA:-5.0}}"
+gep_loss_weight="${gep_loss_weight:-${GEP_LOSS_WEIGHT:-1.0}}"
+zero_prob_loss_weight="${zero_prob_loss_weight:-${ZERO_PROB_LOSS_WEIGHT:-1.0}}"
+gepc_loss_weight="${gepc_loss_weight:-${GEPC_LOSS_WEIGHT:-0.1}}"
+gepc_zero_prob_loss_weight="${gepc_zero_prob_loss_weight:-${GEPC_ZERO_PROB_LOSS_WEIGHT:-0.1}}"
 max_train_steps="${max_train_steps:-${MAX_TRAIN_STEPS:-0}}"
 init_model_path="${init_model_path:-${INIT_MODEL_PATH:-}}"
 init_optimizer_path="${init_optimizer_path:-${INIT_OPTIMIZER_PATH:-}}"
@@ -463,6 +467,10 @@ build_train_args() {
     "--amp_dtype=${amp_dtype}"
     "--gep_loss=${gep_loss}"
     "--huber_delta=${huber_delta}"
+    "--gep_loss_weight=${gep_loss_weight}"
+    "--zero_prob_loss_weight=${zero_prob_loss_weight}"
+    "--gepc_loss_weight=${gepc_loss_weight}"
+    "--gepc_zero_prob_loss_weight=${gepc_zero_prob_loss_weight}"
     "--max_train_steps=${max_train_steps}"
     "--resume_update_step=${resume_update_step}"
     "--resume_start_epoch=${resume_start_epoch}"
@@ -617,7 +625,8 @@ remote_env_assignments() {
     warmup_ratio lr_decay_epochs weight_decay save_data_interval beta1 beta2 grad_clip
     adaptive_grad_clip grad_clip_ema_beta grad_clip_ratio grad_skip_ratio grad_skip_max
     grad_clip_min grad_clip_max grad_clip_warmup_steps grad_clip_max_consecutive_skips
-    grad_clip_ema_runaway_factor grad_clip_hard_raw_norm_limit amp_dtype gep_loss huber_delta max_train_steps
+    grad_clip_ema_runaway_factor grad_clip_hard_raw_norm_limit amp_dtype gep_loss huber_delta
+    gep_loss_weight zero_prob_loss_weight gepc_loss_weight gepc_zero_prob_loss_weight max_train_steps
     init_model_path init_optimizer_path resume_update_step resume_start_epoch resume_skip_batches
     append_output_logs compile
     backend device device_type s3_remote_dir_path
