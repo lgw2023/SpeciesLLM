@@ -59,7 +59,7 @@ papers/
 
 # Training logs
 training_log/
-training_output_*/
+training_output_*
 
 # Git-friendly compressed mirrors
 !training_output_*_text_split/
