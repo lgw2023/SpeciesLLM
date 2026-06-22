@@ -192,6 +192,8 @@ num_workers="${num_workers:-${NUM_WORKERS:-4}}"
 prefetch_factor="${prefetch_factor:-${PREFETCH_FACTOR:-1}}"
 persistent_workers="${persistent_workers:-${PERSISTENT_WORKERS:-false}}"
 pin_memory="${pin_memory:-${PIN_MEMORY:-true}}"
+shuffle_rows="${shuffle_rows:-${TRAIN_SHUFFLE_ROWS:-false}}"
+shuffle_seed="${shuffle_seed:-${TRAIN_SHUFFLE_SEED:-42}}"
 parquet_chunk_files="${parquet_chunk_files:-${PARQUET_CHUNK_FILES:-64}}"
 
 WORKER_MODE=0
@@ -231,6 +233,7 @@ Important environment variables:
   MODEL_CONFIG_JSON/config_json, BATCH_SIZE/batch_size
   NUM_WORKERS/num_workers, PREFETCH_FACTOR/prefetch_factor,
   PERSISTENT_WORKERS/persistent_workers, PIN_MEMORY/pin_memory,
+  TRAIN_SHUFFLE_ROWS/shuffle_rows, TRAIN_SHUFFLE_SEED/shuffle_seed,
   PARQUET_CHUNK_FILES/parquet_chunk_files
 USAGE
 }
@@ -490,6 +493,8 @@ build_train_args() {
     "--prefetch_factor=${prefetch_factor}"
     "--persistent_workers=${persistent_workers}"
     "--pin_memory=${pin_memory}"
+    "--shuffle_rows=${shuffle_rows}"
+    "--shuffle_seed=${shuffle_seed}"
     "--parquet_chunk_files=${parquet_chunk_files}"
   )
 
@@ -631,7 +636,7 @@ remote_env_assignments() {
     append_output_logs compile
     backend device device_type s3_remote_dir_path
     log_interval profile_interval nan_check_interval metrics_flush_interval log_level log_all_ranks
-    num_workers prefetch_factor persistent_workers pin_memory parquet_chunk_files
+    num_workers prefetch_factor persistent_workers pin_memory shuffle_rows shuffle_seed parquet_chunk_files
   )
 
   printf "NODE_RANK=%s " "$(shell_quote "$rank")"
@@ -661,6 +666,7 @@ run_launcher() {
   log "TRAIN_DATASET=${TRAIN_DATASET}, data_path=${data_path}, emb_path=${emb_path}"
   log "config_json=${config_json}, gene_embedding_modalities=${gene_embedding_modalities}"
   log "max_train_steps=${max_train_steps}, adaptive_grad_clip=${adaptive_grad_clip}"
+  log "shuffle_rows=${shuffle_rows}, shuffle_seed=${shuffle_seed}, parquet_chunk_files=${parquet_chunk_files}"
   log "SYNC_SELF=${SYNC_SELF}, DRY_RUN=${DRY_RUN}, LOCAL_NODE_RANK=${LOCAL_NODE_RANK}"
 
   local rank host

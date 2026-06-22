@@ -822,17 +822,40 @@ def load_parquet_file_paths(file_paths, rank, NODE_RANK, logger=None, chunk_labe
     return pdf
 
 
-def make_parquet_data_loader(data_pt, args, collate_fn, rank, logger=None, chunk_label=None):
+def make_parquet_data_loader(
+    data_pt,
+    args,
+    collate_fn,
+    rank,
+    logger=None,
+    chunk_label=None,
+    epoch=0,
+    chunk_index=0,
+):
     nw = max(0, int(args.num_workers))
+    shuffle_rows = bool(args.shuffle_rows)
+    generator = None
+    effective_shuffle_seed = None
+    if shuffle_rows:
+        effective_shuffle_seed = (
+            int(args.shuffle_seed)
+            + int(epoch) * 1_000_003
+            + int(rank) * 10_007
+            + int(chunk_index) * 101
+        )
+        generator = torch.Generator()
+        generator.manual_seed(effective_shuffle_seed)
     dl_kw = dict(
         dataset=ParquetDataset(data_pt),
         batch_size=args.batch_size,
         collate_fn=collate_fn,
-        shuffle=False,
+        shuffle=shuffle_rows,
         drop_last=False,
         num_workers=nw,
         pin_memory=args.pin_memory,
     )
+    if generator is not None:
+        dl_kw["generator"] = generator
     if nw > 0:
         dl_kw["prefetch_factor"] = max(1, int(args.prefetch_factor))
         dl_kw["persistent_workers"] = bool(args.persistent_workers)
@@ -841,7 +864,7 @@ def make_parquet_data_loader(data_pt, args, collate_fn, rank, logger=None, chunk
         logger,
         "info",
         "DataLoader rank=%s%s rows=%s num_batches=%s num_workers=%s prefetch_factor=%s "
-        "persistent_workers=%s pin_memory=%s"
+        "persistent_workers=%s pin_memory=%s shuffle_rows=%s shuffle_seed=%s"
         % (
             rank,
             f" {chunk_label}" if chunk_label else "",
@@ -851,6 +874,8 @@ def make_parquet_data_loader(data_pt, args, collate_fn, rank, logger=None, chunk
             dl_kw.get("prefetch_factor", "n/a"),
             dl_kw.get("persistent_workers", False),
             dl_kw["pin_memory"],
+            shuffle_rows,
+            effective_shuffle_seed if effective_shuffle_seed is not None else "n/a",
         ),
     )
     return data_loader
@@ -875,6 +900,7 @@ def iter_chunked_parquet_batches(
     NODE_RANK,
     collate_fn,
     logger,
+    epoch,
     resume_batch_offset,
     max_batch_index,
 ):
@@ -980,6 +1006,8 @@ def iter_chunked_parquet_batches(
                 rank,
                 logger=logger,
                 chunk_label=chunk_label,
+                epoch=epoch,
+                chunk_index=chunk_index,
             )
             try:
                 first_batch = True
@@ -1251,6 +1279,11 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
         batch_iter = None
         use_chunked_parquet = int(args.parquet_chunk_files) > 0
         resume_batch_offset = resume_skip_batches if epoch == resume_start_epoch else 0
+        if args.shuffle_rows and resume_batch_offset:
+            raise ValueError(
+                "--shuffle_rows does not support mid-epoch resume with --resume_skip_batches. "
+                "Resume from an epoch boundary or disable --shuffle_rows."
+            )
         if ddp:
             train_sampler.set_epoch(epoch)
             file_paths = file_paths_for_indices(train_data_filelist, train_sampler)
@@ -1308,6 +1341,7 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
                     NODE_RANK,
                     collate_fn,
                     logger,
+                    epoch,
                     resume_batch_offset,
                     max_batch_index,
                 )
@@ -1334,6 +1368,8 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
                     rank,
                     logger=logger,
                     chunk_label="full_epoch",
+                    epoch=epoch,
+                    chunk_index=0,
                 )
                 t_temp_2_data = time.time() - t_temp_2_data
                 batch_iter = iter_parquet_data_loader_batches(
@@ -2082,7 +2118,7 @@ def main(args):
     logger.info(
         "experiment_controls amp_dtype=%s static_gene_dtype=%s gene_embedding_modalities=%s "
         "train_mvc=%s gradient_checkpointing=%s "
-        "parquet_chunk_files=%s "
+        "parquet_chunk_files=%s shuffle_rows=%s shuffle_seed=%s "
         "memory_log_interval=%s tensor_shape_log_interval=%s max_train_steps=%s skip_final_save=%s "
         "ddp_find_unused_parameters=%s append_output_logs=%s",
         dtype,
@@ -2091,6 +2127,8 @@ def main(args):
         args.train_mvc,
         args.gradient_checkpointing,
         args.parquet_chunk_files,
+        args.shuffle_rows,
+        args.shuffle_seed,
         args.memory_log_interval,
         args.tensor_shape_log_interval,
         args.max_train_steps,
@@ -2350,6 +2388,19 @@ def argumentparser():
         type=str2bool,
         default=True,
         help="DataLoader pin_memory (pinned CPU pages for faster H2D-style copies). Default True.",
+    )
+    parser.add_argument(
+        '--shuffle_rows',
+        type=str2bool,
+        default=False,
+        help="Shuffle row samples inside each rank-local parquet load/chunk before batching. "
+             "Default false preserves the previous sequential DataLoader order.",
+    )
+    parser.add_argument(
+        '--shuffle_seed',
+        type=int,
+        default=42,
+        help="Base seed for --shuffle_rows. Effective seed also includes epoch, rank, and chunk index.",
     )
     parser.add_argument(
         '--parquet_chunk_files',
