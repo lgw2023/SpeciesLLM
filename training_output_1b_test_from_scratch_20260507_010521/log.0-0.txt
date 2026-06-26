@@ -1,0 +1,232 @@
+2026-05-07 01:10:53 INFO node=0 rank=0 local_rank=0 pid=366483 sys.argv=['train_MNodes_torchrun_mfu_preindexparquet.py', '--data_path=/data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData/all_flatten_data_test_1b', '--num_of_used_data=0', '--emb_path=/data/disk1/SpeciesLLM/Stage2_macrogene_embeddings', '--config_json=/data/disk1/SpeciesLLM/Stage2_macrogene_embeddings/args_2nd_run_1b.json', '--out_path=/data/disk1/SpeciesLLM/training_output_1b_test_from_scratch_20260507_010520', '--batch_size=64', '--epoch=1', '--gradient_accumulation_steps=1', '--gradient_checkpointing=true', '--learning_rate=0.00001', '--min_lr=0.000001', '--decay_lr=true', '--warmup_iters=2000', '--warmup_ratio=0.05', '--weight_decay=0.1', '--save_data_interval=5120000', '--beta1=0.9', '--beta2=0.95', '--grad_clip=1.0', '--compile=', '--backend=hccl', '--device=npu', '--device_type=npu', '--log_interval=10', '--profile_interval=100', '--nan_check_interval=0', '--metrics_flush_interval=100', '--log_level=INFO', '--log_all_ranks=false']
+2026-05-07 01:10:53 INFO node=0 rank=0 local_rank=0 pid=366483 args={
+  "data_path": "/data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData/all_flatten_data_test_1b",
+  "num_of_used_data": 0,
+  "emb_path": "/data/disk1/SpeciesLLM/Stage2_macrogene_embeddings",
+  "config_json": "/data/disk1/SpeciesLLM/Stage2_macrogene_embeddings/args_2nd_run_1b.json",
+  "seq_len": 640,
+  "out_path": "/data/disk1/SpeciesLLM/training_output_1b_test_from_scratch_20260507_010520",
+  "batch_size": 64,
+  "epoch": 1,
+  "gradient_accumulation_steps": 1,
+  "learning_rate": 1e-05,
+  "min_lr": 1e-06,
+  "decay_lr": true,
+  "warmup_iters": 2000,
+  "warmup_ratio": 0.05,
+  "weight_decay": 0.1,
+  "save_data_interval": 5120000,
+  "beta1": 0.9,
+  "beta2": 0.95,
+  "grad_clip": 1.0,
+  "compile": false,
+  "backend": "hccl",
+  "device": "npu",
+  "device_type": "npu",
+  "s3_remote_dir_path": "",
+  "log_interval": 10,
+  "profile_interval": 100,
+  "nan_check_interval": 0,
+  "metrics_flush_interval": 100,
+  "log_level": "INFO",
+  "log_all_ranks": false,
+  "amp_dtype": "auto",
+  "static_gene_dtype": "float32",
+  "runtime_attn_implementation": null,
+  "runtime_explicit_zero_prob": null,
+  "runtime_do_mvc": null,
+  "runtime_chunk_size_feed_forward": null,
+  "train_mvc": true,
+  "gradient_checkpointing": true,
+  "memory_log_interval": 0,
+  "tensor_shape_log_interval": 0,
+  "max_train_steps": 0,
+  "skip_final_save": false,
+  "ddp_find_unused_parameters": false,
+  "hidden_size": 1280,
+  "num_hidden_layers": 36,
+  "num_attention_heads": 32,
+  "intermediate_size": 5120,
+  "hidden_act": "gelu",
+  "hidden_dropout_prob": 0.1,
+  "cell_hidden_size": 128,
+  "attention_probs_dropout_prob": 0.1,
+  "type_vocab_size": 2,
+  "initializer_range": 0.02,
+  "layer_norm_eps": 1e-12,
+  "_attn_implementation": "eager",
+  "use_batch_labels": false,
+  "num_batch_labels": 62223,
+  "use_species_labels": true,
+  "num_species_labels": 29,
+  "use_tissue_labels": true,
+  "num_tissue_labels": 336,
+  "use_seqmethod_labels": true,
+  "num_seqmethod_labels": 30,
+  "use_disease_labels": true,
+  "num_disease_labels": 1921,
+  "use_age_labels": true,
+  "num_age_labels": 5,
+  "use_sex_labels": true,
+  "num_sex_labels": 3,
+  "cell_emb_style": "cls",
+  "chunk_size_feed_forward": 0,
+  "explicit_zero_prob": true
+}
+2026-05-07 01:10:53 INFO node=0 rank=0 local_rank=0 pid=366483 runtime_config_overrides={}
+2026-05-07 01:10:53 INFO node=0 rank=0 local_rank=0 pid=366483 model_config=BERTConfig(vocab_size=641, vocab={'<cls>': 641, 'gene_1': 1, 'gene_2': 2, 'gene_3': 3, 'gene_4': 4, 'gene_5': 5, 'gene_6': 6, 'gene_7': 7, 'gene_8': 8, 'gene_9': 9, 'gene_10': 10, 'gene_11': 11, 'gene_12': 12, 'gene_13': 13, 'gene_14': 14, 'gene_15': 15, 'gene_16': 16, 'gene_17': 17, 'gene_18': 18, 'gene_19': 19, 'gene_20': 20, 'gene_21': 21, 'gene_22': 22, 'gene_23': 23, 'gene_24': 24, 'gene_25': 25, 'gene_26': 26, 'gene_27': 27, 'gene_28': 28, 'gene_29': 29, 'gene_30': 30, 'gene_31': 31, 'gene_32': 32, 'gene_33': 33, 'gene_34': 34, 'gene_35': 35, 'gene_36': 36, 'gene_37': 37, 'gene_38': 38, 'gene_39': 39, 'gene_40': 40, 'gene_41': 41, 'gene_42': 42, 'gene_43': 43, 'gene_44': 44, 'gene_45': 45, 'gene_46': 46, 'gene_47': 47, 'gene_48': 48, 'gene_49': 49, 'gene_50': 50, 'gene_51': 51, 'gene_52': 52, 'gene_53': 53, 'gene_54': 54, 'gene_55': 55, 'gene_56': 56, 'gene_57': 57, 'gene_58': 58, 'gene_59': 59, 'gene_60': 60, 'gene_61': 61, 'gene_62': 62, 'gene_63': 63, 'gene_64': 64, 'gene_65': 65, 'gene_66': 66, 'gene_67': 67, 'gene_68': 68, 'gene_69': 69, 'gene_70': 70, 'gene_71': 71, 'gene_72': 72, 'gene_73': 73, 'gene_74': 74, 'gene_75': 75, 'gene_76': 76, 'gene_77': 77, 'gene_78': 78, 'gene_79': 79, 'gene_80': 80, 'gene_81': 81, 'gene_82': 82, 'gene_83': 83, 'gene_84': 84, 'gene_85': 85, 'gene_86': 86, 'gene_87': 87, 'gene_88': 88, 'gene_89': 89, 'gene_90': 90, 'gene_91': 91, 'gene_92': 92, 'gene_93': 93, 'gene_94': 94, 'gene_95': 95, 'gene_96': 96, 'gene_97': 97, 'gene_98': 98, 'gene_99': 99, 'gene_100': 100, 'gene_101': 101, 'gene_102': 102, 'gene_103': 103, 'gene_104': 104, 'gene_105': 105, 'gene_106': 106, 'gene_107': 107, 'gene_108': 108, 'gene_109': 109, 'gene_110': 110, 'gene_111': 111, 'gene_112': 112, 'gene_113': 113, 'gene_114': 114, 'gene_115': 115, 'gene_116': 116, 'gene_117': 117, 'gene_118': 118, 'gene_119': 119, 'gene_120': 120, 'gene_121': 121, 'gene_122': 122, 'gene_123': 123, 'gene_124': 124, 'gene_125': 125, 'gene_126': 126, 'gene_127': 127, 'gene_128': 128, 'gene_129': 129, 'gene_130': 130, 'gene_131': 131, 'gene_132': 132, 'gene_133': 133, 'gene_134': 134, 'gene_135': 135, 'gene_136': 136, 'gene_137': 137, 'gene_138': 138, 'gene_139': 139, 'gene_140': 140, 'gene_141': 141, 'gene_142': 142, 'gene_143': 143, 'gene_144': 144, 'gene_145': 145, 'gene_146': 146, 'gene_147': 147, 'gene_148': 148, 'gene_149': 149, 'gene_150': 150, 'gene_151': 151, 'gene_152': 152, 'gene_153': 153, 'gene_154': 154, 'gene_155': 155, 'gene_156': 156, 'gene_157': 157, 'gene_158': 158, 'gene_159': 159, 'gene_160': 160, 'gene_161': 161, 'gene_162': 162, 'gene_163': 163, 'gene_164': 164, 'gene_165': 165, 'gene_166': 166, 'gene_167': 167, 'gene_168': 168, 'gene_169': 169, 'gene_170': 170, 'gene_171': 171, 'gene_172': 172, 'gene_173': 173, 'gene_174': 174, 'gene_175': 175, 'gene_176': 176, 'gene_177': 177, 'gene_178': 178, 'gene_179': 179, 'gene_180': 180, 'gene_181': 181, 'gene_182': 182, 'gene_183': 183, 'gene_184': 184, 'gene_185': 185, 'gene_186': 186, 'gene_187': 187, 'gene_188': 188, 'gene_189': 189, 'gene_190': 190, 'gene_191': 191, 'gene_192': 192, 'gene_193': 193, 'gene_194': 194, 'gene_195': 195, 'gene_196': 196, 'gene_197': 197, 'gene_198': 198, 'gene_199': 199, 'gene_200': 200, 'gene_201': 201, 'gene_202': 202, 'gene_203': 203, 'gene_204': 204, 'gene_205': 205, 'gene_206': 206, 'gene_207': 207, 'gene_208': 208, 'gene_209': 209, 'gene_210': 210, 'gene_211': 211, 'gene_212': 212, 'gene_213': 213, 'gene_214': 214, 'gene_215': 215, 'gene_216': 216, 'gene_217': 217, 'gene_218': 218, 'gene_219': 219, 'gene_220': 220, 'gene_221': 221, 'gene_222': 222, 'gene_223': 223, 'gene_224': 224, 'gene_225': 225, 'gene_226': 226, 'gene_227': 227, 'gene_228': 228, 'gene_229': 229, 'gene_230': 230, 'gene_231': 231, 'gene_232': 232, 'gene_233': 233, 'gene_234': 234, 'gene_235': 235, 'gene_236': 236, 'gene_237': 237, 'gene_238': 238, 'gene_239': 239, 'gene_240': 240, 'gene_241': 241, 'gene_242': 242, 'gene_243': 243, 'gene_244': 244, 'gene_245': 245, 'gene_246': 246, 'gene_247': 247, 'gene_248': 248, 'gene_249': 249, 'gene_250': 250, 'gene_251': 251, 'gene_252': 252, 'gene_253': 253, 'gene_254': 254, 'gene_255': 255, 'gene_256': 256, 'gene_257': 257, 'gene_258': 258, 'gene_259': 259, 'gene_260': 260, 'gene_261': 261, 'gene_262': 262, 'gene_263': 263, 'gene_264': 264, 'gene_265': 265, 'gene_266': 266, 'gene_267': 267, 'gene_268': 268, 'gene_269': 269, 'gene_270': 270, 'gene_271': 271, 'gene_272': 272, 'gene_273': 273, 'gene_274': 274, 'gene_275': 275, 'gene_276': 276, 'gene_277': 277, 'gene_278': 278, 'gene_279': 279, 'gene_280': 280, 'gene_281': 281, 'gene_282': 282, 'gene_283': 283, 'gene_284': 284, 'gene_285': 285, 'gene_286': 286, 'gene_287': 287, 'gene_288': 288, 'gene_289': 289, 'gene_290': 290, 'gene_291': 291, 'gene_292': 292, 'gene_293': 293, 'gene_294': 294, 'gene_295': 295, 'gene_296': 296, 'gene_297': 297, 'gene_298': 298, 'gene_299': 299, 'gene_300': 300, 'gene_301': 301, 'gene_302': 302, 'gene_303': 303, 'gene_304': 304, 'gene_305': 305, 'gene_306': 306, 'gene_307': 307, 'gene_308': 308, 'gene_309': 309, 'gene_310': 310, 'gene_311': 311, 'gene_312': 312, 'gene_313': 313, 'gene_314': 314, 'gene_315': 315, 'gene_316': 316, 'gene_317': 317, 'gene_318': 318, 'gene_319': 319, 'gene_320': 320, 'gene_321': 321, 'gene_322': 322, 'gene_323': 323, 'gene_324': 324, 'gene_325': 325, 'gene_326': 326, 'gene_327': 327, 'gene_328': 328, 'gene_329': 329, 'gene_330': 330, 'gene_331': 331, 'gene_332': 332, 'gene_333': 333, 'gene_334': 334, 'gene_335': 335, 'gene_336': 336, 'gene_337': 337, 'gene_338': 338, 'gene_339': 339, 'gene_340': 340, 'gene_341': 341, 'gene_342': 342, 'gene_343': 343, 'gene_344': 344, 'gene_345': 345, 'gene_346': 346, 'gene_347': 347, 'gene_348': 348, 'gene_349': 349, 'gene_350': 350, 'gene_351': 351, 'gene_352': 352, 'gene_353': 353, 'gene_354': 354, 'gene_355': 355, 'gene_356': 356, 'gene_357': 357, 'gene_358': 358, 'gene_359': 359, 'gene_360': 360, 'gene_361': 361, 'gene_362': 362, 'gene_363': 363, 'gene_364': 364, 'gene_365': 365, 'gene_366': 366, 'gene_367': 367, 'gene_368': 368, 'gene_369': 369, 'gene_370': 370, 'gene_371': 371, 'gene_372': 372, 'gene_373': 373, 'gene_374': 374, 'gene_375': 375, 'gene_376': 376, 'gene_377': 377, 'gene_378': 378, 'gene_379': 379, 'gene_380': 380, 'gene_381': 381, 'gene_382': 382, 'gene_383': 383, 'gene_384': 384, 'gene_385': 385, 'gene_386': 386, 'gene_387': 387, 'gene_388': 388, 'gene_389': 389, 'gene_390': 390, 'gene_391': 391, 'gene_392': 392, 'gene_393': 393, 'gene_394': 394, 'gene_395': 395, 'gene_396': 396, 'gene_397': 397, 'gene_398': 398, 'gene_399': 399, 'gene_400': 400, 'gene_401': 401, 'gene_402': 402, 'gene_403': 403, 'gene_404': 404, 'gene_405': 405, 'gene_406': 406, 'gene_407': 407, 'gene_408': 408, 'gene_409': 409, 'gene_410': 410, 'gene_411': 411, 'gene_412': 412, 'gene_413': 413, 'gene_414': 414, 'gene_415': 415, 'gene_416': 416, 'gene_417': 417, 'gene_418': 418, 'gene_419': 419, 'gene_420': 420, 'gene_421': 421, 'gene_422': 422, 'gene_423': 423, 'gene_424': 424, 'gene_425': 425, 'gene_426': 426, 'gene_427': 427, 'gene_428': 428, 'gene_429': 429, 'gene_430': 430, 'gene_431': 431, 'gene_432': 432, 'gene_433': 433, 'gene_434': 434, 'gene_435': 435, 'gene_436': 436, 'gene_437': 437, 'gene_438': 438, 'gene_439': 439, 'gene_440': 440, 'gene_441': 441, 'gene_442': 442, 'gene_443': 443, 'gene_444': 444, 'gene_445': 445, 'gene_446': 446, 'gene_447': 447, 'gene_448': 448, 'gene_449': 449, 'gene_450': 450, 'gene_451': 451, 'gene_452': 452, 'gene_453': 453, 'gene_454': 454, 'gene_455': 455, 'gene_456': 456, 'gene_457': 457, 'gene_458': 458, 'gene_459': 459, 'gene_460': 460, 'gene_461': 461, 'gene_462': 462, 'gene_463': 463, 'gene_464': 464, 'gene_465': 465, 'gene_466': 466, 'gene_467': 467, 'gene_468': 468, 'gene_469': 469, 'gene_470': 470, 'gene_471': 471, 'gene_472': 472, 'gene_473': 473, 'gene_474': 474, 'gene_475': 475, 'gene_476': 476, 'gene_477': 477, 'gene_478': 478, 'gene_479': 479, 'gene_480': 480, 'gene_481': 481, 'gene_482': 482, 'gene_483': 483, 'gene_484': 484, 'gene_485': 485, 'gene_486': 486, 'gene_487': 487, 'gene_488': 488, 'gene_489': 489, 'gene_490': 490, 'gene_491': 491, 'gene_492': 492, 'gene_493': 493, 'gene_494': 494, 'gene_495': 495, 'gene_496': 496, 'gene_497': 497, 'gene_498': 498, 'gene_499': 499, 'gene_500': 500, 'gene_501': 501, 'gene_502': 502, 'gene_503': 503, 'gene_504': 504, 'gene_505': 505, 'gene_506': 506, 'gene_507': 507, 'gene_508': 508, 'gene_509': 509, 'gene_510': 510, 'gene_511': 511, 'gene_512': 512, 'gene_513': 513, 'gene_514': 514, 'gene_515': 515, 'gene_516': 516, 'gene_517': 517, 'gene_518': 518, 'gene_519': 519, 'gene_520': 520, 'gene_521': 521, 'gene_522': 522, 'gene_523': 523, 'gene_524': 524, 'gene_525': 525, 'gene_526': 526, 'gene_527': 527, 'gene_528': 528, 'gene_529': 529, 'gene_530': 530, 'gene_531': 531, 'gene_532': 532, 'gene_533': 533, 'gene_534': 534, 'gene_535': 535, 'gene_536': 536, 'gene_537': 537, 'gene_538': 538, 'gene_539': 539, 'gene_540': 540, 'gene_541': 541, 'gene_542': 542, 'gene_543': 543, 'gene_544': 544, 'gene_545': 545, 'gene_546': 546, 'gene_547': 547, 'gene_548': 548, 'gene_549': 549, 'gene_550': 550, 'gene_551': 551, 'gene_552': 552, 'gene_553': 553, 'gene_554': 554, 'gene_555': 555, 'gene_556': 556, 'gene_557': 557, 'gene_558': 558, 'gene_559': 559, 'gene_560': 560, 'gene_561': 561, 'gene_562': 562, 'gene_563': 563, 'gene_564': 564, 'gene_565': 565, 'gene_566': 566, 'gene_567': 567, 'gene_568': 568, 'gene_569': 569, 'gene_570': 570, 'gene_571': 571, 'gene_572': 572, 'gene_573': 573, 'gene_574': 574, 'gene_575': 575, 'gene_576': 576, 'gene_577': 577, 'gene_578': 578, 'gene_579': 579, 'gene_580': 580, 'gene_581': 581, 'gene_582': 582, 'gene_583': 583, 'gene_584': 584, 'gene_585': 585, 'gene_586': 586, 'gene_587': 587, 'gene_588': 588, 'gene_589': 589, 'gene_590': 590, 'gene_591': 591, 'gene_592': 592, 'gene_593': 593, 'gene_594': 594, 'gene_595': 595, 'gene_596': 596, 'gene_597': 597, 'gene_598': 598, 'gene_599': 599, 'gene_600': 600, 'gene_601': 601, 'gene_602': 602, 'gene_603': 603, 'gene_604': 604, 'gene_605': 605, 'gene_606': 606, 'gene_607': 607, 'gene_608': 608, 'gene_609': 609, 'gene_610': 610, 'gene_611': 611, 'gene_612': 612, 'gene_613': 613, 'gene_614': 614, 'gene_615': 615, 'gene_616': 616, 'gene_617': 617, 'gene_618': 618, 'gene_619': 619, 'gene_620': 620, 'gene_621': 621, 'gene_622': 622, 'gene_623': 623, 'gene_624': 624, 'gene_625': 625, 'gene_626': 626, 'gene_627': 627, 'gene_628': 628, 'gene_629': 629, 'gene_630': 630, 'gene_631': 631, 'gene_632': 632, 'gene_633': 633, 'gene_634': 634, 'gene_635': 635, 'gene_636': 636, 'gene_637': 637, 'gene_638': 638, 'gene_639': 639, 'gene_640': 640, '<sep>': 642, '<pad>': 643, '<mask>': 644}, hidden_size=1280, num_hidden_layers=36, num_attention_heads=32, intermediate_size=5120, hidden_act='gelu', hidden_dropout_prob=0.1, cell_hidden_size=128, attention_probs_dropout_prob=0.1, max_position_embeddings=641, type_vocab_size=2, initializer_range=0.02, layer_norm_eps=1e-12, use_batch_labels=False, num_batch_labels=62223, use_species_labels=True, num_species_labels=29, use_tissue_labels=True, num_tissue_labels=336, use_seqmethod_labels=True, num_seqmethod_labels=30, use_disease_labels=True, num_disease_labels=1921, use_sex_labels=True, num_sex_labels=3, use_age_labels=True, num_age_labels=5, cell_emb_style='cls', do_mvc=True, do_cls=False, domain_specific_bn=False, do_adbc=False, _attn_implementation='eager', mvc_decoder_style='inner product', num_cls=1, chunk_size_feed_forward=0, explicit_zero_prob=True)
+2026-05-07 01:10:53 INFO node=0 rank=0 local_rank=0 pid=366483 experiment_controls amp_dtype=bfloat16 static_gene_dtype=float32 train_mvc=True gradient_checkpointing=True memory_log_interval=0 tensor_shape_log_interval=0 max_train_steps=0 skip_final_save=False ddp_find_unused_parameters=False
+2026-05-07 01:10:53 INFO node=0 rank=0 local_rank=0 pid=366483 output_dir=/data/disk1/SpeciesLLM/training_output_1b_test_from_scratch_20260507_010520 remote_output_dir=
+2026-05-07 01:10:53 INFO node=0 rank=0 local_rank=0 pid=366483 ddp=True rank=0 local_rank=0 world_size=24 master_process=True device=npu:0 tokens_per_epoch=983040
+2026-05-07 01:11:58 INFO node=0 rank=0 local_rank=0 pid=366483 save_step_interval=3333 save_data_interval=5120000 world_size=24 batch_size=64
+2026-05-07 01:11:58 INFO node=0 rank=0 local_rank=0 pid=366483 [Node 0 Rank 0] will read files: ['all_flatten_part_27.parquet', 'all_flatten_part_94.parquet', 'all_flatten_part_65.parquet', 'all_flatten_part_61.parquet', 'all_flatten_part_29.parquet']
+2026-05-07 01:12:02 INFO node=0 rank=0 local_rank=0 pid=366483 [Node 0 Rank 0] total rows read: 81920
+2026-05-07 01:12:02 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, Rank: 0, Epoch: 0, Data: ['all_flatten_part_27.parquet', 'all_flatten_part_94.parquet', 'all_flatten_part_65.parquet', 'all_flatten_part_61.parquet', 'all_flatten_part_29.parquet']
+2026-05-07 01:12:03 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0 Rank: 0 num_batches=1280 max_batch_index=1280
+2026-05-07 01:12:15 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 1/1280], loss: 669.9587, time 12181.40ms, mfu: NA, cluster_loss_mean=706.5080, cluster_step_max_ms=14697.72
+2026-05-07 01:12:15 INFO node=0 rank=0 local_rank=0 pid=366483 profile epoch=1 batch=1 lr_s=0.0001 data_load_s=3.4872 to_device_s=0.0024 forward_s=0.8046 loss_s=1.3444 backward_s=0.4675 optimizer_s=1.6471 grad_sync_s=0.0000
+2026-05-07 01:13:18 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 11/1280], loss: 607.4096, time 6266.59ms, mfu: NA, cluster_loss_mean=606.8559, cluster_step_max_ms=6301.26
+2026-05-07 01:14:20 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 21/1280], loss: 493.1216, time 6267.89ms, mfu: NA, cluster_loss_mean=537.2574, cluster_step_max_ms=6293.66
+2026-05-07 01:15:23 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 31/1280], loss: 351.0333, time 6281.40ms, mfu: NA, cluster_loss_mean=420.7564, cluster_step_max_ms=6295.07
+2026-05-07 01:16:27 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 41/1280], loss: 333.2495, time 6296.04ms, mfu: NA, cluster_loss_mean=408.5569, cluster_step_max_ms=6322.01
+2026-05-07 01:17:30 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 51/1280], loss: 345.7639, time 6311.26ms, mfu: NA, cluster_loss_mean=393.9346, cluster_step_max_ms=6311.93
+2026-05-07 01:18:33 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 61/1280], loss: 394.6259, time 6254.53ms, mfu: NA, cluster_loss_mean=417.7494, cluster_step_max_ms=6289.07
+2026-05-07 01:19:35 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 71/1280], loss: 363.5130, time 6265.59ms, mfu: NA, cluster_loss_mean=397.3139, cluster_step_max_ms=6288.47
+2026-05-07 01:20:38 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 81/1280], loss: 381.5103, time 6298.00ms, mfu: NA, cluster_loss_mean=355.8607, cluster_step_max_ms=6298.53
+2026-05-07 01:21:41 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 91/1280], loss: 195.7352, time 6270.49ms, mfu: NA, cluster_loss_mean=327.6441, cluster_step_max_ms=6290.10
+2026-05-07 01:22:44 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 101/1280], loss: 379.7360, time 6250.10ms, mfu: 9.96%, cluster_loss_mean=346.7603, cluster_step_max_ms=6280.50
+2026-05-07 01:22:44 INFO node=0 rank=0 local_rank=0 pid=366483 profile epoch=1 batch=101 lr_s=0.0000 data_load_s=3.4872 to_device_s=0.0025 forward_s=1.6319 loss_s=3.5277 backward_s=0.2791 optimizer_s=0.7772 grad_sync_s=0.0000
+2026-05-07 01:23:47 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 111/1280], loss: 490.6726, time 6269.57ms, mfu: 9.96%, cluster_loss_mean=349.4266, cluster_step_max_ms=6305.41
+2026-05-07 01:24:49 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 121/1280], loss: 239.5083, time 6276.03ms, mfu: 9.96%, cluster_loss_mean=322.6735, cluster_step_max_ms=6299.20
+2026-05-07 01:25:52 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 131/1280], loss: 413.1904, time 6288.24ms, mfu: 9.96%, cluster_loss_mean=322.4791, cluster_step_max_ms=6291.20
+2026-05-07 01:26:55 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 141/1280], loss: 264.7575, time 6246.37ms, mfu: 9.96%, cluster_loss_mean=339.5315, cluster_step_max_ms=6280.15
+2026-05-07 01:27:57 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 151/1280], loss: 311.0748, time 6264.76ms, mfu: 9.96%, cluster_loss_mean=285.3146, cluster_step_max_ms=6292.09
+2026-05-07 01:29:01 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 161/1280], loss: 345.3014, time 6245.96ms, mfu: 9.96%, cluster_loss_mean=324.9573, cluster_step_max_ms=6293.60
+2026-05-07 01:30:03 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 171/1280], loss: 383.6124, time 6266.32ms, mfu: 9.96%, cluster_loss_mean=314.1666, cluster_step_max_ms=6290.80
+2026-05-07 01:31:06 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 181/1280], loss: 269.8633, time 6264.83ms, mfu: 9.96%, cluster_loss_mean=293.3048, cluster_step_max_ms=6287.94
+2026-05-07 01:32:09 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 191/1280], loss: 179.4805, time 6289.63ms, mfu: 9.96%, cluster_loss_mean=268.3015, cluster_step_max_ms=6290.43
+2026-05-07 01:33:12 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 201/1280], loss: 257.1767, time 6265.70ms, mfu: 9.96%, cluster_loss_mean=281.3609, cluster_step_max_ms=6292.24
+2026-05-07 01:33:12 INFO node=0 rank=0 local_rank=0 pid=366483 profile epoch=1 batch=201 lr_s=0.0000 data_load_s=3.4872 to_device_s=0.0306 forward_s=1.6520 loss_s=3.5265 backward_s=0.2801 optimizer_s=0.7738 grad_sync_s=0.0000
+2026-05-07 01:34:15 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 211/1280], loss: 290.7281, time 6285.75ms, mfu: 9.96%, cluster_loss_mean=268.8918, cluster_step_max_ms=6288.10
+2026-05-07 01:35:18 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 221/1280], loss: 181.1228, time 6244.30ms, mfu: 9.96%, cluster_loss_mean=285.0037, cluster_step_max_ms=6291.26
+2026-05-07 01:36:20 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 231/1280], loss: 377.6731, time 6267.27ms, mfu: 9.96%, cluster_loss_mean=262.4346, cluster_step_max_ms=6290.33
+2026-05-07 01:37:23 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 241/1280], loss: 192.5234, time 6276.57ms, mfu: 9.96%, cluster_loss_mean=241.6924, cluster_step_max_ms=6301.31
+2026-05-07 01:38:26 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 251/1280], loss: 240.0953, time 6286.55ms, mfu: 9.96%, cluster_loss_mean=267.1413, cluster_step_max_ms=6296.00
+2026-05-07 01:39:29 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 261/1280], loss: 424.9283, time 6248.50ms, mfu: 9.96%, cluster_loss_mean=254.2450, cluster_step_max_ms=6278.82
+2026-05-07 01:40:31 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 271/1280], loss: 206.4636, time 6263.41ms, mfu: 9.96%, cluster_loss_mean=246.9729, cluster_step_max_ms=6291.38
+2026-05-07 01:41:35 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 281/1280], loss: 264.5781, time 6266.46ms, mfu: 9.96%, cluster_loss_mean=279.1749, cluster_step_max_ms=6293.59
+2026-05-07 01:42:38 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 291/1280], loss: 250.0469, time 6276.42ms, mfu: 9.96%, cluster_loss_mean=243.8351, cluster_step_max_ms=6301.38
+2026-05-07 01:43:40 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 301/1280], loss: 284.8925, time 6284.99ms, mfu: 9.95%, cluster_loss_mean=245.2620, cluster_step_max_ms=6299.99
+2026-05-07 01:43:40 INFO node=0 rank=0 local_rank=0 pid=366483 profile epoch=1 batch=301 lr_s=0.0000 data_load_s=3.4872 to_device_s=0.0009 forward_s=1.6806 loss_s=3.5296 backward_s=0.2838 optimizer_s=0.7875 grad_sync_s=0.0000
+2026-05-07 01:44:43 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 311/1280], loss: 188.1000, time 6246.97ms, mfu: 9.95%, cluster_loss_mean=246.9348, cluster_step_max_ms=6291.98
+2026-05-07 01:45:46 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 321/1280], loss: 247.5088, time 6271.10ms, mfu: 9.95%, cluster_loss_mean=258.2030, cluster_step_max_ms=6285.96
+2026-05-07 01:46:49 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 331/1280], loss: 196.5901, time 6262.40ms, mfu: 9.95%, cluster_loss_mean=229.9290, cluster_step_max_ms=6292.33
+2026-05-07 01:47:52 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 341/1280], loss: 258.8325, time 6274.14ms, mfu: 9.95%, cluster_loss_mean=242.2846, cluster_step_max_ms=6302.23
+2026-05-07 01:48:55 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 351/1280], loss: 167.6350, time 6267.54ms, mfu: 9.95%, cluster_loss_mean=231.4673, cluster_step_max_ms=6290.43
+2026-05-07 01:49:57 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 361/1280], loss: 279.5082, time 6300.05ms, mfu: 9.95%, cluster_loss_mean=248.5560, cluster_step_max_ms=6314.91
+2026-05-07 01:51:00 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 371/1280], loss: 449.7630, time 6273.01ms, mfu: 9.95%, cluster_loss_mean=250.0470, cluster_step_max_ms=6301.10
+2026-05-07 01:52:03 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 381/1280], loss: 271.7673, time 6270.48ms, mfu: 9.95%, cluster_loss_mean=234.5806, cluster_step_max_ms=6282.37
+2026-05-07 01:53:06 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 391/1280], loss: 277.4839, time 6289.94ms, mfu: 9.95%, cluster_loss_mean=251.9265, cluster_step_max_ms=6294.02
+2026-05-07 01:54:08 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 401/1280], loss: 202.3143, time 6241.77ms, mfu: 9.95%, cluster_loss_mean=243.2317, cluster_step_max_ms=6295.29
+2026-05-07 01:54:08 INFO node=0 rank=0 local_rank=0 pid=366483 profile epoch=1 batch=401 lr_s=0.0000 data_load_s=3.4872 to_device_s=0.0026 forward_s=1.6316 loss_s=3.5320 backward_s=0.2832 optimizer_s=0.7787 grad_sync_s=0.0000
+2026-05-07 01:55:11 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 411/1280], loss: 213.2829, time 6271.99ms, mfu: 9.95%, cluster_loss_mean=223.9090, cluster_step_max_ms=6297.93
+2026-05-07 01:56:14 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 421/1280], loss: 263.1197, time 6298.57ms, mfu: 9.95%, cluster_loss_mean=229.5417, cluster_step_max_ms=6302.96
+2026-05-07 01:57:17 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 431/1280], loss: 234.2334, time 6262.76ms, mfu: 9.95%, cluster_loss_mean=230.9763, cluster_step_max_ms=6301.68
+2026-05-07 01:58:19 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 441/1280], loss: 322.0552, time 6261.87ms, mfu: 9.95%, cluster_loss_mean=239.9638, cluster_step_max_ms=6291.31
+2026-05-07 01:59:22 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 451/1280], loss: 223.1826, time 6264.86ms, mfu: 9.95%, cluster_loss_mean=233.5871, cluster_step_max_ms=6290.30
+2026-05-07 02:00:25 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 461/1280], loss: 200.0044, time 6268.90ms, mfu: 9.95%, cluster_loss_mean=209.2581, cluster_step_max_ms=6292.81
+2026-05-07 02:01:27 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 471/1280], loss: 235.7764, time 6305.17ms, mfu: 9.95%, cluster_loss_mean=219.6617, cluster_step_max_ms=6307.92
+2026-05-07 02:02:30 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 481/1280], loss: 231.7786, time 6247.82ms, mfu: 9.95%, cluster_loss_mean=215.8857, cluster_step_max_ms=6304.63
+2026-05-07 02:03:33 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 491/1280], loss: 291.7246, time 6265.20ms, mfu: 9.95%, cluster_loss_mean=233.6148, cluster_step_max_ms=6289.74
+2026-05-07 02:04:36 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 501/1280], loss: 163.3933, time 6290.10ms, mfu: 9.95%, cluster_loss_mean=219.6335, cluster_step_max_ms=6291.50
+2026-05-07 02:04:36 INFO node=0 rank=0 local_rank=0 pid=366483 profile epoch=1 batch=501 lr_s=0.0000 data_load_s=3.4872 to_device_s=0.0011 forward_s=1.6814 loss_s=3.5278 backward_s=0.2832 optimizer_s=0.7939 grad_sync_s=0.0000
+2026-05-07 02:05:39 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 511/1280], loss: 226.6153, time 6248.72ms, mfu: 9.95%, cluster_loss_mean=236.2498, cluster_step_max_ms=6293.84
+2026-05-07 02:06:41 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 521/1280], loss: 185.2724, time 6288.11ms, mfu: 9.95%, cluster_loss_mean=245.9137, cluster_step_max_ms=6311.65
+2026-05-07 02:07:44 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 531/1280], loss: 232.7011, time 6266.70ms, mfu: 9.95%, cluster_loss_mean=215.0127, cluster_step_max_ms=6269.85
+2026-05-07 02:08:47 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 541/1280], loss: 142.3849, time 6287.52ms, mfu: 9.95%, cluster_loss_mean=233.2059, cluster_step_max_ms=6290.74
+2026-05-07 02:09:49 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 551/1280], loss: 171.0288, time 6252.05ms, mfu: 9.95%, cluster_loss_mean=218.3536, cluster_step_max_ms=6296.33
+2026-05-07 02:10:52 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 561/1280], loss: 224.7171, time 6275.34ms, mfu: 9.95%, cluster_loss_mean=226.3954, cluster_step_max_ms=6299.70
+2026-05-07 02:11:55 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 571/1280], loss: 193.9159, time 6276.87ms, mfu: 9.95%, cluster_loss_mean=221.6380, cluster_step_max_ms=6298.81
+2026-05-07 02:12:58 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 581/1280], loss: 151.3616, time 6275.71ms, mfu: 9.95%, cluster_loss_mean=218.3124, cluster_step_max_ms=6299.48
+2026-05-07 02:14:01 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 591/1280], loss: 150.0305, time 6299.28ms, mfu: 9.95%, cluster_loss_mean=224.1208, cluster_step_max_ms=6299.28
+2026-05-07 02:15:04 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 601/1280], loss: 220.7580, time 6274.11ms, mfu: 9.94%, cluster_loss_mean=220.3629, cluster_step_max_ms=6288.65
+2026-05-07 02:15:04 INFO node=0 rank=0 local_rank=0 pid=366483 profile epoch=1 batch=601 lr_s=0.0000 data_load_s=3.4872 to_device_s=0.0010 forward_s=1.6813 loss_s=3.5266 backward_s=0.2776 optimizer_s=0.7850 grad_sync_s=0.0000
+2026-05-07 02:16:06 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 611/1280], loss: 158.6994, time 6262.24ms, mfu: 9.94%, cluster_loss_mean=216.6760, cluster_step_max_ms=6291.50
+2026-05-07 02:17:09 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 621/1280], loss: 302.2544, time 6287.67ms, mfu: 9.94%, cluster_loss_mean=214.5765, cluster_step_max_ms=6313.97
+2026-05-07 02:18:12 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 631/1280], loss: 389.1764, time 6266.63ms, mfu: 9.94%, cluster_loss_mean=221.1707, cluster_step_max_ms=6289.44
+2026-05-07 02:19:15 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 641/1280], loss: 189.1470, time 6256.36ms, mfu: 9.94%, cluster_loss_mean=211.9524, cluster_step_max_ms=6292.47
+2026-05-07 02:20:17 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 651/1280], loss: 190.1050, time 6257.16ms, mfu: 9.94%, cluster_loss_mean=213.4529, cluster_step_max_ms=6292.08
+2026-05-07 02:21:20 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 661/1280], loss: 227.7782, time 6269.03ms, mfu: 9.94%, cluster_loss_mean=231.4145, cluster_step_max_ms=6298.01
+2026-05-07 02:22:23 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 671/1280], loss: 184.2034, time 6256.06ms, mfu: 9.94%, cluster_loss_mean=231.0643, cluster_step_max_ms=6303.35
+2026-05-07 02:23:26 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 681/1280], loss: 278.3885, time 6276.52ms, mfu: 9.94%, cluster_loss_mean=221.1171, cluster_step_max_ms=6298.64
+2026-05-07 02:24:29 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 691/1280], loss: 283.3501, time 6276.80ms, mfu: 9.94%, cluster_loss_mean=221.0913, cluster_step_max_ms=6301.10
+2026-05-07 02:25:32 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 701/1280], loss: 208.1966, time 6273.91ms, mfu: 9.94%, cluster_loss_mean=216.5643, cluster_step_max_ms=6286.73
+2026-05-07 02:25:32 INFO node=0 rank=0 local_rank=0 pid=366483 profile epoch=1 batch=701 lr_s=0.0000 data_load_s=3.4872 to_device_s=0.0028 forward_s=1.6319 loss_s=3.5270 backward_s=0.2788 optimizer_s=0.7837 grad_sync_s=0.0000
+2026-05-07 02:26:34 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 711/1280], loss: 194.6691, time 6264.88ms, mfu: 9.94%, cluster_loss_mean=215.3095, cluster_step_max_ms=6292.01
+2026-05-07 02:27:37 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 721/1280], loss: 191.0193, time 6271.56ms, mfu: 9.94%, cluster_loss_mean=219.2653, cluster_step_max_ms=6296.03
+2026-05-07 02:28:40 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 731/1280], loss: 231.4287, time 6266.36ms, mfu: 9.94%, cluster_loss_mean=222.0808, cluster_step_max_ms=6289.40
+2026-05-07 02:29:43 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 741/1280], loss: 257.0496, time 6271.53ms, mfu: 9.94%, cluster_loss_mean=210.4719, cluster_step_max_ms=6295.25
+2026-05-07 02:30:45 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 751/1280], loss: 180.7319, time 6265.73ms, mfu: 9.94%, cluster_loss_mean=208.6748, cluster_step_max_ms=6277.44
+2026-05-07 02:31:48 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 761/1280], loss: 243.6759, time 6256.57ms, mfu: 9.94%, cluster_loss_mean=219.7160, cluster_step_max_ms=6303.58
+2026-05-07 02:32:51 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 771/1280], loss: 239.1721, time 6275.70ms, mfu: 9.94%, cluster_loss_mean=219.8074, cluster_step_max_ms=6295.62
+2026-05-07 02:33:54 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 781/1280], loss: 331.5022, time 6297.27ms, mfu: 9.94%, cluster_loss_mean=235.6155, cluster_step_max_ms=6300.92
+2026-05-07 02:34:57 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 791/1280], loss: 170.5759, time 6244.29ms, mfu: 9.94%, cluster_loss_mean=209.5483, cluster_step_max_ms=6294.27
+2026-05-07 02:35:59 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 801/1280], loss: 214.1163, time 6266.46ms, mfu: 9.94%, cluster_loss_mean=210.3212, cluster_step_max_ms=6289.71
+2026-05-07 02:35:59 INFO node=0 rank=0 local_rank=0 pid=366483 profile epoch=1 batch=801 lr_s=0.0000 data_load_s=3.4872 to_device_s=0.0100 forward_s=1.6376 loss_s=3.5254 backward_s=0.2777 optimizer_s=0.7777 grad_sync_s=0.0000
+2026-05-07 02:37:02 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 811/1280], loss: 157.3101, time 6267.03ms, mfu: 9.94%, cluster_loss_mean=206.6855, cluster_step_max_ms=6291.21
+2026-05-07 02:38:05 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 821/1280], loss: 151.4047, time 6289.10ms, mfu: 9.94%, cluster_loss_mean=201.1479, cluster_step_max_ms=6289.72
+2026-05-07 02:39:08 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 831/1280], loss: 182.6807, time 6285.09ms, mfu: 9.94%, cluster_loss_mean=217.1974, cluster_step_max_ms=6302.52
+2026-05-07 02:40:10 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 841/1280], loss: 152.0796, time 6271.85ms, mfu: 9.94%, cluster_loss_mean=211.6114, cluster_step_max_ms=6300.21
+2026-05-07 02:41:13 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 851/1280], loss: 180.2546, time 6274.50ms, mfu: 9.94%, cluster_loss_mean=204.2696, cluster_step_max_ms=6298.52
+2026-05-07 02:42:17 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 861/1280], loss: 197.5727, time 6252.85ms, mfu: 9.94%, cluster_loss_mean=189.1003, cluster_step_max_ms=6289.84
+2026-05-07 02:43:20 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 871/1280], loss: 182.0286, time 6276.33ms, mfu: 9.94%, cluster_loss_mean=204.9692, cluster_step_max_ms=6301.40
+2026-05-07 02:44:23 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 881/1280], loss: 210.1517, time 6275.69ms, mfu: 9.94%, cluster_loss_mean=218.6856, cluster_step_max_ms=6302.82
+2026-05-07 02:45:25 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 891/1280], loss: 258.1788, time 6289.10ms, mfu: 9.94%, cluster_loss_mean=225.7968, cluster_step_max_ms=6289.10
+2026-05-07 02:46:28 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 901/1280], loss: 199.2327, time 6231.58ms, mfu: 9.95%, cluster_loss_mean=217.8945, cluster_step_max_ms=6289.45
+2026-05-07 02:46:28 INFO node=0 rank=0 local_rank=0 pid=366483 profile epoch=1 batch=901 lr_s=0.0000 data_load_s=3.4872 to_device_s=0.0025 forward_s=1.6319 loss_s=3.5265 backward_s=0.2878 optimizer_s=0.7694 grad_sync_s=0.0000
+2026-05-07 02:47:31 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 911/1280], loss: 156.7443, time 6273.09ms, mfu: 9.95%, cluster_loss_mean=197.5428, cluster_step_max_ms=6298.91
+2026-05-07 02:48:33 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 921/1280], loss: 265.4908, time 6266.60ms, mfu: 9.95%, cluster_loss_mean=208.4064, cluster_step_max_ms=6290.32
+2026-05-07 02:49:36 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 931/1280], loss: 179.8464, time 6288.69ms, mfu: 9.95%, cluster_loss_mean=208.2514, cluster_step_max_ms=6290.33
+2026-05-07 02:50:39 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 941/1280], loss: 222.1531, time 6246.79ms, mfu: 9.95%, cluster_loss_mean=216.8611, cluster_step_max_ms=6291.05
+2026-05-07 02:51:42 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 951/1280], loss: 245.3497, time 6273.97ms, mfu: 9.95%, cluster_loss_mean=206.7158, cluster_step_max_ms=6297.28
+2026-05-07 02:52:45 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 961/1280], loss: 229.3513, time 6251.25ms, mfu: 9.95%, cluster_loss_mean=233.0193, cluster_step_max_ms=6290.42
+2026-05-07 02:53:47 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 971/1280], loss: 254.1986, time 6260.76ms, mfu: 9.95%, cluster_loss_mean=213.9344, cluster_step_max_ms=6291.10
+2026-05-07 02:54:50 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 981/1280], loss: 222.3972, time 6266.82ms, mfu: 9.95%, cluster_loss_mean=206.7542, cluster_step_max_ms=6291.26
+2026-05-07 02:55:53 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 991/1280], loss: 185.5103, time 6270.97ms, mfu: 9.95%, cluster_loss_mean=205.4426, cluster_step_max_ms=6293.97
+2026-05-07 02:56:56 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 1001/1280], loss: 180.8518, time 6284.49ms, mfu: 9.94%, cluster_loss_mean=206.5919, cluster_step_max_ms=6294.77
+2026-05-07 02:56:56 INFO node=0 rank=0 local_rank=0 pid=366483 profile epoch=1 batch=1001 lr_s=0.0000 data_load_s=3.4872 to_device_s=0.0012 forward_s=1.6809 loss_s=3.5319 backward_s=0.2767 optimizer_s=0.7913 grad_sync_s=0.0000
+2026-05-07 02:57:58 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 1011/1280], loss: 146.4939, time 6243.41ms, mfu: 9.94%, cluster_loss_mean=210.7236, cluster_step_max_ms=6287.20
+2026-05-07 02:59:01 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 1021/1280], loss: 234.6078, time 6264.60ms, mfu: 9.94%, cluster_loss_mean=219.6693, cluster_step_max_ms=6275.38
+2026-05-07 03:00:04 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 1031/1280], loss: 189.4207, time 6247.24ms, mfu: 9.94%, cluster_loss_mean=216.8397, cluster_step_max_ms=6291.34
+2026-05-07 03:01:07 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 1041/1280], loss: 192.3204, time 6271.76ms, mfu: 9.94%, cluster_loss_mean=199.6648, cluster_step_max_ms=6294.81
+2026-05-07 03:02:10 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 1051/1280], loss: 145.1010, time 6291.02ms, mfu: 9.94%, cluster_loss_mean=208.7667, cluster_step_max_ms=6292.98
+2026-05-07 03:03:13 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 1061/1280], loss: 175.2492, time 6245.61ms, mfu: 9.94%, cluster_loss_mean=216.3481, cluster_step_max_ms=6289.69
+2026-05-07 03:04:15 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 1071/1280], loss: 229.1819, time 6263.78ms, mfu: 9.94%, cluster_loss_mean=208.2260, cluster_step_max_ms=6290.66
+2026-05-07 03:05:18 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 1081/1280], loss: 208.3145, time 6276.20ms, mfu: 9.94%, cluster_loss_mean=227.7736, cluster_step_max_ms=6299.82
+2026-05-07 03:06:21 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 1091/1280], loss: 337.3500, time 6291.07ms, mfu: 9.94%, cluster_loss_mean=213.3157, cluster_step_max_ms=6291.20
+2026-05-07 03:07:24 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 1101/1280], loss: 191.5991, time 6254.58ms, mfu: 9.94%, cluster_loss_mean=199.5936, cluster_step_max_ms=6300.86
+2026-05-07 03:07:24 INFO node=0 rank=0 local_rank=0 pid=366483 profile epoch=1 batch=1101 lr_s=0.0000 data_load_s=3.4872 to_device_s=0.0025 forward_s=1.6319 loss_s=3.5372 backward_s=0.2736 optimizer_s=0.7817 grad_sync_s=0.0000
+2026-05-07 03:08:27 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 1111/1280], loss: 336.2205, time 6266.92ms, mfu: 9.94%, cluster_loss_mean=193.4605, cluster_step_max_ms=6292.23
+2026-05-07 03:09:30 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 1121/1280], loss: 306.1763, time 6265.66ms, mfu: 9.94%, cluster_loss_mean=202.7148, cluster_step_max_ms=6290.60
+2026-05-07 03:10:32 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 1131/1280], loss: 303.6844, time 6263.53ms, mfu: 9.94%, cluster_loss_mean=217.8772, cluster_step_max_ms=6291.56
+2026-05-07 03:11:35 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 1141/1280], loss: 137.7727, time 6287.43ms, mfu: 9.94%, cluster_loss_mean=199.1565, cluster_step_max_ms=6287.43
+2026-05-07 03:12:38 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 1151/1280], loss: 181.1714, time 6244.64ms, mfu: 9.94%, cluster_loss_mean=205.4336, cluster_step_max_ms=6292.32
+2026-05-07 03:13:41 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 1161/1280], loss: 182.1589, time 6277.33ms, mfu: 9.94%, cluster_loss_mean=209.0163, cluster_step_max_ms=6306.00
+2026-05-07 03:14:44 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 1171/1280], loss: 175.4423, time 6265.06ms, mfu: 9.94%, cluster_loss_mean=207.3943, cluster_step_max_ms=6291.15
+2026-05-07 03:15:46 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 1181/1280], loss: 139.1651, time 6275.72ms, mfu: 9.94%, cluster_loss_mean=211.0617, cluster_step_max_ms=6291.99
+2026-05-07 03:16:49 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 1191/1280], loss: 166.8395, time 6270.62ms, mfu: 9.94%, cluster_loss_mean=193.0870, cluster_step_max_ms=6300.47
+2026-05-07 03:17:52 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 1201/1280], loss: 290.1361, time 6265.21ms, mfu: 9.94%, cluster_loss_mean=210.8505, cluster_step_max_ms=6287.69
+2026-05-07 03:17:52 INFO node=0 rank=0 local_rank=0 pid=366483 profile epoch=1 batch=1201 lr_s=0.0000 data_load_s=3.4872 to_device_s=0.0298 forward_s=1.6377 loss_s=3.5250 backward_s=0.2771 optimizer_s=0.7778 grad_sync_s=0.0000
+2026-05-07 03:18:54 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 1211/1280], loss: 222.0333, time 6264.89ms, mfu: 9.94%, cluster_loss_mean=210.4113, cluster_step_max_ms=6283.89
+2026-05-07 03:19:57 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 1221/1280], loss: 108.6516, time 6246.09ms, mfu: 9.94%, cluster_loss_mean=219.3497, cluster_step_max_ms=6288.96
+2026-05-07 03:21:00 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 1231/1280], loss: 219.3996, time 6265.93ms, mfu: 9.94%, cluster_loss_mean=196.3755, cluster_step_max_ms=6291.10
+2026-05-07 03:22:03 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 1241/1280], loss: 193.8688, time 6272.95ms, mfu: 9.94%, cluster_loss_mean=204.1124, cluster_step_max_ms=6295.17
+2026-05-07 03:23:06 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 1251/1280], loss: 208.8065, time 6262.03ms, mfu: 9.94%, cluster_loss_mean=214.0695, cluster_step_max_ms=6291.45
+2026-05-07 03:24:08 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 1261/1280], loss: 196.3194, time 6265.76ms, mfu: 9.94%, cluster_loss_mean=196.3518, cluster_step_max_ms=6290.33
+2026-05-07 03:25:11 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 1271/1280], loss: 242.9082, time 6266.33ms, mfu: 9.94%, cluster_loss_mean=206.8721, cluster_step_max_ms=6291.46
+2026-05-07 03:26:08 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, rank: 0, [e: 1, 1280/1280], loss: 168.0251, time 6268.98ms, mfu: 9.94%, cluster_loss_mean=198.5685, cluster_step_max_ms=6292.05
+2026-05-07 03:26:08 INFO node=0 rank=0 local_rank=0 pid=366483 profile epoch=1 batch=1280 lr_s=0.0000 data_load_s=3.4872 to_device_s=0.0365 forward_s=1.6454 loss_s=3.5277 backward_s=0.2716 optimizer_s=0.7842 grad_sync_s=0.0000
+2026-05-07 03:26:08 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0, Rank: 0, Epoch [1/1], average loss is: 246.4314 | Learning rate is: 1.000015018095859e-06
+2026-05-07 03:26:08 INFO node=0 rank=0 local_rank=0 pid=366483 Node: 0 Rank: 0 1_lr 0.0359 2_epoch_dataloder 3.4872 3_step_batched_data 18.2366 5_forward 1916.3828 6_loss_gep 4.8188 7_loss_gep_zero_prob 4272.0410 8_backward 357.9361 9_step_update_grad 999.9027 10_sync 0.0000
+2026-05-07 03:26:29 INFO node=0 rank=0 local_rank=0 pid=366483 checkpoint_saved model=SC-node-00-rank-00-epoch-02-step-0-loss-0.000000.pt optimizer=SC-node-00-rank-00-epoch-02-step-0-loss-0.000000.optimizer.pt
+2026-05-07 03:26:29 INFO node=0 rank=0 local_rank=0 pid=366483 Complete pretraining! Running time is 8136.30s.
