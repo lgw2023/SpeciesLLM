@@ -40,8 +40,9 @@ from concurrent.futures import (
     as_completed,
     wait,
 )
+from functools import partial
 from pathlib import Path
-from typing import Dict, Iterable, Iterator, List, Optional, Tuple
+from typing import Dict, Iterable, Iterator, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -71,8 +72,43 @@ SCHEMA = pa.schema([
     ("idx", pa.int64()),
 ])
 SCHEMA_COLUMNS = [field.name for field in SCHEMA]
+PROVENANCE_SCHEMA = pa.schema([
+    ("source_file_id", pa.int64()),
+    ("source_batch_id", pa.int64()),
+])
+PROVENANCE_COLUMNS = [field.name for field in PROVENANCE_SCHEMA]
 SHUFFLE_KEY_COLUMN = "__shuffle_key"
-TEMP_SCHEMA = SCHEMA.append(pa.field(SHUFFLE_KEY_COLUMN, pa.float64()))
+SOURCE_MANIFEST_COLUMNS = [
+    "source_file_id",
+    "source_batch_id",
+    "batch_name",
+    "species",
+    "new_index",
+    "new_filename",
+    "original_index",
+    "source_path",
+    "target_path",
+    "status",
+    "size_bytes",
+]
+
+
+def schema_for_output(include_provenance: bool) -> pa.Schema:
+    if not include_provenance:
+        return SCHEMA
+    return pa.schema(list(SCHEMA) + list(PROVENANCE_SCHEMA))
+
+
+def columns_for_output(include_provenance: bool) -> List[str]:
+    if not include_provenance:
+        return list(SCHEMA_COLUMNS)
+    return list(SCHEMA_COLUMNS) + list(PROVENANCE_COLUMNS)
+
+
+def temp_schema_for_output(include_provenance: bool) -> pa.Schema:
+    return schema_for_output(include_provenance).append(
+        pa.field(SHUFFLE_KEY_COLUMN, pa.float64())
+    )
 
 
 def log_step(step_name: str, start_time: float) -> None:
@@ -141,6 +177,20 @@ def parse_args() -> argparse.Namespace:
         "--manifest-name",
         default="shuffle_manifest.csv",
         help="Output manifest CSV filename. Default: shuffle_manifest.csv",
+    )
+    parser.add_argument(
+        "--merge-manifest",
+        default=None,
+        help=(
+            "Optional merge_manifest.csv from merge_macrogene_rounds.py. "
+            "When provided, add source_file_id/source_batch_id columns to "
+            "output parquet rows and write a source manifest."
+        ),
+    )
+    parser.add_argument(
+        "--source-manifest-name",
+        default="source_manifest.csv",
+        help="Output source manifest CSV filename when --merge-manifest is provided. Default: source_manifest.csv",
     )
     parser.add_argument(
         "--shuffle-mode",
@@ -285,12 +335,129 @@ def validate_input_schemas(files: List[Path], validate_all: bool, workers: int) 
         validate_schema(files[0])
 
 
+def canonical_path_key(path: Union[Path, str]) -> str:
+    return str(Path(path).expanduser().resolve())
+
+
+def build_source_lookup(
+    merge_manifest_path: Path,
+    files: List[Path],
+) -> tuple[Dict[str, dict], List[dict]]:
+    required = set(SOURCE_MANIFEST_COLUMNS) - {"source_file_id", "source_batch_id"}
+    with merge_manifest_path.open(newline="", encoding="utf-8") as csvfile:
+        reader = csv.DictReader(csvfile)
+        if reader.fieldnames is None:
+            raise ValueError(f"Empty merge manifest: {merge_manifest_path}")
+        missing = sorted(required - set(reader.fieldnames))
+        if missing:
+            raise ValueError(
+                f"merge manifest is missing required columns: {merge_manifest_path}\n"
+                f"Missing columns: {missing}\n"
+                f"Found columns: {reader.fieldnames}"
+            )
+        manifest_by_target = {}
+        for row in reader:
+            target_key = canonical_path_key(row["target_path"])
+            if target_key in manifest_by_target:
+                raise ValueError(f"Duplicate target_path in merge manifest: {row['target_path']}")
+            manifest_by_target[target_key] = row
+
+    source_lookup: Dict[str, dict] = {}
+    source_rows: List[dict] = []
+    for source_file_id, file_path in enumerate(files):
+        key = canonical_path_key(file_path)
+        row = manifest_by_target.get(key)
+        if row is None:
+            raise ValueError(
+                f"Input parquet file is missing from merge manifest: {file_path}\n"
+                f"merge_manifest={merge_manifest_path}"
+            )
+        try:
+            source_batch_id = int(row["batch_order"])
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"Invalid batch_order for target_path={row['target_path']!r}: "
+                f"{row.get('batch_order')!r}"
+            ) from exc
+        entry = {
+            "source_file_id": int(source_file_id),
+            "source_batch_id": source_batch_id,
+            "batch_name": row["batch_name"],
+            "species": row["species"],
+            "new_index": row["new_index"],
+            "new_filename": row["new_filename"],
+            "original_index": row["original_index"],
+            "source_path": row["source_path"],
+            "target_path": row["target_path"],
+            "status": row["status"],
+            "size_bytes": row["size_bytes"],
+        }
+        source_lookup[key] = entry
+        source_rows.append(entry)
+    return source_lookup, source_rows
+
+
+def add_source_columns_pandas(df: pd.DataFrame, file_path: Path, source_lookup: Optional[Dict[str, dict]]) -> pd.DataFrame:
+    if not source_lookup:
+        return df
+    source = source_lookup[canonical_path_key(file_path)]
+    df["source_file_id"] = np.int64(source["source_file_id"])
+    df["source_batch_id"] = np.int64(source["source_batch_id"])
+    return df
+
+
+def add_source_columns_arrow(table: pa.Table, file_path: Union[Path, str], source_lookup: Optional[Dict[str, dict]]) -> pa.Table:
+    if not source_lookup:
+        return table
+    source = source_lookup[canonical_path_key(file_path)]
+    n = table.num_rows
+    return (
+        table
+        .append_column(
+            "source_file_id",
+            pa.array(np.full(n, source["source_file_id"], dtype=np.int64)),
+        )
+        .append_column(
+            "source_batch_id",
+            pa.array(np.full(n, source["source_batch_id"], dtype=np.int64)),
+        )
+    )
+
+
+def write_source_manifest(manifest_path: Path, rows: List[dict]) -> None:
+    with manifest_path.open("w", newline="", encoding="utf-8") as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=SOURCE_MANIFEST_COLUMNS)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def schema_has_provenance(schema: pa.Schema) -> bool:
+    names = set(schema.names)
+    return all(name in names for name in PROVENANCE_COLUMNS)
+
+
+def validate_existing_partition_schema(temp_dir: Path, include_provenance: bool) -> None:
+    sample = next(iter(sorted(temp_dir.glob("bucket_*_chunk_*.parquet"))), None)
+    if sample is None:
+        return
+    has_provenance = schema_has_provenance(pq.read_schema(sample))
+    if include_provenance != has_provenance:
+        expected = "with" if include_provenance else "without"
+        found = "with" if has_provenance else "without"
+        raise ValueError(
+            f"Existing external shuffle partition schema mismatch under {temp_dir}: "
+            f"expected {expected} provenance columns, found {found}. "
+            "Rerun without --skip-partition-if-exists or remove the temp directory."
+        )
+
+
 def parquet_num_rows(file_path: Path) -> int:
     return pq.ParquetFile(file_path).metadata.num_rows
 
 
-def read_parquet_file(file_path: Path) -> pd.DataFrame:
-    return pd.read_parquet(file_path, engine="pyarrow", columns=SCHEMA_COLUMNS)
+def read_parquet_file(file_path: Path, source_lookup: Optional[Dict[str, dict]] = None) -> pd.DataFrame:
+    df = pd.read_parquet(file_path, engine="pyarrow", columns=SCHEMA_COLUMNS)
+    return add_source_columns_pandas(df, file_path, source_lookup)
 
 
 def progress_iter(iterable, total: int, desc: str):
@@ -317,10 +484,15 @@ def count_rows(files: List[Path], workers: int) -> int:
     return int(sum(row_counts))
 
 
-def read_all_data(files: List[Path], workers: int) -> pd.DataFrame:
+def read_all_data(
+    files: List[Path],
+    workers: int,
+    source_lookup: Optional[Dict[str, dict]] = None,
+) -> pd.DataFrame:
     start = time.time()
     print(f"[INFO] Reading {len(files)} parquet files with workers={workers}", flush=True)
-    frames = run_parallel(read_parquet_file, files, workers, desc="read parquet")
+    reader = partial(read_parquet_file, source_lookup=source_lookup)
+    frames = run_parallel(reader, files, workers, desc="read parquet")
     df = pd.concat(frames, ignore_index=True, copy=False)
     log_step("Load Parquet with Pandas", start)
     return df
@@ -379,6 +551,7 @@ def write_shuffled_chunks(
     compression: str,
     manifest_name: str,
     drop_remainder: bool,
+    include_provenance: bool,
 ) -> None:
     start = time.time()
     total_rows = len(df)
@@ -404,7 +577,12 @@ def write_shuffled_chunks(
         chunk = df.iloc[start_row:end_row]
         output_name = f"{output_prefix}{i}.parquet"
         output_path = output_dir / output_name
-        table = pa.Table.from_pandas(chunk, schema=SCHEMA, preserve_index=False)
+        output_columns = columns_for_output(include_provenance)
+        table = pa.Table.from_pandas(
+            chunk[output_columns],
+            schema=schema_for_output(include_provenance),
+            preserve_index=False,
+        )
         pq.write_table(table, output_path, compression=compression)
         manifest_rows.append({
             "output_file": output_name,
@@ -423,11 +601,17 @@ def write_output_chunk(
     output_prefix: str,
     output_index: int,
     compression: str,
+    include_provenance: bool,
 ) -> str:
     output_name = f"{output_prefix}{output_index}.parquet"
     output_path = output_dir / output_name
-    chunk = chunk[SCHEMA_COLUMNS]
-    table = pa.Table.from_pandas(chunk, schema=SCHEMA, preserve_index=False)
+    output_columns = columns_for_output(include_provenance)
+    chunk = chunk[output_columns]
+    table = pa.Table.from_pandas(
+        chunk,
+        schema=schema_for_output(include_provenance),
+        preserve_index=False,
+    )
     pq.write_table(table, output_path, compression=compression)
     return output_name
 
@@ -449,6 +633,7 @@ def _partition_chunk_for_external(
     seed: int,
     buckets: int,
     temp_dir: str,
+    source_lookup: Optional[Dict[str, dict]] = None,
 ) -> int:
     """Process pool worker.
 
@@ -466,6 +651,7 @@ def _partition_chunk_for_external(
     try:
         for file_idx, file_path_str in zip(file_indices, files):
             table = pq.read_table(Path(file_path_str), columns=SCHEMA_COLUMNS)
+            table = add_source_columns_arrow(table, file_path_str, source_lookup)
             n = table.num_rows
             if n == 0:
                 continue
@@ -494,7 +680,11 @@ def _partition_chunk_for_external(
                         temp_dir_path
                         / f"bucket_{bucket_id:05d}_chunk_{chunk_index:05d}.parquet"
                     )
-                    writer = pq.ParquetWriter(bucket_path, TEMP_SCHEMA, compression="snappy")
+                    writer = pq.ParquetWriter(
+                        bucket_path,
+                        temp_schema_for_output(bool(source_lookup)),
+                        compression="snappy",
+                    )
                     writers[bucket_id] = writer
                 writer.write_table(bucket_table)
                 rows_total += end - start
@@ -511,6 +701,7 @@ def partition_external_shuffle_buckets(
     seed: int,
     workers: int = 1,
     pyarrow_threads_per_worker: int = 4,
+    source_lookup: Optional[Dict[str, dict]] = None,
 ) -> None:
     start = time.time()
     n_chunks = max(1, min(workers, len(files)))
@@ -537,7 +728,13 @@ def partition_external_shuffle_buckets(
             )
         for c in iterator:
             _partition_chunk_for_external(
-                file_chunks[c], index_chunks[c], c, seed, buckets, str(temp_dir),
+                file_chunks[c],
+                index_chunks[c],
+                c,
+                seed,
+                buckets,
+                str(temp_dir),
+                source_lookup,
             )
     else:
         ctx = mp.get_context("spawn")
@@ -550,7 +747,13 @@ def partition_external_shuffle_buckets(
             futures = [
                 executor.submit(
                     _partition_chunk_for_external,
-                    file_chunks[c], index_chunks[c], c, seed, buckets, str(temp_dir),
+                    file_chunks[c],
+                    index_chunks[c],
+                    c,
+                    seed,
+                    buckets,
+                    str(temp_dir),
+                    source_lookup,
                 )
                 for c in range(n_chunks)
             ]
@@ -963,6 +1166,7 @@ def write_batch_shuffled_chunks(
     seed: int,
     workers: int,
     batch_files: int,
+    source_lookup: Optional[Dict[str, dict]] = None,
 ) -> None:
     if batch_files <= 0:
         raise ValueError("--batch-files must be positive")
@@ -976,7 +1180,9 @@ def write_batch_shuffled_chunks(
     rows_seen = 0
     rows_written = 0
     manifest_rows: List[dict] = []
-    pending = pd.DataFrame(columns=SCHEMA_COLUMNS)
+    include_provenance = bool(source_lookup)
+    output_columns = columns_for_output(include_provenance)
+    pending = pd.DataFrame(columns=output_columns)
     num_batches = math.ceil(len(shuffled_files) / batch_files)
 
     print(
@@ -996,12 +1202,12 @@ def write_batch_shuffled_chunks(
             f"reading files {batch_start}:{batch_end}",
             flush=True,
         )
-        df = read_all_data(batch_paths, workers)
+        df = read_all_data(batch_paths, workers, source_lookup=source_lookup)
         rows_seen += len(df)
 
         if not pending.empty:
             df = pd.concat([pending, df], ignore_index=True, copy=False)
-            pending = pd.DataFrame(columns=SCHEMA_COLUMNS)
+            pending = pd.DataFrame(columns=output_columns)
 
         shuffle_seed = int((seed + batch_index) % (2**32 - 1))
         print(
@@ -1024,6 +1230,7 @@ def write_batch_shuffled_chunks(
                 output_prefix=output_prefix,
                 output_index=output_index,
                 compression=compression,
+                include_provenance=include_provenance,
             )
             manifest_rows.append({
                 "output_file": output_name,
@@ -1050,6 +1257,7 @@ def write_batch_shuffled_chunks(
             output_prefix=output_prefix,
             output_index=output_index,
             compression=compression,
+            include_provenance=include_provenance,
         )
         manifest_rows.append({
             "output_file": output_name,
@@ -1085,6 +1293,7 @@ def external_shuffle(
     workers: int = 1,
     pyarrow_threads_per_worker: int = 4,
     skip_partition_if_exists: bool = False,
+    source_lookup: Optional[Dict[str, dict]] = None,
 ) -> None:
     if buckets <= 0:
         raise ValueError("--shuffle-buckets must be positive")
@@ -1105,6 +1314,7 @@ def external_shuffle(
             f"or set --shuffle-buckets to match the existing partition if intentional."
         )
     if existing_chunks:
+        validate_existing_partition_schema(temp_dir, include_provenance=bool(source_lookup))
         print(
             f"[INFO] External shuffle: reusing existing partition data under {temp_dir} "
             f"(--skip-partition-if-exists). Skipping partition phase.",
@@ -1126,6 +1336,7 @@ def external_shuffle(
             seed=seed,
             workers=workers,
             pyarrow_threads_per_worker=pyarrow_threads_per_worker,
+            source_lookup=source_lookup,
         )
     write_external_shuffled_chunks(
         temp_dir=temp_dir,
@@ -1160,6 +1371,18 @@ def main() -> None:
     log_step("Scan input files", scan_start)
 
     validate_input_schemas(files, args.validate_all_schemas, args.workers)
+    source_lookup: Optional[Dict[str, dict]] = None
+    source_rows: List[dict] = []
+    if args.merge_manifest:
+        merge_manifest = Path(args.merge_manifest).expanduser().resolve()
+        if not merge_manifest.exists():
+            raise FileNotFoundError(f"--merge-manifest not found: {merge_manifest}")
+        source_lookup, source_rows = build_source_lookup(merge_manifest, files)
+        print(
+            f"[INFO] provenance enabled: source files={len(source_rows)} "
+            f"merge_manifest={merge_manifest}",
+            flush=True,
+        )
 
     if args.dry_run:
         rows = count_rows(files, args.workers)
@@ -1176,6 +1399,12 @@ def main() -> None:
         return
 
     prepare_output_dir(output_dir, args.output_prefix, args.overwrite)
+    if source_rows:
+        write_source_manifest(output_dir / args.source_manifest_name, source_rows)
+    elif args.overwrite:
+        stale_source_manifest = output_dir / args.source_manifest_name
+        if stale_source_manifest.exists():
+            stale_source_manifest.unlink()
 
     if args.shuffle_mode == "batch":
         write_batch_shuffled_chunks(
@@ -1189,6 +1418,7 @@ def main() -> None:
             seed=args.seed,
             workers=args.workers,
             batch_files=args.batch_files,
+            source_lookup=source_lookup,
         )
     elif args.shuffle_mode == "external":
         temp_dir = (
@@ -1212,9 +1442,10 @@ def main() -> None:
             workers=args.workers,
             pyarrow_threads_per_worker=args.pyarrow_threads_per_worker,
             skip_partition_if_exists=args.skip_partition_if_exists,
+            source_lookup=source_lookup,
         )
     else:
-        df = read_all_data(files, args.workers)
+        df = read_all_data(files, args.workers, source_lookup=source_lookup)
 
         shuffle_start = time.time()
         print(f"[INFO] Shuffling rows with seed={args.seed}", flush=True)
@@ -1229,6 +1460,7 @@ def main() -> None:
             compression=args.compression,
             manifest_name=args.manifest_name,
             drop_remainder=args.drop_remainder,
+            include_provenance=bool(source_lookup),
         )
     print(f"[DONE] Shuffled data written to: {output_dir}", flush=True)
 

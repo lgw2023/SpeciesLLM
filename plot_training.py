@@ -22,6 +22,7 @@ Usage:
     --no-detail       skip the loss-components breakdown figure
     --no-timing       skip the per-step timing breakdown figure
     --no-grad-clip    skip the adaptive-grad-clip diagnostics figure
+    --no-masked-gep   skip masked GEP target/prediction diagnostics figure
     --grad-clip-window N
                       rolling window for skip/clip RATE panel (default 100)
     --compare         when 2+ dirs are given, also produce a single overlay
@@ -398,6 +399,147 @@ def make_timing_figure(runs: dict[str, dict], smooth_window: int = 1) -> plt.Fig
     return fig
 
 
+def _plot_metric_series(
+    ax,
+    runs: dict[str, dict],
+    columns: list[tuple[str, str, str]],
+    *,
+    title: str,
+    y_label: str,
+    smooth_window: int = 1,
+    percent: bool = False,
+) -> bool:
+    ax.set_title(title, fontsize=10)
+    ax.set_xlabel("Update Step")
+    ax.set_ylabel(y_label)
+    if percent:
+        ax.yaxis.set_major_formatter(ticker.PercentFormatter(xmax=1.0))
+        ax.set_ylim(bottom=0)
+
+    colours = {label: PALETTE[i % len(PALETTE)] for i, label in enumerate(runs)}
+    any_plotted = False
+    for label, run in runs.items():
+        df = run["all"]
+        x_col = "update_step" if "update_step" in df.columns else "batch_index"
+        if x_col not in df.columns:
+            continue
+        for col, suffix, linestyle in columns:
+            if col not in df.columns:
+                continue
+            sub = df[[x_col, col]].dropna()
+            if sub.empty:
+                continue
+            y = smooth(sub[col].values, smooth_window)
+            ax.plot(
+                sub[x_col].values,
+                y,
+                color=colours[label],
+                linestyle=linestyle,
+                linewidth=1.5,
+                alpha=0.9,
+                label=f"{label} {suffix}",
+            )
+            any_plotted = True
+    if any_plotted:
+        ax.legend(fontsize=7, ncol=1, loc="best")
+    else:
+        ax.text(
+            0.5,
+            0.5,
+            "no data",
+            ha="center",
+            va="center",
+            transform=ax.transAxes,
+            color="gray",
+            fontsize=9,
+        )
+    return any_plotted
+
+
+def make_masked_gep_figure(runs: dict[str, dict], smooth_window: int = 1) -> Optional[plt.Figure]:
+    """2×2 diagnostics for masked GEP target/prediction statistics."""
+    diagnostic_cols = [
+        "target_mean_masked",
+        "target_std_masked",
+        "target_p95_masked",
+        "target_p99_masked",
+        "target_nonzero_ratio_masked",
+        "pred_mean_masked",
+        "pred_std_masked",
+        "abs_error_p95",
+        "abs_error_p99",
+        "clip_fraction_rolling",
+    ]
+    plottable = {}
+    for label, run in runs.items():
+        df = run["all"]
+        if any(col in df.columns and df[col].notna().any() for col in diagnostic_cols):
+            plottable[label] = run
+    if not plottable:
+        return None
+
+    fig, axes = plt.subplots(2, 2, figsize=(14, 8.5))
+    first_args = next(iter(plottable.values()))["args"]
+    subtitle = _make_subtitle(first_args) if first_args else ""
+    fig.suptitle(
+        f"Masked GEP Diagnostics\n{subtitle}" if subtitle else "Masked GEP Diagnostics",
+        fontsize=12,
+        fontweight="bold",
+        y=0.99,
+    )
+
+    _plot_metric_series(
+        axes[0, 0],
+        plottable,
+        [
+            ("target_mean_masked", "target mean", "-"),
+            ("pred_mean_masked", "pred mean", "--"),
+        ],
+        title="Masked Target / Prediction Mean",
+        y_label="Expression",
+        smooth_window=smooth_window,
+    )
+    _plot_metric_series(
+        axes[0, 1],
+        plottable,
+        [
+            ("target_std_masked", "target std", "-"),
+            ("pred_std_masked", "pred std", "--"),
+        ],
+        title="Masked Target / Prediction Std",
+        y_label="Std",
+        smooth_window=smooth_window,
+    )
+    _plot_metric_series(
+        axes[1, 0],
+        plottable,
+        [
+            ("target_p95_masked", "target p95", "-"),
+            ("target_p99_masked", "target p99", ":"),
+            ("abs_error_p95", "abs err p95", "--"),
+            ("abs_error_p99", "abs err p99", "-."),
+        ],
+        title="Target Tail / Error Tail",
+        y_label="Value",
+        smooth_window=smooth_window,
+    )
+    _plot_metric_series(
+        axes[1, 1],
+        plottable,
+        [
+            ("target_nonzero_ratio_masked", "target nonzero", "-"),
+            ("clip_fraction_rolling", "clip fraction", "--"),
+        ],
+        title="Data Sparsity / Clip Fraction",
+        y_label="Fraction",
+        smooth_window=smooth_window,
+        percent=True,
+    )
+
+    fig.tight_layout(rect=[0, 0, 1, 0.97])
+    return fig
+
+
 def _derive_consecutive(skipped_series: pd.Series) -> pd.Series:
     """Run-length-encode a boolean series into "consecutive True so far".
 
@@ -581,11 +723,15 @@ def make_grad_clip_figure(runs: dict[str, dict], window: int = 100, smooth_windo
                          label=f"{label} skip rate")
             any_rate = True
         if "grad_action" in sub.columns:
+            clip_logged = None
+            if "clip_fraction_rolling" in sub.columns and sub["clip_fraction_rolling"].notna().any():
+                clip_logged = sub["clip_fraction_rolling"].ffill().values
             clip_flag = (sub["grad_action"] == "clip")
-            if clip_flag.any():
-                rolling_c = clip_flag.rolling(window=window, min_periods=1).mean().values
+            if clip_logged is not None or clip_flag.any():
+                rolling_c = clip_logged if clip_logged is not None else clip_flag.rolling(window=window, min_periods=1).mean().values
+                suffix = "clip fraction" if clip_logged is not None else "clip rate"
                 ax_rate.plot(x, rolling_c, color=col, linewidth=1.0, linestyle="--",
-                             alpha=0.75, label=f"{label} clip rate")
+                             alpha=0.75, label=f"{label} {suffix}")
                 any_rate = True
     if any_rate:
         ax_rate.legend(fontsize=7, ncol=2, loc="best")
@@ -679,6 +825,8 @@ def main() -> None:
                         help="skip per-step timing breakdown figure")
     parser.add_argument("--no-grad-clip", action="store_true",
                         help="skip the adaptive-grad-clip diagnostics figure")
+    parser.add_argument("--no-masked-gep", action="store_true",
+                        help="skip masked GEP target/prediction diagnostics figure")
     parser.add_argument("--grad-clip-window", type=int, default=100, metavar="N",
                         help="rolling window for the skip/clip RATE panel (default 100)")
     parser.add_argument("--max-steps", type=int, default=None, metavar="N",
@@ -763,6 +911,20 @@ def main() -> None:
                     fig4.savefig(p, bbox_inches="tight")
                     print(f"  Saved: {p}")
                 plt.close(fig4)
+
+        if not args.no_masked_gep:
+            fig5 = make_masked_gep_figure(
+                runs_dict,
+                smooth_window=args.smooth,
+            )
+            if fig5 is None:
+                print("  [skip] masked_gep figure: no masked GEP diagnostic rows")
+            else:
+                for ext in (".pdf", ".png"):
+                    p = out_dir / f"masked_gep_diagnostics{ext}"
+                    fig5.savefig(p, bbox_inches="tight")
+                    print(f"  Saved: {p}")
+                plt.close(fig5)
 
     base_out = args.out.resolve() if args.out else None
 

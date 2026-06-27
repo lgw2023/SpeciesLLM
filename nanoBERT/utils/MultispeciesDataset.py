@@ -10,6 +10,31 @@ from scanpy import AnnData
 import scanpy as sc
 import pyarrow.parquet as pq
 
+META_COLUMNS = {
+    "species": "meta_species",
+    "dataset_id": "meta_dataset_id",
+    "assay": "meta_assay",
+    "tissue": "meta_tissue",
+    "tech_sample": "meta_tech_sample",
+    "soma_joinid": "meta_soma_joinid",
+    "idx": "meta_idx",
+    "source_file_id": "meta_source_file_id",
+    "source_batch_id": "meta_source_batch_id",
+}
+
+
+def add_meta_from_series(row_pt, row):
+    for column, key in META_COLUMNS.items():
+        if column in row.index:
+            row_pt[key] = row[column]
+
+
+def add_meta_from_frame_row(row_pt, row):
+    for column, key in META_COLUMNS.items():
+        if column in row.columns:
+            row_pt[key] = row[column].values[0]
+
+
 class SeqDataset(Dataset):
     def __init__(self, data: Dict[str, torch.Tensor]):
         self.data = data
@@ -39,6 +64,7 @@ class ParquetDataset(Dataset):
         row_pt["disease_labels"] = row['disease']
         row_pt["sex_labels"] = row['sex']
         row_pt["age_labels"] = row['development_stage']
+        add_meta_from_series(row_pt, row)
         return row_pt
 
 
@@ -61,6 +87,7 @@ class ParquetDataset_cls(Dataset):
         row_pt["sex_labels"] = row['sex']
         row_pt["age_labels"] = row['development_stage']
         row_pt["celltype_labels"] = row['cell_type']
+        add_meta_from_series(row_pt, row)
         return row_pt
 
 
@@ -83,6 +110,7 @@ class LazyParquetDataset(Dataset):
         row_pt["disease_labels"] = row['disease'].values[0]
         row_pt["sex_labels"] = row['sex'].values[0]
         row_pt["age_labels"] = row['development_stage'].values[0]
+        add_meta_from_frame_row(row_pt, row)
         return row_pt
 
 

@@ -31,6 +31,10 @@ PLOT_GLOBS=(
   "loss_detail.pdf"
   "step_timing.png"
   "step_timing.pdf"
+  "grad_clip.png"
+  "grad_clip.pdf"
+  "masked_gep_diagnostics.png"
+  "masked_gep_diagnostics.pdf"
 )
 
 usage() {

@@ -189,7 +189,9 @@ class ArchiveTrainingOutputTextTest(unittest.TestCase):
             (source / "metrics.0-0.jsonl").write_bytes(
                 b'{"time":"2026-05-06T22:15:37","node_rank":"0","rank":0,'
                 b'"local_rank":0,"epoch":1,"batch_index":1,"num_batches":2,'
-                b'"update_step":1,"should_step":true,"lr":1e-06,"loss_total":1.5}\r\n'
+                b'"update_step":1,"should_step":true,"lr":1e-06,"loss_total":1.5,'
+                b'"target_mean_masked":2.0,"abs_error_p99":4.0,'
+                b'"batch_metadata":{"assay":{"top":[{"id":2,"count":4}]}}}\r\n'
                 b'{"time":"2026-05-06T22:15:38","node_rank":"0","rank":0,'
                 b'"local_rank":0,"epoch":1,"batch_index":2,"num_batches":2,'
                 b'"update_step":2,"should_step":true,"lr":2e-06}\r\n'
@@ -243,6 +245,58 @@ class ArchiveTrainingOutputTextTest(unittest.TestCase):
             for original_path in source.iterdir():
                 restored_path = restored_root / source.name / original_path.name
                 self.assertEqual(restored_path.read_bytes(), original_path.read_bytes())
+
+    def test_split_pack_streams_raw_for_files_above_structured_threshold(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            source = tmp_path / "training_output_demo"
+            source.mkdir()
+            metrics_payload = b"".join(
+                [
+                    b'{"update_step":1,"loss_total":1.5,'
+                    b'"batch_metadata":{"species":{"top":[{"id":5,"count":4}]}}}\n',
+                    b'{"update_step":2,"loss_total":1.4,'
+                    b'"target_mean_masked":2.0,"abs_error_p99":3.0}\n',
+                ]
+            )
+            metrics_payload *= 8
+            (source / "metrics.0-0.jsonl").write_bytes(metrics_payload)
+
+            split_dir = tmp_path / "split"
+            with contextlib.redirect_stdout(io.StringIO()):
+                rc = archive_tool.main(
+                    [
+                        "split-pack",
+                        str(source),
+                        "--output-dir",
+                        str(split_dir),
+                        "--chunk-size",
+                        "4096",
+                        "--structured-max-bytes",
+                        "64",
+                        "--preset",
+                        "0",
+                    ]
+                )
+            self.assertEqual(rc, 0)
+
+            manifest = archive_tool.read_split_manifest(split_dir)
+            codecs = {item["path"].split("/")[-1]: item["codec"] for item in manifest["files"]}
+            self.assertEqual(codecs["metrics.0-0.jsonl"], "raw-bytes")
+
+            restored_root = tmp_path / "restored"
+            with contextlib.redirect_stdout(io.StringIO()):
+                rc = archive_tool.main(
+                    [
+                        "split-unpack",
+                        str(split_dir),
+                        "--output-dir",
+                        str(restored_root),
+                    ]
+                )
+            self.assertEqual(rc, 0)
+            restored = restored_root / source.name / "metrics.0-0.jsonl"
+            self.assertEqual(restored.read_bytes(), metrics_payload)
 
 
 if __name__ == "__main__":

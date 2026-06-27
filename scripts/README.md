@@ -294,7 +294,9 @@ tries a structure-aware lossless encoding for `metrics*.jsonl`,
 the original bytes exactly, then xz-compresses and splits the encoded stream
 into many small `.xzpart` files plus split manifest files. If a file does not
 match the expected stable format, it automatically falls back to raw-byte
-compression for that file.
+compression for that file. Files larger than `--structured-max-bytes`
+(default: 64MiB) are also streamed as raw bytes to avoid loading very large
+`metrics*.jsonl` files into memory during packaging.
 
 With the normal 8-rank layout the 24 `log`/`loss_to_log`/`metrics` files can be
 compressed by up to 24 worker processes.
@@ -310,7 +312,8 @@ python scripts/archive_training_output_text.py split-pack \
 ```
 
 Add `--raw-bytes` if you want to disable the structure-aware step and only do
-plain byte compression/splitting.
+plain byte compression/splitting. Increase `--structured-max-bytes` if you want
+to force structure-aware encoding for larger files and have enough RAM.
 
 Copy the generated split directory to the workstation, then merge/decompress:
 

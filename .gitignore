@@ -65,8 +65,7 @@ training_output_*
 !training_output_*_text_split/
 !training_output_*_text_split/**
 
-# Exclude training output checkpoints (already covered by *.pt above)
-# Track everything else: logs, metrics, plots, summaries
+# Exclude training output checkpoints and archives (covered by training_output_*).
 *.optimizer.pt
 training_output_*.zip
 

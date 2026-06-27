@@ -7,6 +7,19 @@ import numpy as np
 import torch
 
 
+DIAGNOSTIC_META_KEYS = (
+    "meta_species",
+    "meta_dataset_id",
+    "meta_assay",
+    "meta_tissue",
+    "meta_tech_sample",
+    "meta_soma_joinid",
+    "meta_idx",
+    "meta_source_file_id",
+    "meta_source_batch_id",
+)
+
+
 @dataclass
 class CustomCollate_3GeneEmb:
     config: BERTConfig = None
@@ -191,5 +204,10 @@ class CustomCollate_3GeneEmb:
             tokenized_data["age_labels"] = torch.tensor(age_labels_list, dtype=torch.long)
         if self.config.do_cls:
             tokenized_data["celltype_labels"] = torch.tensor(celltype_labels_list, dtype=torch.long)
+
+        for key in DIAGNOSTIC_META_KEYS:
+            values = [row[key] for row in data if key in row]
+            if len(values) == batch_size:
+                tokenized_data[key] = torch.tensor(values, dtype=torch.long)
 
         return tokenized_data

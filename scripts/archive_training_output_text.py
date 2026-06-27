@@ -31,6 +31,7 @@ MANIFEST_NAME = ".speciesllm_training_output_text_manifest.json"
 LEGACY_ARCHIVE_FORMAT_VERSION = 1
 PARALLEL_ARCHIVE_FORMAT_VERSION = 2
 SPLIT_ARCHIVE_FORMAT_VERSION = 3
+DEFAULT_STRUCTURED_MAX_BYTES = 64 * 1024 * 1024
 PARALLEL_MEMBER_DIR = ".speciesllm_training_output_text_members"
 SPLIT_INDEX_NAME = "speciesllm_training_text_split_index.json"
 SPLIT_MANIFEST_PART_PREFIX = "speciesllm_training_text_manifest.part"
@@ -236,6 +237,9 @@ def parse_size(value: str | int) -> int:
     else:
         text = value.strip().lower()
         multipliers = {
+            "gib": 1024 * 1024 * 1024,
+            "gb": 1000 * 1000 * 1000,
+            "g": 1000 * 1000 * 1000,
             "kib": 1024,
             "kb": 1000,
             "k": 1000,
@@ -379,8 +383,60 @@ def compress_file_to_xz(task: tuple[int, str, str, str, str, int]) -> dict[str, 
     }
 
 
+def compress_raw_file_to_split_chunks_streaming(
+    *,
+    index: int,
+    source_path: Path,
+    arcname: str,
+    source_relative_path: str,
+    output_dir: Path,
+    preset: int,
+    chunk_size: int,
+    overwrite: bool,
+) -> dict[str, object]:
+    st = source_path.stat()
+    source_sha256 = hashlib.sha256()
+    source_size = 0
+    split_writer = SplitChunkWriter(
+        output_dir,
+        file_index=index,
+        chunk_size=chunk_size,
+        overwrite=overwrite,
+    )
+
+    try:
+        with source_path.open("rb") as raw_in:
+            with lzma.LZMAFile(split_writer, "wb", preset=preset) as xz_out:
+                while True:
+                    chunk = raw_in.read(COPY_BUFFER_SIZE)
+                    if not chunk:
+                        break
+                    source_sha256.update(chunk)
+                    source_size += len(chunk)
+                    xz_out.write(chunk)
+    finally:
+        split_writer.close()
+
+    source_digest = source_sha256.hexdigest()
+    return {
+        "index": index,
+        "path": arcname,
+        "source_relative_path": source_relative_path,
+        "codec": "raw-bytes",
+        "chunks": split_writer.chunks,
+        "size": source_size,
+        "encoded_size": source_size,
+        "encoded_sha256": source_digest,
+        "compressed_size": split_writer.compressed_size,
+        "mode": stat.S_IMODE(st.st_mode),
+        "mtime": int(st.st_mtime),
+        "sha256": source_digest,
+        "compressed_sha256": split_writer.hexdigest,
+    }
+
+
 def compress_file_to_split_chunks(
-    task: tuple[int, str, str, str, str, int, int, bool, bool]
+    task: tuple[int, str, str, str, str, int, int, bool, bool, int]
 ) -> dict[str, object]:
     (
         index,
@@ -392,10 +448,23 @@ def compress_file_to_split_chunks(
         chunk_size,
         overwrite,
         use_structured,
+        structured_max_bytes,
     ) = task
     source_path = Path(source_path_text)
     output_dir = Path(output_dir_text)
     st = source_path.stat()
+    if not use_structured or st.st_size > structured_max_bytes:
+        return compress_raw_file_to_split_chunks_streaming(
+            index=index,
+            source_path=source_path,
+            arcname=arcname,
+            source_relative_path=source_relative_path,
+            output_dir=output_dir,
+            preset=preset,
+            chunk_size=chunk_size,
+            overwrite=overwrite,
+        )
+
     source_data = source_path.read_bytes()
     source_size = len(source_data)
     source_sha256 = hashlib.sha256(source_data).hexdigest()
@@ -462,11 +531,11 @@ def write_split_parts(
     return parts
 
 
-def compact_json_bytes(payload: dict[str, object]) -> bytes:
+def compact_json_bytes(payload: dict[str, object], *, sort_keys: bool = True) -> bytes:
     return json.dumps(
         payload,
         ensure_ascii=False,
-        sort_keys=True,
+        sort_keys=sort_keys,
         separators=(",", ":"),
     ).encode("utf-8")
 
@@ -501,6 +570,19 @@ def decode_utf8(data: bytes) -> str:
     return data.decode("utf-8")
 
 
+def normalize_json_pairs_value(value):
+    if isinstance(value, list):
+        if all(
+            isinstance(item, tuple)
+            and len(item) == 2
+            and isinstance(item[0], str)
+            for item in value
+        ):
+            return {key: normalize_json_pairs_value(item_value) for key, item_value in value}
+        return [normalize_json_pairs_value(item) for item in value]
+    return value
+
+
 def encode_metric_jsonl_payload(data: bytes) -> bytes:
     text = decode_utf8(data)
     newline = detect_newline(data)
@@ -527,7 +609,7 @@ def encode_metric_jsonl_payload(data: bytes) -> bytes:
         for key, value in pairs:
             if not isinstance(key, str):
                 raise ArchiveError("metrics jsonl key is not a string")
-            typed_pairs.append((key, value))
+            typed_pairs.append((key, normalize_json_pairs_value(value)))
             if key not in field_seen:
                 fields.append(key)
                 field_seen.add(key)
@@ -556,7 +638,7 @@ def encode_metric_jsonl_payload(data: bytes) -> bytes:
         "rows": encoded_rows,
         "trailing_empty_line": trailing_empty_line,
     }
-    return compact_json_bytes(payload)
+    return compact_json_bytes(payload, sort_keys=False)
 
 
 def restore_metric_jsonl_payload(encoded: bytes) -> bytes:
@@ -745,6 +827,7 @@ def split_pack(args: argparse.Namespace) -> int:
                 chunk_size,
                 args.overwrite,
                 not args.raw_bytes,
+                args.structured_max_bytes,
             )
         )
 
@@ -1414,6 +1497,46 @@ def decompress_chunk_sequence(
     return output.getvalue(), compressed_reader.hexdigest
 
 
+def decompress_raw_chunk_sequence(
+    split_dir: Path,
+    chunks: list[dict[str, object]],
+    *,
+    output_path: Path | None,
+    overwrite: bool,
+    mode: int,
+    mtime: int,
+) -> tuple[int, str, str]:
+    if output_path is not None and output_path.exists() and not overwrite:
+        raise ArchiveError(f"refusing to overwrite existing file: {output_path}")
+    if output_path is not None:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    chunk_reader = ChunkSequenceReader(split_dir, chunks)
+    compressed_reader = HashingReader(chunk_reader)
+    source_digest = hashlib.sha256()
+    source_size = 0
+    out = output_path.open("wb") if output_path is not None else None
+    try:
+        with lzma.LZMAFile(compressed_reader, "rb") as xz_in:
+            while True:
+                chunk = xz_in.read(COPY_BUFFER_SIZE)
+                if not chunk:
+                    break
+                source_digest.update(chunk)
+                source_size += len(chunk)
+                if out is not None:
+                    out.write(chunk)
+    finally:
+        if out is not None:
+            out.close()
+        chunk_reader.close()
+
+    if output_path is not None:
+        os.chmod(output_path, mode & 0o777)
+        os.utime(output_path, (mtime, mtime))
+    return source_size, source_digest.hexdigest(), compressed_reader.hexdigest
+
+
 def load_split_archive(
     split_dir: Path,
     *,
@@ -1447,17 +1570,47 @@ def load_split_archive(
                 raise ArchiveError(f"split manifest is malformed: invalid chunk for {path}")
             typed_chunks.append(chunk)
 
-        encoded_payload, compressed_sha = decompress_chunk_sequence(split_dir, typed_chunks)
-        if len(encoded_payload) != int(expected.get("encoded_size", len(encoded_payload))):
-            raise ArchiveError(f"encoded size mismatch for {path}")
-        expected_encoded_sha = expected.get("encoded_sha256")
-        if expected_encoded_sha and hashlib.sha256(encoded_payload).hexdigest() != expected_encoded_sha:
-            raise ArchiveError(f"encoded sha256 mismatch for {path}")
-
         codec = str(expected.get("codec", "raw-bytes"))
-        source_payload = restore_structured_payload(codec, encoded_payload)
-        source_size = len(source_payload)
-        source_sha = hashlib.sha256(source_payload).hexdigest()
+        output_path = None
+        if not verify_only:
+            if output_root is None:
+                raise ArchiveError("output_dir is required unless verify is set")
+            output_path = safe_output_path(output_root, path)
+
+        if codec == "raw-bytes":
+            source_size, source_sha, compressed_sha = decompress_raw_chunk_sequence(
+                split_dir,
+                typed_chunks,
+                output_path=output_path,
+                overwrite=overwrite,
+                mode=int(expected["mode"]),
+                mtime=int(expected["mtime"]),
+            )
+            expected_encoded_sha = expected.get("encoded_sha256")
+            if expected_encoded_sha and source_sha != expected_encoded_sha:
+                raise ArchiveError(f"encoded sha256 mismatch for {path}")
+            if source_size != int(expected.get("encoded_size", source_size)):
+                raise ArchiveError(f"encoded size mismatch for {path}")
+        else:
+            encoded_payload, compressed_sha = decompress_chunk_sequence(split_dir, typed_chunks)
+            if len(encoded_payload) != int(expected.get("encoded_size", len(encoded_payload))):
+                raise ArchiveError(f"encoded size mismatch for {path}")
+            expected_encoded_sha = expected.get("encoded_sha256")
+            if expected_encoded_sha and hashlib.sha256(encoded_payload).hexdigest() != expected_encoded_sha:
+                raise ArchiveError(f"encoded sha256 mismatch for {path}")
+
+            source_payload = restore_structured_payload(codec, encoded_payload)
+            source_size = len(source_payload)
+            source_sha = hashlib.sha256(source_payload).hexdigest()
+
+            if not verify_only:
+                assert output_path is not None
+                if output_path.exists() and not overwrite:
+                    raise ArchiveError(f"refusing to overwrite existing file: {output_path}")
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                output_path.write_bytes(source_payload)
+                os.chmod(output_path, int(expected["mode"]) & 0o777)
+                os.utime(output_path, (int(expected["mtime"]), int(expected["mtime"])))
 
         if source_size != int(expected["size"]):
             raise ArchiveError(f"size mismatch for {path}")
@@ -1465,18 +1618,6 @@ def load_split_archive(
             raise ArchiveError(f"sha256 mismatch for {path}")
         if compressed_sha != expected.get("compressed_sha256"):
             raise ArchiveError(f"compressed sha256 mismatch for {path}")
-
-        output_path = None
-        if not verify_only:
-            if output_root is None:
-                raise ArchiveError("output_dir is required unless verify is set")
-            output_path = safe_output_path(output_root, path)
-            if output_path.exists() and not overwrite:
-                raise ArchiveError(f"refusing to overwrite existing file: {output_path}")
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            output_path.write_bytes(source_payload)
-            os.chmod(output_path, int(expected["mode"]) & 0o777)
-            os.utime(output_path, (int(expected["mtime"]), int(expected["mtime"])))
 
         observed[path] = {
             "size": source_size,
@@ -1686,6 +1827,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--raw-bytes",
         action="store_true",
         help="Disable structure-aware encoding and compress raw file bytes.",
+    )
+    split_pack_parser.add_argument(
+        "--structured-max-bytes",
+        type=parse_size,
+        default=DEFAULT_STRUCTURED_MAX_BYTES,
+        help=(
+            "Only try structure-aware encoding for files at or below this size. "
+            "Larger files are streamed as raw bytes. Default: 64MiB."
+        ),
     )
     add_common_pack_options(split_pack_parser)
     split_pack_parser.set_defaults(func=split_pack)

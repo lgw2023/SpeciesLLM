@@ -87,6 +87,15 @@ METRIC_FIELDNAMES = [
     "loss_zero_prob",
     "loss_gepc",
     "loss_gepc_zero_prob",
+    "target_mean_masked",
+    "target_std_masked",
+    "target_p95_masked",
+    "target_p99_masked",
+    "target_nonzero_ratio_masked",
+    "pred_mean_masked",
+    "pred_std_masked",
+    "abs_error_p95",
+    "abs_error_p99",
     "step_ms",
     "data_load_s",
     "to_device_s",
@@ -111,6 +120,12 @@ METRIC_FIELDNAMES = [
     "clipped_count_cum",
     "consecutive_skips",
     "consecutive_clips",
+    "clip_fraction_rolling",
+    "parquet_chunk_index",
+    "parquet_chunk_total",
+    "parquet_file_start_index",
+    "parquet_file_end_index",
+    "parquet_file_count",
     "cluster_loss_total_mean",
     "cluster_loss_total_min",
     "cluster_loss_total_max",
@@ -355,7 +370,7 @@ class StreamingMetricsWriter:
 
     def write(self, row):
         clean_row = {field: row.get(field, None) for field in METRIC_FIELDNAMES}
-        self.jsonl_file.write(json.dumps(clean_row, ensure_ascii=False, default=json_default) + "\n")
+        self.jsonl_file.write(json.dumps(row, ensure_ascii=False, default=json_default) + "\n")
         self.csv_writer.writerow(clean_row)
         self.rows_since_flush += 1
         if self.rows_since_flush >= self.flush_interval:
@@ -597,6 +612,122 @@ def should_trace_step(interval, batch_index, should_step=False, final_step=False
     interval = int(interval)
     step_number = batch_index + 1
     return step_number == 1 or step_number % interval == 0 or bool(should_step) or bool(final_step)
+
+
+def should_log_batch_metadata_step(interval, batch_index, final_step=False):
+    return should_trace_step(interval, batch_index, final_step=final_step)
+
+
+def should_log_masked_gep_stats_step(interval, batch_index, final_step=False):
+    return should_trace_step(interval, batch_index, final_step=final_step)
+
+
+MASKED_GEP_DIAGNOSTIC_FIELDS = [
+    "target_mean_masked",
+    "target_std_masked",
+    "target_p95_masked",
+    "target_p99_masked",
+    "target_nonzero_ratio_masked",
+    "pred_mean_masked",
+    "pred_std_masked",
+    "abs_error_p95",
+    "abs_error_p99",
+]
+
+
+def empty_masked_gep_diagnostic_stats():
+    return {field: None for field in MASKED_GEP_DIAGNOSTIC_FIELDS}
+
+
+def masked_gep_diagnostic_stats(target_values, pred_values, mask_positions):
+    stats = empty_masked_gep_diagnostic_stats()
+    if target_values is None or pred_values is None or mask_positions is None:
+        return stats
+    mask = mask_positions.detach().bool()
+    if int(mask.sum().item()) == 0:
+        return stats
+
+    target = target_values.detach()[mask].to(torch.float32).cpu().numpy()
+    pred = pred_values.detach()[mask].to(torch.float32).cpu().numpy()
+    abs_error = np.abs(pred - target)
+    stats.update({
+        "target_mean_masked": float(np.mean(target)),
+        "target_std_masked": float(np.std(target)),
+        "target_p95_masked": float(np.percentile(target, 95)),
+        "target_p99_masked": float(np.percentile(target, 99)),
+        "target_nonzero_ratio_masked": float(np.count_nonzero(target) / target.size),
+        "pred_mean_masked": float(np.mean(pred)),
+        "pred_std_masked": float(np.std(pred)),
+        "abs_error_p95": float(np.percentile(abs_error, 95)),
+        "abs_error_p99": float(np.percentile(abs_error, 99)),
+    })
+    return stats
+
+
+def update_clip_fraction_rolling(history, grad_action, window=100):
+    if grad_action == "no_step":
+        return None
+    history.append(grad_action == "clip")
+    if len(history) > int(window):
+        del history[:-int(window)]
+    return sum(1 for item in history if item) / len(history) if history else None
+
+
+BATCH_METADATA_SOURCES = {
+    "species": ("meta_species", "species_labels"),
+    "dataset_id": ("meta_dataset_id",),
+    "assay": ("meta_assay", "seqmethod_labels"),
+    "tissue": ("meta_tissue", "tissue_labels"),
+    "tech_sample": ("meta_tech_sample",),
+    "soma_joinid": ("meta_soma_joinid",),
+    "idx": ("meta_idx",),
+    "source_file_id": ("meta_source_file_id",),
+    "source_batch_id": ("meta_source_batch_id",),
+}
+
+
+def summarize_int_tensor_counts(value, top_k=16):
+    if value is None:
+        return None
+    if torch.is_tensor(value):
+        values = value.detach().cpu().reshape(-1)
+    else:
+        values = torch.as_tensor(value).reshape(-1)
+    if values.numel() == 0:
+        return {"unique_count": 0, "top": []}
+    unique, counts = torch.unique(values.to(torch.long), return_counts=True)
+    pairs = sorted(
+        ((int(item), int(count)) for item, count in zip(unique.tolist(), counts.tolist())),
+        key=lambda pair: (-pair[1], pair[0]),
+    )
+    limit = max(1, int(top_k))
+    return {
+        "unique_count": int(len(pairs)),
+        "top": [{"id": item, "count": count} for item, count in pairs[:limit]],
+    }
+
+
+def batch_metadata_summary(batch_data, top_k=16):
+    summary = {}
+    batch_size = None
+    for field_name, candidate_keys in BATCH_METADATA_SOURCES.items():
+        for key in candidate_keys:
+            if key not in batch_data:
+                continue
+            field_summary = summarize_int_tensor_counts(batch_data[key], top_k=top_k)
+            if field_summary is not None:
+                summary[field_name] = field_summary
+                if batch_size is None and torch.is_tensor(batch_data[key]):
+                    batch_size = int(batch_data[key].numel())
+            break
+    if batch_size is None:
+        for value in batch_data.values():
+            if torch.is_tensor(value) and value.ndim > 0:
+                batch_size = int(value.shape[0])
+                break
+    if batch_size is not None:
+        summary["batch_size"] = batch_size
+    return summary
 
 
 def tensor_shape_summary(mapping):
@@ -881,13 +1012,20 @@ def make_parquet_data_loader(
     return data_loader
 
 
-def iter_parquet_data_loader_batches(data_loader, resume_batch_offset, max_batch_index, data_load_s=0.0):
+def iter_parquet_data_loader_batches(
+    data_loader,
+    resume_batch_offset,
+    max_batch_index,
+    data_load_s=0.0,
+    batch_context=None,
+):
     absolute_batch_index = resume_batch_offset
     first_batch = True
+    context = batch_context or {}
     for batch_data in data_loader:
         if absolute_batch_index >= max_batch_index:
             break
-        yield absolute_batch_index, batch_data, data_load_s if first_batch else 0.0
+        yield absolute_batch_index, batch_data, data_load_s if first_batch else 0.0, context
         first_batch = False
         absolute_batch_index += 1
 
@@ -911,12 +1049,14 @@ def iter_chunked_parquet_batches(
     rows_before_chunk = 0
     local_train_row_stop = min(sum(rows_by_file), train_row_stop)
     carryover = None
+    carryover_file_start_index = None
     pending_data_load_s = 0.0
     total_chunks = int(math.ceil(len(file_paths) / chunk_files)) if file_paths else 0
 
     try:
         for chunk_index, file_start in enumerate(range(0, len(file_paths), chunk_files), start=1):
             chunk_paths = file_paths[file_start:file_start + chunk_files]
+            file_end = file_start + len(chunk_paths) - 1
             chunk_rows = int(sum(rows_by_file[file_start:file_start + chunk_files]))
             chunk_row_start = rows_before_chunk
             chunk_row_end = rows_before_chunk + chunk_rows
@@ -963,6 +1103,10 @@ def iter_chunked_parquet_batches(
                 carryover = None
                 data_pt = combined
                 gc.collect()
+                context_file_start = min(carryover_file_start_index, file_start)
+                carryover_file_start_index = None
+            else:
+                context_file_start = file_start
 
             data_load_s = time.time() - t_load
             pending_data_load_s += data_load_s
@@ -974,6 +1118,7 @@ def iter_chunked_parquet_batches(
                 full_batch_rows = (len(data_pt) // args.batch_size) * args.batch_size
                 if full_batch_rows == 0:
                     carryover = data_pt
+                    carryover_file_start_index = context_file_start
                     data_pt = None
                     logger.info(
                         "parquet_chunk_carryover_all %s rows=%s pending_data_load_s=%.4f",
@@ -984,6 +1129,7 @@ def iter_chunked_parquet_batches(
                     continue
                 data_for_loader = data_pt.iloc[:full_batch_rows].reset_index(drop=True)
                 carryover = data_pt.iloc[full_batch_rows:].reset_index(drop=True)
+                carryover_file_start_index = context_file_start
                 del data_pt
                 data_pt = None
                 gc.collect()
@@ -998,6 +1144,13 @@ def iter_chunked_parquet_batches(
                 del data_for_loader
                 gc.collect()
                 continue
+            batch_context = {
+                "parquet_chunk_index": chunk_index,
+                "parquet_chunk_total": total_chunks,
+                "parquet_file_start_index": int(context_file_start),
+                "parquet_file_end_index": int(file_end),
+                "parquet_file_count": int(file_end - context_file_start + 1),
+            }
 
             data_loader = make_parquet_data_loader(
                 data_for_loader,
@@ -1014,7 +1167,7 @@ def iter_chunked_parquet_batches(
                 for batch_data in data_loader:
                     if absolute_batch_index >= max_batch_index:
                         break
-                    yield absolute_batch_index, batch_data, pending_data_load_s if first_batch else 0.0
+                    yield absolute_batch_index, batch_data, pending_data_load_s if first_batch else 0.0, batch_context
                     if first_batch:
                         pending_data_load_s = 0.0
                     first_batch = False
@@ -1234,6 +1387,7 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
         )
     else:
         logger.info("adaptive_grad_clip=off static_grad_clip=%.4f", grad_clip)
+    clip_action_history = []
 
     # Select the regression loss for the GEP/GEPC expression heads. Huber
     # (smooth-L1) bounds the per-element gradient and is robust to the outlier
@@ -1377,6 +1531,13 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
                     resume_batch_offset,
                     max_batch_index,
                     data_load_s=t_temp_2_data,
+                    batch_context={
+                        "parquet_chunk_index": 1,
+                        "parquet_chunk_total": 1,
+                        "parquet_file_start_index": 0 if file_paths else None,
+                        "parquet_file_end_index": len(file_paths) - 1 if file_paths else None,
+                        "parquet_file_count": len(file_paths),
+                    },
                 )
         t_temp_2_data = 0.0
         if batch_iter is None:
@@ -1416,7 +1577,7 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
             warmup_iters,
         )
 
-        for absolute_batch_index, batch_data, t_temp_2_data in batch_iter:
+        for absolute_batch_index, batch_data, t_temp_2_data, batch_context in batch_iter:
             if t_temp_2_data:
                 t_temp_2_sum_data += t_temp_2_data
             absolute_batch_number = absolute_batch_index + 1
@@ -1431,6 +1592,7 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
             loss_zero_prob_value = None
             loss_gepc_value = None
             loss_gepc_zero_prob_value = None
+            masked_gep_stats = empty_masked_gep_diagnostic_stats()
 
             final_step_in_epoch = absolute_batch_number >= max_batch_index
             should_step = (
@@ -1458,6 +1620,21 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
                 absolute_batch_index,
                 should_step=should_step,
                 final_step=final_step_in_epoch,
+            )
+            should_log_batch_metadata = should_log_batch_metadata_step(
+                args.batch_metadata_log_interval,
+                absolute_batch_index,
+                final_step=final_step_in_epoch,
+            )
+            should_log_masked_gep_stats = should_log_masked_gep_stats_step(
+                args.masked_gep_stats_interval,
+                absolute_batch_index,
+                final_step=final_step_in_epoch,
+            )
+            batch_metadata = (
+                batch_metadata_summary(batch_data, top_k=args.batch_metadata_top_k)
+                if should_log_batch_metadata
+                else None
             )
             if should_log_memory:
                 log_npu_memory(
@@ -1615,6 +1792,7 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
             grad_ema_contribution_cap_value = None
             grad_action = "no_step"
             skipped_this_step = False
+            clip_fraction_rolling_value = None
             if should_step:
                 t_temp_1_lr = time.time()
                 lr = get_lr(update_step,
@@ -1740,6 +1918,11 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
                     scaler.step(optimizer)
                     scaler.update()
                     optimizer.zero_grad()
+                clip_fraction_rolling_value = update_clip_fraction_rolling(
+                    clip_action_history,
+                    grad_action,
+                    window=100,
+                )
                 update_step += 1
                 # print(f"rank: {rank} step update zero_grad done")
                 if should_log_memory:
@@ -1793,6 +1976,12 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
                 loss_gepc_zero_prob_value = (
                     loss_gepc_zero_prob.item() if loss_gepc_zero_prob is not None else None
                 )
+            if should_log_masked_gep_stats:
+                masked_gep_stats = masked_gep_diagnostic_stats(
+                    target_values=target_values,
+                    pred_values=outputs.get("model_output"),
+                    mask_positions=mask_positions,
+                )
 
             local_metric_values = {
                 "loss_total": lossf if lossf is not None else 0.0,
@@ -1821,6 +2010,7 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
                 "loss_zero_prob": loss_zero_prob_value,
                 "loss_gepc": loss_gepc_value,
                 "loss_gepc_zero_prob": loss_gepc_zero_prob_value,
+                **masked_gep_stats,
                 "step_ms": step_ms,
                 "data_load_s": t_temp_2_data,
                 "to_device_s": t_temp_3_batchdata,
@@ -1845,8 +2035,12 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
                 "clipped_count_cum": (adaptive_state.clipped if adaptive_state is not None else None),
                 "consecutive_skips": (adaptive_state.consecutive_skips if adaptive_state is not None else None),
                 "consecutive_clips": (adaptive_state.consecutive_clips if adaptive_state is not None else None),
+                "clip_fraction_rolling": clip_fraction_rolling_value,
+                **batch_context,
                 **cluster_summary,
             }
+            if batch_metadata is not None:
+                metric_row["batch_metadata"] = batch_metadata
             metrics_writer.write(metric_row)
 
             if should_log:
@@ -2119,7 +2313,10 @@ def main(args):
         "experiment_controls amp_dtype=%s static_gene_dtype=%s gene_embedding_modalities=%s "
         "train_mvc=%s gradient_checkpointing=%s "
         "parquet_chunk_files=%s shuffle_rows=%s shuffle_seed=%s "
-        "memory_log_interval=%s tensor_shape_log_interval=%s max_train_steps=%s skip_final_save=%s "
+        "memory_log_interval=%s tensor_shape_log_interval=%s "
+        "batch_metadata_log_interval=%s batch_metadata_top_k=%s "
+        "masked_gep_stats_interval=%s "
+        "max_train_steps=%s skip_final_save=%s "
         "ddp_find_unused_parameters=%s append_output_logs=%s",
         dtype,
         args.static_gene_dtype,
@@ -2131,6 +2328,9 @@ def main(args):
         args.shuffle_seed,
         args.memory_log_interval,
         args.tensor_shape_log_interval,
+        args.batch_metadata_log_interval,
+        args.batch_metadata_top_k,
+        args.masked_gep_stats_interval,
         args.max_train_steps,
         args.skip_final_save,
         args.ddp_find_unused_parameters,
@@ -2365,6 +2565,26 @@ def argumentparser():
                         type=int,
                         default=100,
                         help="Flush JSONL/CSV metric files every N rows.")
+    parser.add_argument(
+        '--batch_metadata_log_interval',
+        type=int,
+        default=None,
+        help="Log batch source/species metadata every N local batches. "
+             "Default follows --log_interval. Use 0 to disable.",
+    )
+    parser.add_argument(
+        '--batch_metadata_top_k',
+        type=int,
+        default=16,
+        help="Number of top ids to keep per batch metadata field.",
+    )
+    parser.add_argument(
+        '--masked_gep_stats_interval',
+        type=int,
+        default=0,
+        help="Collect masked GEP percentile diagnostics every N local batches. "
+             "Default 0 disables the CPU percentile pass.",
+    )
     parser.add_argument(
         '--num_workers',
         type=int,
@@ -2626,6 +2846,8 @@ def argumentparser():
         args.gene_embedding_modalities = parse_gene_embedding_modalities(args.gene_embedding_modalities)
     except (SystemExit, ValueError) as exc:
         parser.error(str(exc))
+    if args.batch_metadata_log_interval is None:
+        args.batch_metadata_log_interval = args.log_interval
     return args
 
 

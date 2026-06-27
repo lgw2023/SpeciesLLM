@@ -741,6 +741,8 @@ def evaluate_file_set(
         prefetch_factor=args.prefetch_factor,
         persistent_workers=args.persistent_workers,
         pin_memory=args.pin_memory,
+        shuffle_rows=False,
+        shuffle_seed=42,
     )
     batch_iter = iter_chunked_parquet_batches(
         batch_args,
@@ -750,6 +752,7 @@ def evaluate_file_set(
         NODE_RANK="0",
         collate_fn=collate_fn,
         logger=logger,
+        epoch=0,
         resume_batch_offset=0,
         max_batch_index=max_batch_index,
     )
@@ -762,7 +765,7 @@ def evaluate_file_set(
     run_mvc = bool(args.train_mvc and config.do_mvc)
 
     with torch.no_grad():
-        for batch_index, batch_data, _data_load_s in batch_iter:
+        for batch_index, batch_data, _data_load_s, _batch_context in batch_iter:
             moved = move_batch_to_device(batch_data, config, device)
             if activation_probe is not None:
                 activation_probe.clear()

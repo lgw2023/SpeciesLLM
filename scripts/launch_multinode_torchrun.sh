@@ -186,6 +186,9 @@ log_interval="${log_interval:-${LOG_INTERVAL:-10}}"
 profile_interval="${profile_interval:-${PROFILE_INTERVAL:-100}}"
 nan_check_interval="${nan_check_interval:-${NAN_CHECK_INTERVAL:-0}}"
 metrics_flush_interval="${metrics_flush_interval:-${METRICS_FLUSH_INTERVAL:-100}}"
+batch_metadata_log_interval="${batch_metadata_log_interval:-${BATCH_METADATA_LOG_INTERVAL:-${log_interval}}}"
+batch_metadata_top_k="${batch_metadata_top_k:-${BATCH_METADATA_TOP_K:-16}}"
+masked_gep_stats_interval="${masked_gep_stats_interval:-${MASKED_GEP_STATS_INTERVAL:-0}}"
 log_level="${log_level:-${LOG_LEVEL:-INFO}}"
 log_all_ranks="${log_all_ranks:-${LOG_ALL_RANKS:-false}}"
 num_workers="${num_workers:-${NUM_WORKERS:-4}}"
@@ -234,7 +237,10 @@ Important environment variables:
   NUM_WORKERS/num_workers, PREFETCH_FACTOR/prefetch_factor,
   PERSISTENT_WORKERS/persistent_workers, PIN_MEMORY/pin_memory,
   TRAIN_SHUFFLE_ROWS/shuffle_rows, TRAIN_SHUFFLE_SEED/shuffle_seed,
-  PARQUET_CHUNK_FILES/parquet_chunk_files
+  PARQUET_CHUNK_FILES/parquet_chunk_files,
+  BATCH_METADATA_LOG_INTERVAL/batch_metadata_log_interval,
+  BATCH_METADATA_TOP_K/batch_metadata_top_k,
+  MASKED_GEP_STATS_INTERVAL/masked_gep_stats_interval
 USAGE
 }
 
@@ -487,6 +493,9 @@ build_train_args() {
     "--profile_interval=${profile_interval}"
     "--nan_check_interval=${nan_check_interval}"
     "--metrics_flush_interval=${metrics_flush_interval}"
+    "--batch_metadata_log_interval=${batch_metadata_log_interval}"
+    "--batch_metadata_top_k=${batch_metadata_top_k}"
+    "--masked_gep_stats_interval=${masked_gep_stats_interval}"
     "--log_level=${log_level}"
     "--log_all_ranks=${log_all_ranks}"
     "--num_workers=${num_workers}"
@@ -635,7 +644,8 @@ remote_env_assignments() {
     init_model_path init_optimizer_path resume_update_step resume_start_epoch resume_skip_batches
     append_output_logs compile
     backend device device_type s3_remote_dir_path
-    log_interval profile_interval nan_check_interval metrics_flush_interval log_level log_all_ranks
+    log_interval profile_interval nan_check_interval metrics_flush_interval
+    batch_metadata_log_interval batch_metadata_top_k masked_gep_stats_interval log_level log_all_ranks
     num_workers prefetch_factor persistent_workers pin_memory shuffle_rows shuffle_seed parquet_chunk_files
   )
 

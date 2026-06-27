@@ -95,6 +95,8 @@ flatten_cmd=(
   "$FLATTEN_COMPRESSION"
   --manifest-name
   "$FLATTEN_MANIFEST_NAME"
+  --merge-manifest
+  "${OUTPUT_DIR}/${MANIFEST_NAME}"
 )
 
 if [[ "$FLATTEN_OVERWRITE" == "1" ]]; then

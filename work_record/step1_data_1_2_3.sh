@@ -254,6 +254,8 @@ flatten_cmd=(
   snappy
   --manifest-name
   shuffle_manifest.csv
+  --merge-manifest
+  "${MERGED_DIR}/merge_manifest.csv"
   --shuffle-mode
   "$SHUFFLE_MODE"
   --batch-files

@@ -143,6 +143,9 @@ LOG_INTERVAL="${LOG_INTERVAL:-10}"
 PROFILE_INTERVAL="${PROFILE_INTERVAL:-100}"
 NAN_CHECK_INTERVAL="${NAN_CHECK_INTERVAL:-0}"
 METRICS_FLUSH_INTERVAL="${METRICS_FLUSH_INTERVAL:-100}"
+BATCH_METADATA_LOG_INTERVAL="${BATCH_METADATA_LOG_INTERVAL:-${LOG_INTERVAL}}"
+BATCH_METADATA_TOP_K="${BATCH_METADATA_TOP_K:-16}"
+MASKED_GEP_STATS_INTERVAL="${MASKED_GEP_STATS_INTERVAL:-0}"
 LOG_LEVEL="${LOG_LEVEL:-INFO}"
 LOG_ALL_RANKS="${LOG_ALL_RANKS:-false}"
 
@@ -375,6 +378,8 @@ generate_flat() {
     snappy
     --manifest-name
     shuffle_manifest.csv
+    --merge-manifest
+    "${MERGED_TEST_DIR}/merge_manifest.csv"
     --overwrite
     --validate-all-schemas
   )
@@ -481,6 +486,9 @@ train_args() {
     "--profile_interval=${PROFILE_INTERVAL}"
     "--nan_check_interval=${NAN_CHECK_INTERVAL}"
     "--metrics_flush_interval=${METRICS_FLUSH_INTERVAL}"
+    "--batch_metadata_log_interval=${BATCH_METADATA_LOG_INTERVAL}"
+    "--batch_metadata_top_k=${BATCH_METADATA_TOP_K}"
+    "--masked_gep_stats_interval=${MASKED_GEP_STATS_INTERVAL}"
     "--log_level=${LOG_LEVEL}"
     "--log_all_ranks=${LOG_ALL_RANKS}"
     "--num_workers=${NUM_WORKERS}"
@@ -630,6 +638,9 @@ write_launcher_script() {
     print_export PROFILE_INTERVAL "$PROFILE_INTERVAL"
     print_export NAN_CHECK_INTERVAL "$NAN_CHECK_INTERVAL"
     print_export METRICS_FLUSH_INTERVAL "$METRICS_FLUSH_INTERVAL"
+    print_export BATCH_METADATA_LOG_INTERVAL "$BATCH_METADATA_LOG_INTERVAL"
+    print_export BATCH_METADATA_TOP_K "$BATCH_METADATA_TOP_K"
+    print_export MASKED_GEP_STATS_INTERVAL "$MASKED_GEP_STATS_INTERVAL"
     print_export LOG_LEVEL "$LOG_LEVEL"
     print_export LOG_ALL_RANKS "$LOG_ALL_RANKS"
     print_export NUM_WORKERS "$NUM_WORKERS"
