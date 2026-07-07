@@ -23,7 +23,9 @@ def index_source_roots(db_path: Path, source_roots: list[Path], *, force: bool =
     conn = connect(db_path)
     init_db(conn)
     runs = discover_runs(source_roots)
-    result = {"discovered": len(runs), "indexed": 0, "skipped": 0, "warnings": 0}
+    result = {"discovered": len(runs), "indexed": 0, "skipped": 0, "warnings": 0, "removed": 0}
+    discovered_ids = {run.id for run in runs}
+    result["removed"] = _remove_stale_runs(conn, source_roots, discovered_ids)
 
     for discovery in runs:
         fingerprint = _fingerprint_run(discovery.path)
@@ -62,6 +64,23 @@ def _index_one_run(conn: sqlite3.Connection, discovery: RunDiscovery, fingerprin
         _insert_diagnostics(conn, diagnostics)
         _insert_artifacts(conn, discovery.id, artifacts)
         _upsert_index_state(conn, discovery.id, fingerprint)
+
+
+def _remove_stale_runs(conn: sqlite3.Connection, source_roots: list[Path], discovered_ids: set[str]) -> int:
+    roots = [str(root.resolve()) for root in source_roots]
+    if not roots:
+        return 0
+    rows = conn.execute(
+        f"SELECT id FROM runs WHERE source_root IN ({','.join('?' for _ in roots)})",
+        tuple(roots),
+    ).fetchall()
+    stale_ids = [row["id"] for row in rows if row["id"] not in discovered_ids]
+    if not stale_ids:
+        return 0
+    with conn:
+        conn.executemany("DELETE FROM runs WHERE id = ?", [(run_id,) for run_id in stale_ids])
+        conn.executemany("DELETE FROM index_state WHERE run_id = ?", [(run_id,) for run_id in stale_ids])
+    return len(stale_ids)
 
 
 def _write_warning_run(conn: sqlite3.Connection, discovery: RunDiscovery, fingerprint: str, exc: Exception) -> None:

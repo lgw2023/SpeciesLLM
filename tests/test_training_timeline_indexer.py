@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import shutil
 from pathlib import Path
 
 from tests.training_timeline_fixtures import make_run_dir
@@ -54,7 +55,27 @@ def test_indexer_skips_unchanged_runs_and_reindexes_changed_runs(tmp_path: Path)
         handle.write('{"update_step": 2, "loss_total": 40.0}\n')
     changed = index_source_roots(db_path, [root])
 
-    assert first == {"discovered": 1, "indexed": 1, "skipped": 0, "warnings": 0}
+    assert first == {"discovered": 1, "indexed": 1, "skipped": 0, "warnings": 0, "removed": 0}
     assert second["indexed"] == 0
     assert second["skipped"] == 1
     assert changed["indexed"] == 1
+
+
+def test_indexer_removes_stale_runs_from_same_source_root(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    run = make_run_dir(
+        root,
+        "training_output_100m_data_1_2_3_stable_from_scratch_20260514_011839",
+        metrics_rows=[{"update_step": 1, "loss_total": 100.0}],
+    )
+    db_path = tmp_path / "timeline.sqlite"
+
+    index_source_roots(db_path, [root])
+    shutil.rmtree(run)
+    result = index_source_roots(db_path, [root])
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    assert result["removed"] == 1
+    assert list_runs(conn) == []
