@@ -12,6 +12,87 @@ export type RunSummary = {
   tags: string[];
 };
 
+export type MetricDatum = {
+  step: number;
+  epoch?: number | null;
+  value: number;
+};
+
+export type MetricSeries = Record<string, MetricDatum[]>;
+
+export type DiagnosticEvent = {
+  id?: string;
+  run_id?: string;
+  event_type: string;
+  severity?: string;
+  title: string;
+  description?: string;
+  evidence?: Record<string, unknown>;
+  start_step?: number | null;
+  end_step?: number | null;
+};
+
+export type ArtifactRef = {
+  kind: string;
+  path: string;
+  size_bytes?: number;
+  mtime?: number;
+};
+
+export type AnalysisNote = {
+  id: string;
+  run_id?: string;
+  note_type: "curated_note" | "deep_review" | string;
+  title: string;
+  body: string;
+  confidence: "low" | "medium" | "high" | string;
+  supersedes_diagnostic_ids?: string[];
+  evidence_refs?: string[];
+  author?: string;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type RunDetailResponse = {
+  run: RunSummary;
+};
+
+export type MetricsResponse = {
+  run_id: string;
+  series: MetricSeries;
+};
+
+export type DiagnosticsResponse = {
+  run_id: string;
+  diagnostics: DiagnosticEvent[];
+};
+
+export type ArtifactsResponse = {
+  run_id: string;
+  artifacts: ArtifactRef[];
+};
+
+export type AnalysisResponse = {
+  run_id: string;
+  notes: AnalysisNote[];
+};
+
+export type ComparisonResponse = {
+  runs?: RunSummary[];
+  config_diffs: Array<{ key: string; values: Record<string, string> }>;
+  metric_summaries: Array<Record<string, unknown>>;
+  diagnostics: DiagnosticEvent[];
+};
+
+export type ReportStage = {
+  name: string;
+  runs: RunSummary[];
+};
+
+export type ReportStagesResponse = {
+  stages: ReportStage[];
+};
+
 export type RunsResponse = {
   runs: RunSummary[];
 };
