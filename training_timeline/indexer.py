@@ -9,8 +9,9 @@ from pathlib import Path
 from typing import Any
 
 from training_timeline.db import connect, init_db
+from training_timeline.diagnostics import diagnose_run
 from training_timeline.metrics import choose_metrics_file, dedupe_by_update_step, downsample_series, iter_metric_rows, summarize_metrics
-from training_timeline.models import ArtifactRef, MetricPoint, MetricSummary, ParsedRunName, RunDiscovery, SummaryInfo
+from training_timeline.models import ArtifactRef, DiagnosticEvent, MetricPoint, MetricSummary, ParsedRunName, RunDiscovery, SummaryInfo
 from training_timeline.parsers import collect_artifacts, parse_run_directory_name, parse_run_record, parse_summary
 from training_timeline.scanner import discover_runs
 
@@ -50,6 +51,7 @@ def _index_one_run(conn: sqlite3.Connection, discovery: RunDiscovery, fingerprin
     rows = dedupe_by_update_step(iter_metric_rows(metrics_path)) if metrics_path is not None else []
     metric_summary = summarize_metrics(discovery.id, rows)
     metric_points = downsample_series(discovery.id, rows)
+    diagnostics = diagnose_run(discovery.id, rows, metric_summary)
 
     with conn:
         _delete_derived_rows(conn, discovery.id)
@@ -57,6 +59,7 @@ def _index_one_run(conn: sqlite3.Connection, discovery: RunDiscovery, fingerprin
         _insert_configs(conn, discovery.id, parsed, run_record)
         _insert_metric_summary(conn, metric_summary)
         _insert_metric_points(conn, discovery.id, metric_points)
+        _insert_diagnostics(conn, diagnostics)
         _insert_artifacts(conn, discovery.id, artifacts)
         _upsert_index_state(conn, discovery.id, fingerprint)
 
@@ -200,6 +203,33 @@ def _insert_metric_points(conn: sqlite3.Connection, run_id: str, points: list[Me
         VALUES (?, ?, ?, ?, ?, ?, ?)
         """,
         [(run_id, point.series_name, point.step, point.epoch, point.value, point.sample_count, point.aggregation) for point in points],
+    )
+
+
+def _insert_diagnostics(conn: sqlite3.Connection, diagnostics: list[DiagnosticEvent]) -> None:
+    conn.executemany(
+        """
+        INSERT OR REPLACE INTO diagnostic_events (
+          id, run_id, event_type, severity, title, description,
+          start_step, end_step, evidence_json, source_file, created_by
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                event.id,
+                event.run_id,
+                event.event_type,
+                event.severity,
+                event.title,
+                event.description,
+                event.start_step,
+                event.end_step,
+                json.dumps(event.evidence, ensure_ascii=False, sort_keys=True),
+                event.source_file,
+                event.created_by,
+            )
+            for event in diagnostics
+        ],
     )
 
 
