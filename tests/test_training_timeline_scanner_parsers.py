@@ -35,7 +35,12 @@ def test_is_inside_source_blocks_outside_paths(tmp_path: Path) -> None:
 def test_discover_runs_skips_text_split_and_deduplicates_symlinks(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     root.mkdir()
-    run = make_run_dir(root, "training_output_100m_data_1_2_3_stable_from_scratch_20260514_011839")
+    run = make_run_dir(
+        root,
+        "training_output_100m_data_1_2_3_stable_from_scratch_20260514_011839",
+        metrics_rows=[{"update_step": 1, "loss_total": 10.0}],
+    )
+    make_run_dir(root, "training_output_empty")
     make_run_dir(root, "training_output_100m_data_1_2_3_stable_from_scratch_20260514_011839_text_split")
     symlink = root / "training_output_duplicate_link"
     symlink.symlink_to(run, target_is_directory=True)

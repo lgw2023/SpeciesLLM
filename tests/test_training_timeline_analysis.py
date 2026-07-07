@@ -11,7 +11,11 @@ from training_timeline.indexer import index_source_roots
 def test_analysis_note_create_update_and_list(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     root.mkdir()
-    make_run_dir(root, "training_output_100m_data_1_2_3_stable_from_scratch_20260514_011839")
+    make_run_dir(
+        root,
+        "training_output_100m_data_1_2_3_stable_from_scratch_20260514_011839",
+        metrics_rows=[{"update_step": 1, "loss_total": 10.0}],
+    )
     db_path = tmp_path / "timeline.sqlite"
     index_source_roots(db_path, [root])
     conn = connect(db_path)

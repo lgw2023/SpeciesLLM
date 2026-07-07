@@ -58,3 +58,23 @@ def test_api_analysis_crud_and_evidence(tmp_path: Path) -> None:
 
     assert patched["confidence"] == "medium"
     assert evidence["run_id"] == run_id
+
+
+def test_report_stages_keep_lr_and_multi_epoch_separate_from_stability(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    for name in [
+        "training_output_500m_stab_A_clip0p5_lr1e-6_13k_from_scratch_20260518_213646",
+        "training_output_100m_data_1_2_3_stable_lr5em4_from_scratch_20260523_130351",
+        "training_output_100m_data_1_2_3_stable_5epoch_lrdecay1_from_scratch_20260526_172620",
+    ]:
+        make_run_dir(root, name, metrics_rows=[{"update_step": 1, "loss_total": 10.0}])
+    app = create_app(tmp_path / "timeline.sqlite", [root])
+    client = TestClient(app)
+    client.post("/api/index/rebuild")
+
+    stage_names = [stage["name"] for stage in client.get("/api/report/stages").json()["stages"]]
+
+    assert "500M stability incident and fixes" in stage_names
+    assert "100M learning-rate sweep" in stage_names
+    assert "Multi-epoch and resume experiments" in stage_names

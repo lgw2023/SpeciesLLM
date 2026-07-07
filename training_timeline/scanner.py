@@ -41,7 +41,23 @@ def _is_candidate_run_dir(path: Path) -> bool:
         return False
     if path.name.endswith("_text_split"):
         return False
-    return path.is_dir()
+    return path.is_dir() and _has_training_evidence(path)
+
+
+def _has_training_evidence(path: Path) -> bool:
+    evidence_names = {"summary.md", "run_record.json", "checkpoint.md"}
+    for child in path.iterdir():
+        if not child.is_file():
+            continue
+        if child.name in evidence_names:
+            return True
+        if child.name.startswith("metrics.") and child.suffix == ".jsonl":
+            return True
+        if child.name.startswith(("loss_to_log", "log.")) and child.suffix == ".txt":
+            return True
+        if child.suffix.lower() in {".png", ".pt"}:
+            return True
+    return False
 
 
 def _stable_run_id(real_path: Path, name: str) -> str:

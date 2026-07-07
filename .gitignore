@@ -75,6 +75,11 @@ training_output_*.zip
 logs/
 out*/
 
+# Local training timeline dashboard state
+.training_timeline/
+training_timeline_ui/node_modules/
+training_timeline_ui/dist/
+
 # IDE
 .idea/
 .vscode/

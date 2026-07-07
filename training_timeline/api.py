@@ -280,12 +280,12 @@ def _config_diffs(conn, run_ids: list[str]) -> list[dict[str, Any]]:
 def _stage_name(run: dict[str, Any]) -> str:
     name = run.get("name", "")
     data_recipe = run.get("data_recipe", "")
-    if "stab" in name or "500m_data_1_2_3_stable" in name:
+    if run.get("model_size") == "500m" and ("stab" in name or "stable" in name):
         return "500M stability incident and fixes"
-    if "lr" in name:
-        return "100M learning-rate sweep"
     if "5epoch" in name or "epoch5" in name:
         return "Multi-epoch and resume experiments"
+    if "lr" in name:
+        return "100M learning-rate sweep"
     if "huber" in name or "fp32" in name or "lossw" in name or "shuffleall" in name:
         return "fp32 + Huber, modality, loss-weight, and shuffle experiments"
     if data_recipe in {"data_1", "data_1_3", "data_1_2_3"}:
