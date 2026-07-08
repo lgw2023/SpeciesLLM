@@ -6,6 +6,7 @@ const backendUrl = process.env.TRAINING_TIMELINE_BACKEND_URL ?? "http://127.0.0.
 export default defineConfig({
   plugins: [react()],
   server: {
+    allowedHosts: ["speciesllm.ultrahardcore.net"],
     proxy: {
       "/api": {
         target: backendUrl,

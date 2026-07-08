@@ -196,12 +196,16 @@ def _variable_changes(
         _changed("training recipe", before["recipe"], after["recipe"], "baseline from-scratch"),
         _changed("learning rate", before["lr"], after["lr"], "default"),
         _changed("grad clip norm", before["clip"], after["clip"], "default"),
+        _changed("grad skip ratio", before["skip_ratio"], after["skip_ratio"], "default"),
+        _changed("grad skip max", before["skip_max"], after["skip_max"], "default"),
         _changed("epoch budget", before["epochs"], after["epochs"], "default"),
         _changed("LR decay schedule", before["lr_decay"], after["lr_decay"], "default"),
         _changed("numeric precision", before["precision"], after["precision"], "default"),
         _changed("loss function", before["loss"], after["loss"], "default"),
         _changed("input modalities", before["modalities"], after["modalities"], "baseline tokens"),
         _changed("data order", before["shuffle"], after["shuffle"], "default shard order"),
+        _changed("resume source", before["resume"], after["resume"], "from scratch"),
+        _changed("resume update step", before["resume_step"], after["resume_step"], "none"),
     ]
     return [change for change in candidates if change is not None]
 
@@ -448,29 +452,56 @@ def _evidence_keywords(child: dict[str, Any], changes: list[VariableChange]) -> 
 
 
 def _extract_variables(run: dict[str, Any], configs: dict[str, dict[str, str]]) -> dict[str, str]:
-    text = _run_text(run, configs)
+    args = _run_args(run, configs)
+    text = _run_text(run, configs, args)
     tags = _run_tags(run, configs)
     return {
         "model": str(run.get("model_size") or "unknown"),
         "data": str(run.get("data_recipe") or "unknown"),
         "recipe": _training_recipe_name(text, tags),
-        "lr": _format_learning_rate(_first_match([*tags, text], r"lr(\d+)em(\d+)"))
+        "lr": _format_arg_value(args.get("LEARNING_RATE"))
+        or _format_learning_rate(_first_match([*tags, text], r"lr(\d+)em(\d+)"))
+        or _format_learning_rate(_first_match([*tags, text], r"lr(\d+)e(\d+)"))
         or _format_raw_learning_rate(_first_match([text], r"lr[^0-9]{0,20}([0-9]+(?:\.[0-9]+)?e-?\d+)")),
-        "clip": _format_clip(_first_match([*tags, text], r"clip(\d+)p(\d+)")),
+        "clip": _format_arg_value(args.get("GRAD_CLIP")) or _format_clip(_first_match([*tags, text], r"clip(\d+)p(\d+)")),
+        "skip_ratio": _format_arg_value(args.get("GRAD_SKIP_RATIO")) or (_first_match([*tags, text], r"skip(\d+)") or ["", ""])[1],
+        "skip_max": _format_arg_value(args.get("GRAD_SKIP_MAX")) or (_first_match([*tags, text], r"skip\d+_(\d+)") or ["", ""])[1],
         "epochs": (_first_match([*tags, text], r"(?:epoch|epochs)(\d+)") or ["", ""])[1]
-        or (_first_match([*tags, text], r"(\d+)epoch") or ["", ""])[1],
-        "lr_decay": _format_lr_decay(_first_match([*tags, text], r"lrdecay(\d+)")),
-        "precision": "fp32" if "fp32" in text or "fp32" in tags else "",
+        or (_first_match([*tags, text], r"(\d+)epoch") or ["", ""])[1]
+        or _format_arg_value(args.get("EPOCH")),
+        "lr_decay": _format_arg_value(args.get("LR_DECAY_EPOCHS")) or _format_lr_decay(_first_match([*tags, text], r"lrdecay(\d+)")),
+        "precision": _format_arg_value(args.get("AMP_DTYPE")) or ("fp32" if "fp32" in text or "fp32" in tags else ""),
         "loss": _loss_name(text, tags),
-        "modalities": _modality_name(text, tags),
-        "shuffle": "all rows" if "shuffleall" in text or "shuffle_rows" in text else "",
+        "modalities": _format_modalities(args.get("GENE_EMBEDDING_MODALITIES")) or _modality_name(text, tags),
+        "shuffle": "all rows" if args.get("TRAIN_SHUFFLE_ROWS", "").lower() == "true" or "shuffleall" in text or "shuffle_rows" in text else "",
+        "resume": "checkpoint resume" if _is_resume(args, text) else "",
+        "resume_step": _nonzero_arg(args.get("RESUME_UPDATE_STEP")),
     }
 
 
-def _run_text(run: dict[str, Any], configs: dict[str, dict[str, str]]) -> str:
+def _run_text(run: dict[str, Any], configs: dict[str, dict[str, str]], args: dict[str, str]) -> str:
     pieces = [str(run.get("name") or ""), str(run.get("experiment_name") or ""), str(run.get("data_recipe") or "")]
-    pieces.extend(configs.get(run["id"], {}).values())
+    pieces.extend(_run_tags(run, configs))
+    pieces.extend(f"{key}={value}" for key, value in args.items() if key not in {"INIT_MODEL_PATH", "INIT_OPTIMIZER_PATH"})
     return " ".join(pieces).lower()
+
+
+def _run_args(run: dict[str, Any], configs: dict[str, dict[str, str]]) -> dict[str, str]:
+    raw = configs.get(run["id"], {}).get("run_record:argv", "[]")
+    try:
+        argv = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(argv, list):
+        return {}
+    values: dict[str, str] = {}
+    for item in argv:
+        if not isinstance(item, str) or "=" not in item:
+            continue
+        key, value = item.split("=", 1)
+        if re.fullmatch(r"[A-Z_][A-Z0-9_]*", key):
+            values[key] = value
+    return values
 
 
 def _run_tags(run: dict[str, Any], configs: dict[str, dict[str, str]]) -> list[str]:
@@ -511,7 +542,7 @@ def _confidence(changes: list[VariableChange], evidence: list[dict[str, Any]]) -
 
 
 def _lane_for_run(run: dict[str, Any], configs: dict[str, dict[str, str]]) -> str:
-    text = _run_text(run, configs)
+    text = _run_text(run, configs, _run_args(run, configs))
     if run.get("model_size") == "500m" or "stab_smoke" in text or "clip0p5" in text:
         return "500M stability"
     if any(token in text for token in ["huber", "fp32", "esm2", "dnaseq", "lossw", "shuffle"]):
@@ -571,6 +602,13 @@ def _format_learning_rate(match: re.Match[str] | None) -> str:
     return f"{match.group(1)}e-{match.group(2)}"
 
 
+def _format_arg_value(value: str | None) -> str:
+    if value is None:
+        return ""
+    stripped = str(value).strip()
+    return "" if stripped in {"", "0", "0.0", "false", "False"} else stripped
+
+
 def _format_raw_learning_rate(match: re.Match[str] | None) -> str:
     if match is None:
         return ""
@@ -587,6 +625,32 @@ def _format_lr_decay(match: re.Match[str] | None) -> str:
     if match is None:
         return ""
     return f"lrdecay{match.group(1)}"
+
+
+def _format_modalities(value: str | None) -> str:
+    if not value:
+        return ""
+    names = []
+    for item in value.split(","):
+        token = item.strip().lower()
+        if token == "esm2":
+            names.append("ESM2")
+        elif token == "dnaseq":
+            names.append("DNAseq")
+        elif token:
+            names.append(token)
+    return " + ".join(names)
+
+
+def _is_resume(args: dict[str, str], text: str) -> bool:
+    return bool(args.get("INIT_MODEL_PATH") or args.get("INIT_OPTIMIZER_PATH") or _nonzero_arg(args.get("RESUME_UPDATE_STEP")) or "recovery" in text)
+
+
+def _nonzero_arg(value: str | None) -> str:
+    if value is None:
+        return ""
+    stripped = str(value).strip()
+    return "" if stripped in {"", "0", "0.0"} else stripped
 
 
 def _tokens(value: str) -> set[str]:

@@ -135,12 +135,16 @@ def _settings_summary(variables: dict[str, str]) -> str:
     for key, label in [
         ("lr", "lr"),
         ("clip", "clip"),
+        ("skip_ratio", "skip_ratio"),
+        ("skip_max", "skip_max"),
         ("epochs", "epochs"),
         ("lr_decay", "lr_decay"),
         ("precision", "precision"),
         ("loss", "loss"),
         ("modalities", "modalities"),
         ("shuffle", "shuffle"),
+        ("resume", "resume"),
+        ("resume_step", "resume_step"),
     ]:
         if variables[key]:
             parts.append(f"{label}={variables[key]}")

@@ -130,6 +130,60 @@ def test_indexer_writes_auto_context_notes_from_records(tmp_path: Path, monkeypa
     assert any(ref.startswith("conversation:conversation.jsonl") for ref in evidence_refs)
 
 
+def test_indexer_relationship_uses_explicit_run_record_recovery_controls(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    make_run_dir(
+        root,
+        "training_output_100m_data_1_3_E2_huber5_fp32_esm2_dnaseq_lossw_gepc01_shuffleall_from_scratch_20260622_162826",
+        run_record={
+            "argv": [
+                "EXPERIMENT_NAME=data_1_3_E2_huber5_fp32_esm2_dnaseq_lossw_gepc01_shuffleall",
+                "LEARNING_RATE=1e-6",
+                "GEP_LOSS=huber",
+                "HUBER_DELTA=5.0",
+                "AMP_DTYPE=float32",
+                "GENE_EMBEDDING_MODALITIES=esm2,dnaseq",
+                "TRAIN_SHUFFLE_ROWS=true",
+            ]
+        },
+        metrics_rows=[{"update_step": 1, "loss_total": 10.0}],
+    )
+    make_run_dir(
+        root,
+        "training_output_100m_data_1_3_E2_huber5_fp32_esm2_dnaseq_lossw_gepc01_shuffleall_recovery_runB_lr5e7_skip5_5000_from_scratch_20260626_184544",
+        run_record={
+            "argv": [
+                "EXPERIMENT_NAME=data_1_3_E2_huber5_fp32_esm2_dnaseq_lossw_gepc01_shuffleall_recovery_runB_lr5e7_skip5_5000",
+                "LEARNING_RATE=5e-7",
+                "GRAD_SKIP_RATIO=5",
+                "GRAD_SKIP_MAX=5000",
+                "INIT_MODEL_PATH=/repo/training_output_100m_data_1_3_E2_huber5_fp32_esm2_dnaseq_lossw_gepc01_shuffleall_from_scratch_20260622_162826/checkpoint.pt",
+                "RESUME_UPDATE_STEP=33100",
+                "GEP_LOSS=huber",
+                "HUBER_DELTA=5.0",
+                "AMP_DTYPE=float32",
+                "GENE_EMBEDDING_MODALITIES=esm2,dnaseq",
+                "TRAIN_SHUFFLE_ROWS=true",
+            ]
+        },
+        metrics_rows=[{"update_step": 1, "loss_total": 9.0}],
+    )
+    db_path = tmp_path / "timeline.sqlite"
+
+    index_source_roots(db_path, [root])
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    child_id = conn.execute("SELECT id FROM runs WHERE experiment_name LIKE '%recovery_runB%'").fetchone()["id"]
+    edge = conn.execute("SELECT change_summary FROM run_relationships WHERE child_run_id = ?", (child_id,)).fetchone()
+
+    assert edge is not None
+    assert "learning rate: 1e-6 -> 5e-7" in edge["change_summary"]
+    assert "grad skip ratio: default -> 5" in edge["change_summary"]
+    assert "grad skip max: default -> 5000" in edge["change_summary"]
+
+
 def test_indexer_skips_unchanged_runs_and_reindexes_changed_runs(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     root.mkdir()
