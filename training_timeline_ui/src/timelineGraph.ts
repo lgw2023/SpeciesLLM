@@ -1,9 +1,9 @@
-import type { RunSummary } from "./types";
+import type { RunRelationship, RunSummary } from "./types";
 
 export const TIMELINE_NODE_WIDTH = 260;
 export const TIMELINE_NODE_HEIGHT = 150;
 export const TIMELINE_COLUMN_GAP = 86;
-export const TIMELINE_ROW_GAP = 96;
+export const TIMELINE_ROW_GAP = 132;
 export const TIMELINE_LEFT_PAD = 24;
 export const TIMELINE_TOP_PAD = 78;
 
@@ -21,6 +21,8 @@ export type TimelineEdge = {
   fromId: string;
   toId: string;
   label: string;
+  confidence?: string;
+  evidenceCount?: number;
 };
 
 export type TimelineGraph = {
@@ -33,7 +35,7 @@ export type TimelineGraph = {
 
 const LANE_ORDER = ["Scale smoke", "100M data baselines", "500M stability", "LR / schedule", "E2 ablations"];
 
-export function buildTimelineGraph(runs: RunSummary[]): TimelineGraph {
+export function buildTimelineGraph(runs: RunSummary[], relationships: RunRelationship[] = []): TimelineGraph {
   const sortedRuns = [...runs].sort((a, b) => (a.started_at ?? "").localeCompare(b.started_at ?? ""));
   const lanes = LANE_ORDER.filter((lane) => sortedRuns.some((run) => laneForRun(run) === lane));
   const activeLanes = lanes.length ? lanes : ["Experiments"];
@@ -50,7 +52,7 @@ export function buildTimelineGraph(runs: RunSummary[]): TimelineGraph {
       index,
     };
   });
-  const edges = sortedRuns.flatMap<TimelineEdge>((run, index) => {
+  const edges = relationships.length > 0 ? edgesFromRelationships(relationships, nodes) : sortedRuns.flatMap<TimelineEdge>((run, index) => {
     if (index === 0) {
       return [];
     }
@@ -71,6 +73,20 @@ export function buildTimelineGraph(runs: RunSummary[]): TimelineGraph {
     width: Math.max(880, TIMELINE_LEFT_PAD * 2 + activeLanes.length * TIMELINE_NODE_WIDTH + Math.max(0, activeLanes.length - 1) * TIMELINE_COLUMN_GAP),
     height: TIMELINE_TOP_PAD + sortedRuns.length * TIMELINE_NODE_HEIGHT + Math.max(0, sortedRuns.length - 1) * TIMELINE_ROW_GAP + 54,
   };
+}
+
+function edgesFromRelationships(relationships: RunRelationship[], nodes: TimelineNode[]): TimelineEdge[] {
+  const nodeIds = new Set(nodes.map((node) => node.id));
+  return relationships
+    .filter((relationship) => nodeIds.has(relationship.parent_run_id) && nodeIds.has(relationship.child_run_id))
+    .map((relationship) => ({
+      id: relationship.id,
+      fromId: relationship.parent_run_id,
+      toId: relationship.child_run_id,
+      label: relationship.change_summary,
+      confidence: relationship.confidence,
+      evidenceCount: relationship.evidence_refs.length,
+    }));
 }
 
 export function describeVariableChange(parent: RunSummary, child: RunSummary): string {

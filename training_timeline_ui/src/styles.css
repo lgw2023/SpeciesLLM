@@ -177,7 +177,7 @@ button {
 
 .timeline-edge-label {
   z-index: 4;
-  width: 270px;
+  width: 320px;
   padding: 7px 9px;
   border: 1px solid #c1d2df;
   border-radius: 6px;
@@ -187,6 +187,14 @@ button {
   font-size: 12px;
   line-height: 1.35;
   overflow-wrap: anywhere;
+}
+
+.timeline-edge-meta {
+  display: block;
+  margin-top: 5px;
+  color: #718079;
+  font-size: 11px;
+  line-height: 1.25;
 }
 
 .timeline-node {
@@ -420,6 +428,10 @@ button {
 .stage-run p,
 .note-card p {
   color: #4e5c69;
+}
+
+.note-body {
+  white-space: pre-line;
 }
 
 .metric-grid {

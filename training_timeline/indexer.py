@@ -9,10 +9,12 @@ from pathlib import Path
 from typing import Any
 
 from training_timeline.db import connect, init_db
+from training_timeline.context_notes import refresh_auto_context_notes
 from training_timeline.diagnostics import diagnose_run
 from training_timeline.metrics import choose_metrics_file, dedupe_by_update_step, downsample_series, iter_metric_rows, summarize_metrics
 from training_timeline.models import ArtifactRef, DiagnosticEvent, MetricPoint, MetricSummary, ParsedRunName, RunDiscovery, SummaryInfo
 from training_timeline.parsers import collect_artifacts, parse_run_directory_name, parse_run_record, parse_summary
+from training_timeline.relationships import refresh_run_relationships
 from training_timeline.scanner import discover_runs
 
 
@@ -40,6 +42,8 @@ def index_source_roots(db_path: Path, source_roots: list[Path], *, force: bool =
             result["warnings"] += 1
             result["indexed"] += 1
 
+    refresh_run_relationships(conn, source_roots)
+    refresh_auto_context_notes(conn, source_roots)
     conn.close()
     return result
 

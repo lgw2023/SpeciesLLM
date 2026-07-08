@@ -21,7 +21,7 @@ def list_analysis_notes(conn: sqlite3.Connection, run_id: str) -> list[dict[str,
         SELECT *
         FROM analysis_notes
         WHERE run_id = ?
-        ORDER BY created_at, id
+        ORDER BY CASE WHEN author = 'auto-context' THEN 1 ELSE 0 END, created_at, id
         """,
         (run_id,),
     ).fetchall()

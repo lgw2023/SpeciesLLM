@@ -78,3 +78,21 @@ def test_report_stages_keep_lr_and_multi_epoch_separate_from_stability(tmp_path:
     assert "500M stability incident and fixes" in stage_names
     assert "100M learning-rate sweep" in stage_names
     assert "Multi-epoch and resume experiments" in stage_names
+
+
+def test_report_timeline_returns_relationship_edges(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    make_run_dir(root, "training_output_100m_data_1_from_scratch_20260501_000000", metrics_rows=[{"update_step": 1, "loss_total": 10.0}])
+    make_run_dir(root, "training_output_100m_data_1_3_stable_lr5em4_from_scratch_20260502_000000", metrics_rows=[{"update_step": 1, "loss_total": 9.0}])
+    app = create_app(tmp_path / "timeline.sqlite", [root])
+    client = TestClient(app)
+    client.post("/api/index/rebuild")
+
+    timeline = client.get("/api/report/timeline").json()
+
+    assert len(timeline["runs"]) == 2
+    assert len(timeline["relationships"]) == 1
+    assert timeline["relationships"][0]["parent_run_id"] == timeline["runs"][0]["id"]
+    assert timeline["relationships"][0]["child_run_id"] == timeline["runs"][1]["id"]
+    assert "training data recipe: data_1 -> data_1_3" in timeline["relationships"][0]["change_summary"]

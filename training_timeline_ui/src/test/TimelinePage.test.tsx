@@ -31,6 +31,17 @@ test("timeline shows run metadata and preliminary labels", () => {
           tags: ["stable", "lr1em5", "from_scratch"],
         },
       ]}
+      relationships={[
+        {
+          id: "edge-1",
+          parent_run_id: "run-1",
+          child_run_id: "run-2",
+          relationship_type: "inferred_parent",
+          confidence: "medium",
+          change_summary: "Script evidence: changed learning rate from default to 1e-5 for stable recipe",
+          evidence_refs: [{ kind: "script", ref: "work_record/stability_experiments.sh" }],
+        },
+      ]}
       loading={false}
       onOpenRun={() => undefined}
     />,
@@ -41,7 +52,7 @@ test("timeline shows run metadata and preliminary labels", () => {
   expect(screen.getByText(/Older experiments start at the top/)).toBeInTheDocument();
   expect(screen.getAllByText("100m").length).toBeGreaterThan(0);
   expect(screen.getAllByText("data_1_2_3").length).toBeGreaterThan(0);
-  expect(screen.getByText("learning rate: default -> 1e-5")).toBeInTheDocument();
+  expect(screen.getByText("Script evidence: changed learning rate from default to 1e-5 for stable recipe")).toBeInTheDocument();
   expect(screen.getByText("Loss improved across the full epoch (summary).")).toBeInTheDocument();
   expect(screen.queryByText(/summary.md/)).not.toBeInTheDocument();
 });

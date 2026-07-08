@@ -74,7 +74,7 @@ http://127.0.0.1:5173
 
 ## 页面
 
-- Timeline：按推断开始时间从上到下展示训练关系图，节点代表实验，边标注相对父实验改变的训练数据、模型、配方和训练参数。
+- Timeline：按推断开始时间从上到下展示训练关系图，节点代表实验，边优先使用索引出的关系证据，标注相对父实验改变的训练数据、模型、配方和训练参数。
 - Sources：展示 source root、run 数量，并触发重建索引。
 - Run Detail：展示摘要、曲线、自动诊断、人工深度复核和 artifact。
 - Compare：对比多个 run 的配置差异、摘要指标和诊断事件。
@@ -85,6 +85,8 @@ http://127.0.0.1:5173
 自动诊断只做初筛，标签包括 `converged`、`bad_plateau`、`clip_storm`、`skip_loop`、`primary_head_failure`、`lr_floor_freeze` 和 `resume_boundary`。这些结论在 UI 中标记为 `Preliminary`。
 
 复杂训练任务需要逐次阅读日志、配置、曲线和 summary。Run Detail 的 deep review 区域用于补充人工阅读结论，必要时可覆盖或解释自动诊断。
+
+关系边和 `auto-context` 笔记是自动推断的第二层证据，不覆盖原始日志事实。索引会组合目录名、`run_record.json`、`summary/metrics`、`work_record/`、`scripts/`、相关 Git 记录、本地记忆记录、相关对话记录和 Run Detail 里的人工分析笔记；后续人工补出的结论应写入 deep review / curated note，并优先于自动笔记展示。
 
 ## 本地安全约束
 

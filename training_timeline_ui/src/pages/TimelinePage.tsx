@@ -2,17 +2,18 @@ import { CalendarClock, GitBranch } from "lucide-react";
 import { RunStatusBadge } from "../components/RunStatusBadge";
 import { bestRunSummary } from "../display";
 import { TIMELINE_COLUMN_GAP, TIMELINE_LEFT_PAD, TIMELINE_NODE_HEIGHT, TIMELINE_NODE_WIDTH, TIMELINE_TOP_PAD, buildTimelineGraph } from "../timelineGraph";
-import type { RunSummary } from "../types";
+import type { RunRelationship, RunSummary } from "../types";
 
 type TimelinePageProps = {
   runs: RunSummary[];
+  relationships?: RunRelationship[];
   loading: boolean;
   onOpenRun: (runId: string) => void;
 };
 
-export function TimelinePage({ runs, loading, onOpenRun }: TimelinePageProps) {
+export function TimelinePage({ runs, relationships = [], loading, onOpenRun }: TimelinePageProps) {
   const sortedRuns = [...runs].sort((a, b) => (a.started_at ?? "").localeCompare(b.started_at ?? ""));
-  const graph = buildTimelineGraph(sortedRuns);
+  const graph = buildTimelineGraph(sortedRuns, relationships);
   const nodesById = new Map(graph.nodes.map((node) => [node.id, node]));
 
   if (loading) {
@@ -80,6 +81,11 @@ export function TimelinePage({ runs, loading, onOpenRun }: TimelinePageProps) {
                 return (
                   <div className="timeline-edge-label" key={edge.id} style={{ left: position.x, top: position.y }}>
                     {edge.label}
+                    {edge.confidence && edge.evidenceCount ? (
+                      <span className="timeline-edge-meta">
+                        {edge.confidence} confidence | {edge.evidenceCount} evidence refs
+                      </span>
+                    ) : null}
                   </div>
                 );
               })}
@@ -125,7 +131,7 @@ function edgePath(fromX: number, fromY: number, toX: number, toY: number) {
 }
 
 function edgeLabelPosition(fromX: number, fromY: number, toX: number, toY: number, graphWidth: number) {
-  const labelWidth = 270;
+  const labelWidth = 320;
   const startX = fromX + TIMELINE_NODE_WIDTH / 2;
   const endX = toX + TIMELINE_NODE_WIDTH / 2;
   const idealX = (startX + endX) / 2 - labelWidth / 2;
@@ -133,7 +139,7 @@ function edgeLabelPosition(fromX: number, fromY: number, toX: number, toY: numbe
   const maxX = Math.max(minX, graphWidth - labelWidth - 12);
   return {
     x: Math.min(Math.max(idealX, minX), maxX),
-    y: Math.max(fromY + TIMELINE_NODE_HEIGHT + 10, toY - 78),
+    y: Math.max(fromY + TIMELINE_NODE_HEIGHT + 12, toY - 112),
   };
 }
 

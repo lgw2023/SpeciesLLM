@@ -7,6 +7,7 @@ import type {
   IndexRebuildResponse,
   MetricsResponse,
   ReportStagesResponse,
+  ReportTimelineResponse,
   RunDetailResponse,
   RunsResponse,
   SourcesResponse,
@@ -69,4 +70,8 @@ export function compareRuns(runIds: string[]): Promise<ComparisonResponse> {
 
 export function fetchReportStages(): Promise<ReportStagesResponse> {
   return requestJson<ReportStagesResponse>("/api/report/stages");
+}
+
+export function fetchReportTimeline(): Promise<ReportTimelineResponse> {
+  return requestJson<ReportTimelineResponse>("/api/report/timeline");
 }

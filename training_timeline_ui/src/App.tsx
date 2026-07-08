@@ -7,9 +7,9 @@ import {
   fetchArtifacts,
   fetchDiagnostics,
   fetchMetrics,
+  fetchReportTimeline,
   fetchReportStages,
   fetchRun,
-  fetchRuns,
   fetchSources,
   rebuildIndex,
   updateAnalysisNote,
@@ -19,13 +19,14 @@ import { ReportPage } from "./pages/ReportPage";
 import { RunDetailPage } from "./pages/RunDetailPage";
 import { SourcesPage } from "./pages/SourcesPage";
 import { TimelinePage } from "./pages/TimelinePage";
-import type { AnalysisNote, ArtifactRef, ComparisonResponse, DiagnosticEvent, MetricSeries, ReportStage, RunSummary, SourceInfo } from "./types";
+import type { AnalysisNote, ArtifactRef, ComparisonResponse, DiagnosticEvent, MetricSeries, ReportStage, RunRelationship, RunSummary, SourceInfo } from "./types";
 
 type View = "timeline" | "sources" | "compare" | "report" | "run-detail";
 
 export default function App() {
   const [view, setView] = useState<View>("timeline");
   const [runs, setRuns] = useState<RunSummary[]>([]);
+  const [relationships, setRelationships] = useState<RunRelationship[]>([]);
   const [sources, setSources] = useState<SourceInfo[]>([]);
   const [runCount, setRunCount] = useState(0);
   const [loadingRuns, setLoadingRuns] = useState(true);
@@ -49,12 +50,14 @@ export default function App() {
   async function loadRuns() {
     setLoadingRuns(true);
     try {
-      const response = await fetchRuns();
+      const response = await fetchReportTimeline();
       setRuns(response.runs);
+      setRelationships(response.relationships);
       setRunCount(response.runs.length);
       setAppError(null);
     } catch {
       setRuns([]);
+      setRelationships([]);
       setRunCount(0);
       setAppError("Could not load runs. Check that the backend is running and the frontend proxy points to the same port.");
     } finally {
@@ -196,7 +199,7 @@ export default function App() {
             {appError}
           </div>
         ) : null}
-        {view === "timeline" ? <TimelinePage runs={runs} loading={loadingRuns} onOpenRun={openRun} /> : null}
+        {view === "timeline" ? <TimelinePage runs={runs} relationships={relationships} loading={loadingRuns} onOpenRun={openRun} /> : null}
         {view === "sources" ? (
           <SourcesPage sources={sources} runCount={runCount} loading={loadingSources} rebuilding={rebuilding} onRefresh={handleRebuild} />
         ) : null}

@@ -93,6 +93,20 @@ CREATE TABLE IF NOT EXISTS analysis_notes (
   FOREIGN KEY (run_id) REFERENCES runs(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS run_relationships (
+  id TEXT PRIMARY KEY,
+  parent_run_id TEXT NOT NULL,
+  child_run_id TEXT NOT NULL,
+  relationship_type TEXT NOT NULL DEFAULT 'inferred_parent',
+  confidence TEXT NOT NULL DEFAULT 'medium',
+  change_summary TEXT NOT NULL,
+  evidence_json TEXT NOT NULL,
+  created_by TEXT NOT NULL DEFAULT 'auto',
+  indexed_at TEXT NOT NULL,
+  FOREIGN KEY (parent_run_id) REFERENCES runs(id) ON DELETE CASCADE,
+  FOREIGN KEY (child_run_id) REFERENCES runs(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS artifacts (
   run_id TEXT NOT NULL,
   kind TEXT NOT NULL,
@@ -115,3 +129,4 @@ CREATE INDEX IF NOT EXISTS idx_run_configs_run_key ON run_configs(run_id, key);
 CREATE INDEX IF NOT EXISTS idx_metric_series_run_series_step ON metric_series(run_id, series_name, step);
 CREATE INDEX IF NOT EXISTS idx_diagnostic_events_run_type ON diagnostic_events(run_id, event_type);
 CREATE INDEX IF NOT EXISTS idx_analysis_notes_run_type ON analysis_notes(run_id, note_type);
+CREATE INDEX IF NOT EXISTS idx_run_relationships_child ON run_relationships(child_run_id);

@@ -45,7 +45,7 @@ export function AnalysisPanel({ diagnostics, notes, onCreate }: AnalysisPanelPro
               <h3>{note.title}</h3>
               <span>{note.confidence} confidence</span>
             </div>
-            <p>{note.body}</p>
+            <p className="note-body">{note.body}</p>
             {(note.evidence_refs ?? []).length ? (
               <div className="tag-row">
                 {(note.evidence_refs ?? []).map((ref) => (

@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from training_timeline.analysis import create_analysis_note, get_evidence_bundle, list_analysis_notes, update_analysis_note
 from training_timeline.db import connect, init_db, list_runs, load_run
 from training_timeline.indexer import index_source_roots
+from training_timeline.relationships import list_run_relationships
 
 
 def create_app(db_path: Path, source_roots: list[Path] | None = None) -> FastAPI:
@@ -161,7 +162,8 @@ def create_app(db_path: Path, source_roots: list[Path] | None = None) -> FastAPI
     def report_timeline() -> dict[str, Any]:
         with _conn(app) as conn:
             runs = [_with_tags(conn, run) for run in list_runs(conn)]
-        return {"runs": runs}
+            relationships = list_run_relationships(conn, [run["id"] for run in runs])
+        return {"runs": runs, "relationships": relationships}
 
     @app.get("/api/report/stages")
     def report_stages() -> dict[str, Any]:

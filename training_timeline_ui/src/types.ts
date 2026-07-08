@@ -12,6 +12,22 @@ export type RunSummary = {
   tags: string[];
 };
 
+export type EvidenceRef = {
+  kind: string;
+  ref: string;
+  detail?: string;
+};
+
+export type RunRelationship = {
+  id: string;
+  parent_run_id: string;
+  child_run_id: string;
+  relationship_type: string;
+  confidence: string;
+  change_summary: string;
+  evidence_refs: EvidenceRef[];
+};
+
 export type MetricDatum = {
   step: number;
   epoch?: number | null;
@@ -91,6 +107,11 @@ export type ReportStage = {
 
 export type ReportStagesResponse = {
   stages: ReportStage[];
+};
+
+export type ReportTimelineResponse = {
+  runs: RunSummary[];
+  relationships: RunRelationship[];
 };
 
 export type RunsResponse = {
