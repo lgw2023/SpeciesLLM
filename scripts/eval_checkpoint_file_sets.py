@@ -640,7 +640,12 @@ def build_model(args: argparse.Namespace, device: str, logger: logging.Logger):
     dtype, ptdtype = resolve_amp_dtype(args)
 
     src = np.arange(1, args.seq_len + 1)
-    gene_embeddings = load_gene_embeddings(args.emb_path, args.gene_embedding_modalities, args.seq_len)
+    gene_embeddings = load_gene_embeddings(
+        args.emb_path,
+        args.gene_embedding_modalities,
+        args.seq_len,
+        suffix=args.gene_embedding_suffix,
+    )
     esm_embeddings = gene_embeddings.get("esm2")
     desc_embeddings = gene_embeddings.get("gene_desc")
     dna_embeddings = gene_embeddings.get("dnaseq")
@@ -844,6 +849,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data_path", required=True)
     parser.add_argument("--emb_path", required=True)
     parser.add_argument("--gene_embedding_modalities", default="esm2,dnaseq")
+    parser.add_argument("--gene_embedding_suffix", default="")
     parser.add_argument("--config_json", required=True)
     parser.add_argument("--seq_len", type=int, default=None)
     parser.add_argument("--checkpoint", action="append", required=True, help="Repeat NAME=/path/checkpoint.pt")

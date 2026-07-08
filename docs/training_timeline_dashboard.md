@@ -40,7 +40,7 @@ python -m training_timeline.cli rebuild \
 
 ## 启动应用
 
-后端：
+后端脚本会先重建一次本地索引，再启动服务，避免首次打开页面时误显示为空：
 
 ```bash
 scripts/run_training_timeline_backend.sh
@@ -52,11 +52,18 @@ scripts/run_training_timeline_backend.sh
 scripts/run_training_timeline_frontend.sh
 ```
 
-如果后端没有使用默认 `8765` 端口，可以指定代理地址：
+如果后端没有使用默认 `8766` 端口，可以指定代理地址：
 
 ```bash
 cd training_timeline_ui
 TRAINING_TIMELINE_BACKEND_URL=http://127.0.0.1:8766 npm run dev
+```
+
+脚本默认使用 `8766`，也可以统一指定端口：
+
+```bash
+TRAINING_TIMELINE_BACKEND_PORT=8770 scripts/run_training_timeline_backend.sh
+TRAINING_TIMELINE_BACKEND_PORT=8770 scripts/run_training_timeline_frontend.sh
 ```
 
 浏览器打开：
@@ -67,7 +74,7 @@ http://127.0.0.1:5173
 
 ## 页面
 
-- Timeline：按推断开始时间展示训练任务。
+- Timeline：按推断开始时间从上到下展示训练关系图，节点代表实验，边标注相对父实验改变的训练数据、模型、配方和训练参数。
 - Sources：展示 source root、run 数量，并触发重建索引。
 - Run Detail：展示摘要、曲线、自动诊断、人工深度复核和 artifact。
 - Compare：对比多个 run 的配置差异、摘要指标和诊断事件。

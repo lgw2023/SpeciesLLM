@@ -2,6 +2,7 @@ import type { AnalysisNote, ArtifactRef, DiagnosticEvent, MetricSeries, RunSumma
 import { AnalysisPanel } from "../components/AnalysisPanel";
 import { MetricChart } from "../components/MetricChart";
 import { RunStatusBadge } from "../components/RunStatusBadge";
+import { bestRunSummary } from "../display";
 
 type RunDetailPageProps = {
   run: RunSummary;
@@ -19,7 +20,7 @@ export function RunDetailPage({ run, metrics, diagnostics, artifacts, notes, onC
       <div className="detail-header">
         <div>
           <h1>{run.summary_title || run.experiment_name || run.name}</h1>
-          <p>{run.summary_one_liner || run.status_reason}</p>
+          <p className="summary-text">{bestRunSummary(run.summary_one_liner, run.status_reason)}</p>
         </div>
         <RunStatusBadge status={run.status} />
       </div>

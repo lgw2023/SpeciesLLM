@@ -495,7 +495,10 @@ def validate_data(args: argparse.Namespace) -> None:
             print(f"[INFO] wrote distributed file plan: {plan_path}")
 
     if args.emb_path.exists():
-        for modality, name in gene_embedding_files_for_modalities(gene_embedding_modalities):
+        for modality, name in gene_embedding_files_for_modalities(
+            gene_embedding_modalities,
+            suffix=args.gene_embedding_suffix,
+        ):
             path = args.emb_path / name
             if not path.exists():
                 errors.append(f"missing {modality} embedding file: {path}")
@@ -518,6 +521,7 @@ def validate_data(args: argparse.Namespace) -> None:
         "world_size": args.world_size,
         "seq_len": seq_len,
         "gene_embedding_modalities": list(gene_embedding_modalities),
+        "gene_embedding_suffix": args.gene_embedding_suffix,
         "species_distribution": dict(sorted(species_counter.items())),
     }
     print(json.dumps(summary, indent=2, sort_keys=True))
@@ -734,6 +738,11 @@ def build_parser() -> argparse.ArgumentParser:
         default="esm2,gene_desc,dnaseq",
         help="Comma-separated embedding modalities to require/check. "
              "Default esm2,gene_desc,dnaseq preserves the current three-way check.",
+    )
+    validate_parser.add_argument(
+        "--gene-embedding-suffix",
+        default="",
+        help="Suffix inserted before .npy for each embedding file, e.g. _v2.",
     )
     add_common_label_args(validate_parser)
     validate_parser.set_defaults(func=validate_data)

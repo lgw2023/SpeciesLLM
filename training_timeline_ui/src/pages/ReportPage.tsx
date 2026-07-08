@@ -1,4 +1,5 @@
 import type { ReportStage } from "../types";
+import { bestRunSummary } from "../display";
 
 type ReportPageProps = {
   stages: ReportStage[];
@@ -22,7 +23,7 @@ export function ReportPage({ stages, onOpenRun }: ReportPageProps) {
               <article className="stage-run" key={run.id}>
                 <div>
                   <h3>{run.experiment_name || run.name}</h3>
-                  <p>{run.summary_one_liner || run.status_reason}</p>
+                  <p className="summary-text">{bestRunSummary(run.summary_one_liner, run.status_reason)}</p>
                 </div>
                 <button className="icon-button text-button" type="button" onClick={() => onOpenRun(run.id)}>
                   Open evidence

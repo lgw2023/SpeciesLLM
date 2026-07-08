@@ -164,6 +164,7 @@ grad_clip_ema_runaway_factor="${grad_clip_ema_runaway_factor:-${GRAD_CLIP_EMA_RU
 grad_clip_hard_raw_norm_limit="${grad_clip_hard_raw_norm_limit:-${GRAD_CLIP_HARD_RAW_NORM_LIMIT:-100000000000.0}}"
 amp_dtype="${amp_dtype:-${AMP_DTYPE:-float32}}"
 gene_embedding_modalities="${gene_embedding_modalities:-${GENE_EMBEDDING_MODALITIES:-esm2,gene_desc,dnaseq}}"
+gene_embedding_suffix="${gene_embedding_suffix:-${GENE_EMBEDDING_SUFFIX:-}}"
 gep_loss="${gep_loss:-${GEP_LOSS:-mse}}"
 huber_delta="${huber_delta:-${HUBER_DELTA:-5.0}}"
 gep_loss_weight="${gep_loss_weight:-${GEP_LOSS_WEIGHT:-1.0}}"
@@ -234,6 +235,7 @@ Important environment variables:
   TRAIN_DATASET=full|test
   DATA_ROOT, EMB_ROOT, DATA_PATH/data_path, EMB_PATH/emb_path
   MODEL_CONFIG_JSON/config_json, BATCH_SIZE/batch_size
+  GENE_EMBEDDING_SUFFIX/gene_embedding_suffix
   NUM_WORKERS/num_workers, PREFETCH_FACTOR/prefetch_factor,
   PERSISTENT_WORKERS/persistent_workers, PIN_MEMORY/pin_memory,
   TRAIN_SHUFFLE_ROWS/shuffle_rows, TRAIN_SHUFFLE_SEED/shuffle_seed,
@@ -444,6 +446,7 @@ build_train_args() {
     "--num_of_used_data=${num_of_used_data}"
     "--emb_path=${emb_path}"
     "--gene_embedding_modalities=${gene_embedding_modalities}"
+    "--gene_embedding_suffix=${gene_embedding_suffix}"
     "--config_json=${config_json}"
     "--out_path=${out_path}"
     "--batch_size=${batch_size}"
@@ -633,7 +636,7 @@ remote_env_assignments() {
     DRY_RUN LOCAL_NODE_RANK ASCEND_RT_VISIBLE_DEVICES_VALUE HCCL_CONNECT_TIMEOUT HCCL_EXEC_TIMEOUT
     HCCL_WHITELIST_DISABLE ASCEND_TOOLKIT_HOME ASCEND_ENV_SH ASCEND_HOME_PATH
     data_path num_of_used_data emb_path config_json out_path batch_size epoch
-    gene_embedding_modalities
+    gene_embedding_modalities gene_embedding_suffix
     gradient_accumulation_steps gradient_checkpointing train_mvc runtime_do_mvc runtime_explicit_zero_prob
     learning_rate min_lr decay_lr warmup_iters
     warmup_ratio lr_decay_epochs weight_decay save_data_interval beta1 beta2 grad_clip
@@ -674,7 +677,7 @@ run_launcher() {
   log "NNODES=${NNODES}, NPROC_PER_NODE=${NPROC_PER_NODE}, MASTER=${MASTER_ADDR}:${MASTER_PORT}"
   log "WORKDIR=${WORKDIR}, remote_script=${remote_self}"
   log "TRAIN_DATASET=${TRAIN_DATASET}, data_path=${data_path}, emb_path=${emb_path}"
-  log "config_json=${config_json}, gene_embedding_modalities=${gene_embedding_modalities}"
+  log "config_json=${config_json}, gene_embedding_modalities=${gene_embedding_modalities}, gene_embedding_suffix=${gene_embedding_suffix:-<none>}"
   log "max_train_steps=${max_train_steps}, adaptive_grad_clip=${adaptive_grad_clip}"
   log "shuffle_rows=${shuffle_rows}, shuffle_seed=${shuffle_seed}, parquet_chunk_files=${parquet_chunk_files}"
   log "SYNC_SELF=${SYNC_SELF}, DRY_RUN=${DRY_RUN}, LOCAL_NODE_RANK=${LOCAL_NODE_RANK}"

@@ -95,11 +95,22 @@ def parse_gene_embedding_modalities(value: Any | None) -> tuple[str, ...]:
     return tuple(modalities)
 
 
-def gene_embedding_files_for_modalities(modalities: Any | None) -> list[tuple[str, str]]:
+def gene_embedding_files_for_modalities(
+    modalities: Any | None,
+    suffix: str = "",
+) -> list[tuple[str, str]]:
+    suffix = str(suffix or "")
     return [
-        (modality, GENE_EMBEDDING_FILES[modality])
+        (modality, embedding_filename(GENE_EMBEDDING_FILES[modality], suffix))
         for modality in parse_gene_embedding_modalities(modalities)
     ]
+
+
+def embedding_filename(filename: str, suffix: str) -> str:
+    if not suffix:
+        return filename
+    stem, extension = filename.rsplit(".", 1)
+    return f"{stem}{suffix}.{extension}"
 
 
 def load_model_config(config_path: Path) -> dict[str, Any]:

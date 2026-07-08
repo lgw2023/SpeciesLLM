@@ -18,10 +18,10 @@ export function MetricChart({ title, series }: MetricChartProps) {
         <div className="empty-chart">No curve data</div>
       ) : (
         <ResponsiveContainer width="100%" height={220}>
-          <LineChart data={data} margin={{ top: 12, right: 18, left: 0, bottom: 6 }}>
+          <LineChart data={data} margin={{ top: 12, right: 18, left: 4, bottom: 6 }}>
             <CartesianGrid stroke="#e6ecf2" />
             <XAxis dataKey="step" tick={{ fontSize: 12 }} />
-            <YAxis tick={{ fontSize: 12 }} width={56} />
+            <YAxis tick={{ fontSize: 12 }} width={72} tickFormatter={formatAxisTick} />
             <Tooltip />
             {names.map((name, index) => (
               <Line key={name} type="monotone" dataKey={name} stroke={COLORS[index % COLORS.length]} dot={false} strokeWidth={2} connectNulls />
@@ -34,6 +34,14 @@ export function MetricChart({ title, series }: MetricChartProps) {
 }
 
 const COLORS = ["#2f6f8f", "#8a5a44", "#4c7f47", "#7a4e8a", "#a06c2f", "#516a9b"];
+
+function formatAxisTick(value: number) {
+  const magnitude = Math.abs(value);
+  if (magnitude > 0 && magnitude < 0.001) {
+    return value.toExponential(1);
+  }
+  return Number.isInteger(value) ? String(value) : value.toPrecision(3);
+}
 
 function mergeSeries(series: MetricSeries, names: string[]) {
   const byStep = new Map<number, Record<string, number>>();

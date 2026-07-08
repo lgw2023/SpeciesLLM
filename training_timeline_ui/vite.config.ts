@@ -1,7 +1,7 @@
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
-const backendUrl = process.env.TRAINING_TIMELINE_BACKEND_URL ?? "http://127.0.0.1:8765";
+const backendUrl = process.env.TRAINING_TIMELINE_BACKEND_URL ?? "http://127.0.0.1:8766";
 
 export default defineConfig({
   plugins: [react()],

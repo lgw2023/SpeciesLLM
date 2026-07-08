@@ -467,9 +467,9 @@ CONFIG_ARG_FIELD_MAP = {
 }
 
 
-def load_gene_embeddings(emb_path, modalities, seq_len):
+def load_gene_embeddings(emb_path, modalities, seq_len, suffix=""):
     embeddings = {}
-    for modality, filename in gene_embedding_files_for_modalities(modalities):
+    for modality, filename in gene_embedding_files_for_modalities(modalities, suffix=suffix):
         path = Path(emb_path) / filename
         if not path.exists():
             raise FileNotFoundError(f"Missing {modality} embedding file: {path}")
@@ -2256,7 +2256,12 @@ def main(args):
     src = np.arange(1, seq_len + 1)
     #######################################
     # original reading section
-    gene_embeddings = load_gene_embeddings(emb_path, args.gene_embedding_modalities, seq_len)
+    gene_embeddings = load_gene_embeddings(
+        emb_path,
+        args.gene_embedding_modalities,
+        seq_len,
+        suffix=args.gene_embedding_suffix,
+    )
     esm_embeddings = gene_embeddings.get("esm2")
     desc_embeddings = gene_embeddings.get("gene_desc")
     dna_embeddings = gene_embeddings.get("dnaseq")
@@ -2311,6 +2316,7 @@ def main(args):
     logger.info("model_config=%s", config)
     logger.info(
         "experiment_controls amp_dtype=%s static_gene_dtype=%s gene_embedding_modalities=%s "
+        "gene_embedding_suffix=%s "
         "train_mvc=%s gradient_checkpointing=%s "
         "parquet_chunk_files=%s shuffle_rows=%s shuffle_seed=%s "
         "memory_log_interval=%s tensor_shape_log_interval=%s "
@@ -2321,6 +2327,7 @@ def main(args):
         dtype,
         args.static_gene_dtype,
         ",".join(args.gene_embedding_modalities),
+        args.gene_embedding_suffix,
         args.train_mvc,
         args.gradient_checkpointing,
         args.parquet_chunk_files,
@@ -2423,6 +2430,10 @@ def argumentparser():
                         default="esm2,gene_desc,dnaseq",
                         help="Comma-separated static gene embedding modalities to use. "
                              "Default esm2,gene_desc,dnaseq preserves the current three-way fusion.")
+    parser.add_argument("--gene_embedding_suffix",
+                        type=str,
+                        default="",
+                        help="Suffix inserted before .npy for static gene embedding files, e.g. _v2.")
     parser.add_argument("--config_json",
                         type=str,
                         default=None,

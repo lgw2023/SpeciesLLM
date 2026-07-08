@@ -17,6 +17,7 @@ usage() {
     echo "  --data_path=<value>                Directory of sc data."
     echo "  --emb_path=<value>                 Directory of emb data."
     echo "  --gene_embedding_modalities=<value> Comma-separated gene embedding modalities."
+    echo "  --gene_embedding_suffix=<value>    Embedding filename suffix, e.g. _v2."
     echo "  --seq_len=<value>                  seq_len."
     echo "  --batch_size=<value>               batch_size."
     echo "  --epoch=<value>                    epoch."
@@ -41,6 +42,7 @@ s3_remote_dir_path="s3://bucket-3028/public/SpeciesLLM-Training/"
 data_path=./all_flatten_data
 emb_path=./macrogene_embeddings_1stage
 gene_embedding_modalities=esm2,gene_desc,dnaseq
+gene_embedding_suffix=""
 out_path="training_output"
 # seq_len = #macrogenes = rows of the *_macrogene_features_sum_*.npy you load
 # (1st-run=862, current 2nd-run=640). Must match the embeddings AND the data X
@@ -129,6 +131,10 @@ for arg in "$@"; do
             ;;
         --gene_embedding_modalities=*)
             gene_embedding_modalities="${arg#*=}"
+            shift
+            ;;
+        --gene_embedding_suffix=*)
+            gene_embedding_suffix="${arg#*=}"
             shift
             ;;
         --seq_len=*)
@@ -486,6 +492,7 @@ cmd_args="--data_path=$data_path \
     --num_of_used_data=$num_of_used_data \
     --emb_path=$emb_path \
     --gene_embedding_modalities=$gene_embedding_modalities \
+    --gene_embedding_suffix=$gene_embedding_suffix \
     --seq_len=$seq_len \
     --out_path=$out_path \
     --batch_size=$batch_size \

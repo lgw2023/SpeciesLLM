@@ -98,6 +98,7 @@ TRAIN_MVC="${TRAIN_MVC:-true}"
 RUNTIME_DO_MVC="${RUNTIME_DO_MVC:-}"
 RUNTIME_EXPLICIT_ZERO_PROB="${RUNTIME_EXPLICIT_ZERO_PROB:-}"
 GENE_EMBEDDING_MODALITIES="${GENE_EMBEDDING_MODALITIES:-esm2,gene_desc,dnaseq}"
+GENE_EMBEDDING_SUFFIX="${GENE_EMBEDDING_SUFFIX:-}"
 LEARNING_RATE="${LEARNING_RATE:-0.00001}"
 MIN_LR="${MIN_LR:-0.000001}"
 DECAY_LR="${DECAY_LR:-true}"
@@ -216,7 +217,7 @@ load_model_config_from_json() {
   eval "$assignments"
   log "loaded fixed model config: $MODEL_CONFIG_JSON"
   log "config-derived seq_len=$SEQ_LEN hidden_size=$HIDDEN_SIZE layers=$NUM_HIDDEN_LAYERS heads=$NUM_ATTENTION_HEADS"
-  log "gene_embedding_modalities=$GENE_EMBEDDING_MODALITIES"
+  log "gene_embedding_modalities=$GENE_EMBEDDING_MODALITIES gene_embedding_suffix=${GENE_EMBEDDING_SUFFIX:-<none>}"
 }
 
 shell_quote() {
@@ -412,6 +413,8 @@ validate_data() {
     "$EMB_PATH"
     --gene-embedding-modalities
     "$GENE_EMBEDDING_MODALITIES"
+    --gene-embedding-suffix
+    "$GENE_EMBEDDING_SUFFIX"
     --config-json
     "$MODEL_CONFIG_JSON"
     --world-size
@@ -437,6 +440,7 @@ train_args() {
     "--num_of_used_data=${NUM_OF_USED_DATA}"
     "--emb_path=${EMB_PATH}"
     "--gene_embedding_modalities=${GENE_EMBEDDING_MODALITIES}"
+    "--gene_embedding_suffix=${GENE_EMBEDDING_SUFFIX}"
     "--config_json=${MODEL_CONFIG_JSON}"
     "--out_path=${OUT_PATH}"
     "--batch_size=${BATCH_SIZE}"
@@ -593,6 +597,7 @@ write_launcher_script() {
     print_export RUNTIME_DO_MVC "$RUNTIME_DO_MVC"
     print_export RUNTIME_EXPLICIT_ZERO_PROB "$RUNTIME_EXPLICIT_ZERO_PROB"
     print_export GENE_EMBEDDING_MODALITIES "$GENE_EMBEDDING_MODALITIES"
+    print_export GENE_EMBEDDING_SUFFIX "$GENE_EMBEDDING_SUFFIX"
     print_export LEARNING_RATE "$LEARNING_RATE"
     print_export MIN_LR "$MIN_LR"
     print_export DECAY_LR "$DECAY_LR"
@@ -685,6 +690,8 @@ generate_commands() {
     echo "  $DATA_PATH"
     echo "Embedding path:"
     echo "  $EMB_PATH"
+    echo "Embedding suffix:"
+    echo "  ${GENE_EMBEDDING_SUFFIX:-<none>}"
     echo "Output path pattern:"
     echo "  $OUT_PATH"
     echo

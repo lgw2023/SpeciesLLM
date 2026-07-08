@@ -98,6 +98,7 @@ def test_multinode_launcher_forwards_shuffle_arguments():
             "BATCH_METADATA_LOG_INTERVAL": "7",
             "BATCH_METADATA_TOP_K": "5",
             "MASKED_GEP_STATS_INTERVAL": "11",
+            "GENE_EMBEDDING_SUFFIX": "_v2",
             "DRY_RUN": "1",
             "NODE_RANK": "0",
             "NNODES": "1",
@@ -126,6 +127,7 @@ def test_multinode_launcher_forwards_shuffle_arguments():
     assert "--batch_metadata_log_interval=7" in result.stdout
     assert "--batch_metadata_top_k=5" in result.stdout
     assert "--masked_gep_stats_interval=11" in result.stdout
+    assert "--gene_embedding_suffix=_v2" in result.stdout
 
 
 def test_multinode_launcher_defaults_batch_metadata_interval_to_log_interval():

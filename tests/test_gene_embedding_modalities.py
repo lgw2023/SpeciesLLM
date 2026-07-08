@@ -9,6 +9,7 @@ import torch
 
 from scripts.pretrain_config import (
     gene_embedding_files_for_modalities,
+    load_model_config,
     parse_gene_embedding_modalities,
 )
 
@@ -41,10 +42,67 @@ def test_parse_gene_embedding_modalities_for_two_way_ablation():
     ]
 
 
+def test_gene_embedding_suffix_selects_v2_embedding_files():
+    assert gene_embedding_files_for_modalities("esm2,gene_desc,dnaseq", suffix="_v2") == [
+        ("esm2", "2nd_run_macrogene_features_sum_esm2_v2.npy"),
+        ("gene_desc", "2nd_run_macrogene_features_sum_gene_desc_v2.npy"),
+        ("dnaseq", "2nd_run_macrogene_features_sum_dnaseq_v2.npy"),
+    ]
+
+
 @pytest.mark.parametrize("modalities", ["esm2,bad", "esm2,esm2", ""])
 def test_parse_gene_embedding_modalities_rejects_invalid_values(modalities):
     with pytest.raises(ValueError):
         parse_gene_embedding_modalities(modalities)
+
+
+@pytest.mark.parametrize(
+    ("filename", "expected"),
+    [
+        (
+            "args_2nd_run_100m_v2_604.json",
+            {
+                "seq_len": 604,
+                "hidden_size": 640,
+                "num_hidden_layers": 12,
+                "num_attention_heads": 10,
+                "intermediate_size": 5120,
+                "num_species_labels": 49,
+            },
+        ),
+        (
+            "args_2nd_run_500m_v2_604.json",
+            {
+                "seq_len": 604,
+                "hidden_size": 1280,
+                "num_hidden_layers": 24,
+                "num_attention_heads": 20,
+                "intermediate_size": 5120,
+                "num_species_labels": 49,
+            },
+        ),
+        (
+            "args_2nd_run_1b_v2_604.json",
+            {
+                "seq_len": 604,
+                "hidden_size": 1440,
+                "num_hidden_layers": 40,
+                "num_attention_heads": 30,
+                "intermediate_size": 5760,
+                "num_species_labels": 49,
+            },
+        ),
+    ],
+)
+def test_v2_604_model_configs_are_strictly_loadable(filename, expected):
+    config_path = Path(__file__).resolve().parents[1] / "Stage2_macrogene_embeddings" / filename
+    config = load_model_config(config_path)
+
+    for key, value in expected.items():
+        assert config[key] == value
+    assert config["vocab_size"] == 605
+    assert config["max_position_embeddings"] == 605
+    assert config["hidden_size"] % config["num_attention_heads"] == 0
 
 
 def test_two_way_ablation_forward_does_not_require_gene_desc_embeddings():

@@ -24,7 +24,7 @@ const runs = [
     experiment_name: "lr sweep",
     status: "needs_review",
     status_reason: "indexed",
-    summary_one_liner: "Bad plateau candidate.",
+    summary_one_liner: "> **Bad plateau** candidate with `lr` notes.",
     tags: ["lr5em4"],
   },
 ];
@@ -57,6 +57,7 @@ test("report page shows phase names and evidence links", () => {
   );
 
   expect(screen.getByText("100M learning-rate sweep")).toBeInTheDocument();
+  expect(screen.getByText("Bad plateau candidate with lr notes.")).toBeInTheDocument();
   expect(screen.getAllByText("Open evidence")[0]).toBeInTheDocument();
 });
 
