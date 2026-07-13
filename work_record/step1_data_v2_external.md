@@ -26,6 +26,48 @@
 
 ---
 
+## 服务器已生成的 v2 external 数据集（2026-07-13）
+
+统一根目录：
+
+```text
+/data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData
+```
+
+按最终可用于训练的 shuffle + flatten 目录计，目前共生成 **3 份** v2 数据集。每份数据同时保留一个 merged 中间目录；merged 目录不另计为训练数据集。
+
+| 数据组成 | merged 中间目录 | 最终 flatten 目录 | Parquet 分片数 | 已确认结果 |
+|----------|-----------------|------------------|----------------|------------|
+| 1st 去人鼠 + 完整 2nd + 完整 3sc | `all_merged_full_no_1st_human_mouse_v2_604_external_20260708` | `all_flatten_data_full_no_1st_human_mouse_v2_604_external_20260708` | **28057** | 459680768 行；external shuffle 验证通过 |
+| 完整 1st-only | `data_1_only_merged_full_v2_604_1st_external_20260708` | `data_1_only_flatten_data_full_v2_604_1st_external_20260708` | **4344** | 已确认服务器目录与分片数；总行数及 shuffle 统计尚未记录 |
+| 1st 去人鼠 + 完整 3sc | `data_1_3_merged_full_no_1st_human_mouse_v2_604_1_3_external_20260712` | `data_1_3_flatten_data_full_no_1st_human_mouse_v2_604_1_3_external_20260712` | **13630** | 223303680 行；80 文件抽样 external shuffle 验证通过 |
+
+上述分片数来自服务器侧 2026-07-13 实测：
+
+```bash
+find /data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData/data_1_only_flatten_data_full_v2_604_1st_external_20260708 | grep parquet | wc -l
+find /data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData/data_1_3_flatten_data_full_no_1st_human_mouse_v2_604_1_3_external_20260712 | grep parquet | wc -l
+find /data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData/all_flatten_data_full_no_1st_human_mouse_v2_604_external_20260708 | grep parquet | wc -l
+```
+
+依次输出：
+
+```text
+4344
+13630
+28057
+```
+
+后续复核训练分片时，建议使用更严格的顶层文件名口径，避免把 `_shuffle_tmp` 中的临时 Parquet 计入：
+
+```bash
+find "$FLAT_DIR" -maxdepth 1 -type f -name 'all_flatten_part_*.parquet' | wc -l
+```
+
+最初的三个 `*_preprocessed_step4_v2` 目录是上游输入，不计入上述 3 份下游训练数据；测试目录和训练命令记录目录也不计入。
+
+---
+
 ## 默认流水线参数
 
 | 参数 | 值 | 说明 |
