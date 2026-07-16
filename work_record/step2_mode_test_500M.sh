@@ -16,7 +16,7 @@ if [[ "$#" -gt 0 ]]; then
   exit 1
 fi
 
-# 500M 模型三节点的训练测试
+# 500M 模型两节点的训练测试
 
 cd /data/disk1/SpeciesLLM
 
@@ -33,9 +33,9 @@ bash scripts/pretrain_3node.sh \
   PYTHON_BIN=/data/miniconda3/bin/python \
   STAGE2_ROOT=/data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData \
   WORKDIR=/data/disk1/SpeciesLLM \
-  HOSTS=7.150.12.45,7.150.15.14,7.150.14.170 \
+  HOSTS=7.150.12.45,7.150.14.170 \
   MASTER_ADDR=7.150.12.45 \
-  NNODES=3 \
+  NNODES=2 \
   NPROC_PER_NODE=8 \
   TRAIN_DATASET=test \
   DATA_PATH=/data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData/all_flatten_data_test_500m \
@@ -48,6 +48,6 @@ bash scripts/pretrain_3node.sh \
   GRADIENT_ACCUMULATION_STEPS=1 \
   GRADIENT_CHECKPOINTING=true
 
-# 500M 模型三节点的训练测试
+# 500M 模型两节点的训练测试
 # 134 parquet file ~ 3200 seconds
 # 28089 parquet file ~ 3200 * 28089 / 134 = 670,782 seconds ~ 186 hours ~ 7.75 days

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ###############################################################################
-# Pretraining data + model-scale three-node training helper.
+# Pretraining data + model-scale multi-node training helper.
 #
 # This script intentionally uses merge_macrogene_rounds.py --test-mode
 # for the small sample. It does not create synthetic parquet inputs.
@@ -33,10 +33,10 @@ FLAT_TEST_DIR="${FLAT_TEST_DIR:-${STAGE2_ROOT}/all_flatten_data_test_${MODEL_SCA
 COMMAND_DIR="${COMMAND_DIR:-${STAGE2_ROOT}/pretrain_${MODEL_SCALE}_test_commands}"
 TRAIN_OUTPUT_ROOT="${TRAIN_OUTPUT_ROOT:-training_output}"
 
-NNODES="${NNODES:-3}"
+NNODES="${NNODES:-2}"
 NPROC_PER_NODE="${NPROC_PER_NODE:-8}"
 WORLD_SIZE=$((NNODES * NPROC_PER_NODE))
-HOSTS="${HOSTS:-7.150.12.45,7.150.15.14,7.150.14.170}"
+HOSTS="${HOSTS:-7.150.12.45,7.150.14.170}"
 MASTER_ADDR="${MASTER_ADDR:-${HOSTS%%,*}}"
 MASTER_PORT="${MASTER_PORT:-12345}"
 WORKDIR="${WORKDIR:-$PROJECT_ROOT}"
@@ -185,7 +185,7 @@ Typical server run:
   STAGE2_ROOT=/data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData \\
   MODEL_SCALE=500m \\
   WORKDIR=/path/to/SpeciesLLM \\
-  HOSTS=host0,host1,host2 MASTER_ADDR=host0 \\
+  HOSTS=host0,host1 MASTER_ADDR=host0 \\
   bash scripts/$(basename "$0") all
 
 Notes:
@@ -684,7 +684,7 @@ generate_commands() {
 
   local summary="${COMMAND_DIR}/README.txt"
   {
-    echo "${MODEL_SCALE} three-node pretraining commands"
+    echo "${MODEL_SCALE} two-node pretraining commands"
     echo
     echo "Data path:"
     echo "  $DATA_PATH"

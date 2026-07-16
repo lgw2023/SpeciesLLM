@@ -282,10 +282,10 @@ PYTHON_BIN=${PYTHON_BIN:-/data/miniconda3/bin/python}
 PRETRAIN_CHECKS_PY=${PRETRAIN_CHECKS_PY:-${PROJECT_ROOT}/scripts/pretrain_checks.py}
 STAGE2_ROOT=${STAGE2_ROOT:-/data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData}
 
-HOSTS=${HOSTS:-7.150.12.45,7.150.15.14,7.150.14.170}
+HOSTS=${HOSTS:-7.150.12.45,7.150.14.170}
 MASTER_ADDR=${MASTER_ADDR:-${HOSTS%%,*}}
 MASTER_PORT=${MASTER_PORT:-12345}
-NNODES=${NNODES:-3}
+NNODES=${NNODES:-2}
 NPROC_PER_NODE=${NPROC_PER_NODE:-8}
 
 EMB_ROOT=${EMB_ROOT:-/data/disk1/SpeciesLLM}
@@ -455,8 +455,8 @@ run_pretrain_3node
 #
 # Batch-size context:
 #   effective_global_batch = BATCH_SIZE * NNODES * NPROC_PER_NODE * GRAD_ACCUM
-#                          = 512 * 3 * 8 * 1 = 12288 cells/update
-#   token batch is about 12288 * 640 = 7.86M tokens/update.
+#                          = 512 * 2 * 8 * 1 = 8192 cells/update
+#   token batch is about 8192 * 640 = 5.24M tokens/update.
 #
 # Literature anchors from papers/:
 #   STACK Base/Large pretrain: peak LR=1e-4; XLarge/Huge: 3e-5.

@@ -57,7 +57,7 @@ load_env_defaults "$ENV_FILE"
 # ---------- cluster configuration ----------
 # NNODES is recalculated from the final active host list by default. Keep
 # AUTO_NNODES=0 if you want NNODES to remain a strict manual value.
-NNODES="${NNODES:-3}"
+NNODES="${NNODES:-2}"
 AUTO_NNODES="${AUTO_NNODES:-1}"
 NPROC_PER_NODE="${NPROC_PER_NODE:-8}"
 
@@ -65,9 +65,9 @@ MASTER_ADDR="${MASTER_ADDR:-7.150.12.45}"
 MASTER_PORT="${MASTER_PORT:-12345}"
 
 # Comma-separated base hosts. Order is the torchrun node_rank order.
-HOSTS_CSV="${HOSTS:-7.150.12.45,7.150.15.14,7.150.14.170}"
+HOSTS_CSV="${HOSTS:-7.150.12.45,7.150.14.170}"
 # Comma-separated optional hosts. Keep AUTO_OPTIONAL_HOSTS=0 for the normal
-# 3-node run; set AUTO_OPTIONAL_HOSTS=1 to append reachable optional hosts.
+# 2-node run; set AUTO_OPTIONAL_HOSTS=1 to append reachable optional hosts.
 OPTIONAL_HOSTS_CSV="${OPTIONAL_HOSTS:-7.150.8.22}"
 AUTO_OPTIONAL_HOSTS="${AUTO_OPTIONAL_HOSTS:-0}"
 OPTIONAL_HOST_CONNECT_TIMEOUT="${OPTIONAL_HOST_CONNECT_TIMEOUT:-5}"
@@ -223,7 +223,7 @@ usage() {
   cat <<USAGE
 Usage:
   # Master-node launcher
-  HOSTS="host0,host1,host2" OPTIONAL_HOSTS="host3" MASTER_ADDR=host0 WORKDIR=/path/to/SpeciesLLM bash scripts/$SELF_NAME
+  HOSTS="host0,host1" OPTIONAL_HOSTS="host2" MASTER_ADDR=host0 WORKDIR=/path/to/SpeciesLLM bash scripts/$SELF_NAME
 
   # Worker mode, normally used by the launcher
   NODE_RANK=1 bash $SELF_NAME --worker

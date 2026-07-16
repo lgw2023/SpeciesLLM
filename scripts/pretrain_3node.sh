@@ -263,9 +263,9 @@ set_default MODEL_CONFIG_JSON "$MODEL_CONFIG_JSON_DEFAULT"
 set_default GENE_EMBEDDING_MODALITIES "esm2,gene_desc,dnaseq"
 set_default GENE_EMBEDDING_SUFFIX ""
 
-set_default NNODES 3
+set_default NNODES 2
 set_default NPROC_PER_NODE 8
-set_default HOSTS "7.150.12.45,7.150.15.14,7.150.14.170"
+set_default HOSTS "7.150.12.45,7.150.14.170"
 set_default MASTER_ADDR 7.150.12.45
 set_default MASTER_PORT 12345
 

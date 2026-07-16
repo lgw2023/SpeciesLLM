@@ -7,8 +7,8 @@ set -euo pipefail
 # Single-node 8-card probe:
 #   bash scripts/run_ddp_grad_sync_probe.sh single
 #
-# Three-node 24-card probe, run on the master node:
-#   HOSTS="host0,host1,host2" MASTER_ADDR=host0 WORKDIR=/data/disk1/SpeciesLLM \
+# Two-node 16-card probe, run on the master node:
+#   HOSTS="host0,host1" MASTER_ADDR=host0 WORKDIR=/data/disk1/SpeciesLLM \
 #   bash scripts/run_ddp_grad_sync_probe.sh multinode
 #
 # Worker mode is normally started by the multinode launcher:
@@ -40,7 +40,7 @@ Common overrides:
   WORKDIR=/data/disk1/SpeciesLLM
   ASCEND_RT_VISIBLE_DEVICES_VALUE=0,1,2,3,4,5,6,7
   MASTER_ADDR=host0 MASTER_PORT=29591
-  HOSTS=host0,host1,host2
+  HOSTS=host0,host1
   SSH_USER=root SSH_PASSWORD=... or SSH_KEY=/path/to/key
   PROBE_CASES=all
   PROBE_VERBOSE=1
@@ -149,8 +149,8 @@ if [[ "$MODE" == "single" ]]; then
   NNODES="${NNODES:-1}"
   MASTER_ADDR="${MASTER_ADDR:-127.0.0.1}"
 elif [[ "$MODE" == "multinode" || "$MODE" == "worker" ]]; then
-  NNODES="${NNODES:-3}"
-  HOSTS_CSV="${HOSTS:-7.150.12.45,7.150.15.14,7.150.14.170}"
+  NNODES="${NNODES:-2}"
+  HOSTS_CSV="${HOSTS:-7.150.12.45,7.150.14.170}"
   MASTER_ADDR="${MASTER_ADDR:-${HOSTS_CSV%%,*}}"
 else
   usage >&2

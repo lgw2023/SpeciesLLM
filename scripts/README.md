@@ -61,7 +61,7 @@ Stage2_macrogene_embeddings/args_2nd_run.json
 Missing model structure fields, label switches, label counts, or inconsistent
 `vocab_size` / `max_position_embeddings` fail fast.
 
-## Three-node pretraining smoke test
+## Two-node pretraining smoke test
 
 ```bash
 bash scripts/pretrain_pipeline.sh all
@@ -70,7 +70,7 @@ bash scripts/pretrain_pipeline.sh all
 This server-oriented script uses
 `merge_macrogene_rounds.py --test-mode`, flattens the small merged
 sample, validates parquet schema / label ranges / macrogene embedding shapes,
-creates a 24-rank file distribution plan, and generates three-node training
+creates a 16-rank file distribution plan, and generates two-node training
 commands under `Stage2_SpeciesLLMData/pretrain_500m_test_commands`.
 
 Model structure and label parameters are read strictly from
@@ -87,11 +87,11 @@ Typical server invocation:
 ```bash
 STAGE2_ROOT=/data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData \
 WORKDIR=/path/to/SpeciesLLM \
-HOSTS=host0,host1,host2 MASTER_ADDR=host0 \
+HOSTS=host0,host1 MASTER_ADDR=host0 \
 bash scripts/pretrain_pipeline.sh all
 ```
 
-For end-to-end three-node orchestration, including remote sync, path checks,
+For end-to-end two-node orchestration, including remote sync, path checks,
 dry-run, and optional launch, use:
 
 ```bash
@@ -229,7 +229,7 @@ Single-node 8-card test:
 bash scripts/run_ddp_grad_sync_probe.sh single
 ```
 
-`single` mode does not load `.env` by default, so three-node variables such as
+`single` mode does not load `.env` by default, so multi-node variables such as
 `MASTER_ADDR` or `WORKDIR` do not accidentally override the local 8-card probe.
 Pass `LOAD_ENV_FILE=1` only if you intentionally want to read `.env`.
 
@@ -239,10 +239,10 @@ Expected key line for 8 ranks:
 PASS ddp_backward: observed=[-9.0, -9.0, -9.0, -9.0, -9.0, -9.0, -9.0, -9.0] expected=global average -9.0
 ```
 
-Three-node 24-card test, run from the master node:
+Two-node 16-card test, run from the master node:
 
 ```bash
-HOSTS=host0,host1,host2 \
+HOSTS=host0,host1 \
 MASTER_ADDR=host0 \
 WORKDIR=/data/disk1/SpeciesLLM \
 bash scripts/run_ddp_grad_sync_probe.sh multinode

@@ -161,7 +161,7 @@ SpeciesLLM/
 ├── scripts/
 │   ├── generate_test_data.sh                       # Test-data generation command
 │   ├── pretrain_pipeline.sh                        # Reusable pretraining data/check/command pipeline
-│   ├── pretrain_3node.sh                           # Three-node pretraining orchestrator
+│   ├── pretrain_3node.sh                           # Multi-node pretraining orchestrator (legacy filename)
 │   ├── launch_multinode_torchrun.sh                # Multi-node torchrun launcher
 │   ├── launch_singlenode_torchrun.sh               # Single-node torchrun launcher
 │   ├── train_modelarts.sh                          # ModelArts training wrapper
