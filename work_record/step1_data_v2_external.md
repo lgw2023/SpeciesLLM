@@ -68,6 +68,96 @@ find "$FLAT_DIR" -maxdepth 1 -type f -name 'all_flatten_part_*.parquet' | wc -l
 
 ---
 
+## 待生成策略：1st 去人鼠 + 完整 2nd（2026-07-16）
+
+该策略使用 `work_record/step1_data_1_2.sh`，只合并：
+
+- `1st_pretrain_data_preprocessed_step4_v2`，排除 `Homo_sapiens` 和 `Mus_musculus`
+- 完整 `2nd_pretrain_data_preprocessed_step4_v2`
+
+不读取 `3scbasecount_pretrain_data_preprocessed_step4_v2`。建议固定：
+
+```text
+RUN_ID=v2_604_1_2_external_20260716
+MERGED_DIR=/data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData/data_1_2_merged_full_no_1st_human_mouse_v2_604_1_2_external_20260716
+FLAT_DIR=/data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData/data_1_2_flatten_data_full_no_1st_human_mouse_v2_604_1_2_external_20260716
+```
+
+### 1）生成 merged + external flatten
+
+```bash
+cd /data/disk1/SpeciesLLM
+
+RUN_ID=v2_604_1_2_external_20260716
+STAGE2_ROOT=/data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData
+LOG=work_record/step1_data_1_2_${RUN_ID}_$(date +%Y%m%d_%H%M%S).log
+
+df -h "$STAGE2_ROOT"
+
+nohup bash work_record/step1_data_1_2.sh \
+  STAGE2_ROOT="$STAGE2_ROOT" \
+  INPUT_1ST="$STAGE2_ROOT/1st_pretrain_data_preprocessed_step4_v2" \
+  INPUT_2ND="$STAGE2_ROOT/2nd_pretrain_data_preprocessed_step4_v2" \
+  RUN_ID="$RUN_ID" \
+  SHUFFLE_MODE=external \
+  SHUFFLE_BUCKETS=512 \
+  WORKERS=32 \
+  ROWS_PER_FILE=16384 \
+  SHUFFLE_SEED=42 \
+  SKIP_SYNC=1 \
+  > "$LOG" 2>&1 &
+
+echo "pid=$!"
+echo "log=$LOG"
+tail -f "$LOG"
+```
+
+所有覆盖项均放在脚本路径后面，以适配脚本的 clean-env 重启逻辑。生成完成前，不把该策略计入“服务器已生成数据集”。
+
+### 2）核对 manifest 并验证 shuffle
+
+```bash
+cd /data/disk1/SpeciesLLM
+
+FLAT_DIR=/data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData/data_1_2_flatten_data_full_no_1st_human_mouse_v2_604_1_2_external_20260716
+
+test -f "$FLAT_DIR/shuffle_manifest.csv"
+find "$FLAT_DIR" -maxdepth 1 -type f -name 'all_flatten_part_*.parquet' | wc -l
+awk -F, 'NR>1 {rows += $4; files++} END {printf "manifest_files=%d rows=%.0f\n", files, rows}' \
+  "$FLAT_DIR/shuffle_manifest.csv"
+
+/data/miniconda3/bin/python \
+  work_record/step1_verify_shuffle.py \
+  "$FLAT_DIR" 80 \
+  | tee "$FLAT_DIR/shuffle_verify_80.txt"
+```
+
+以最终输出中的 `Shuffle looks correct.` 作为 shuffle 质量通过信号。
+
+### 3）验证通过后同步训练节点
+
+```bash
+cd /data/disk1/SpeciesLLM
+
+RUN_ID=v2_604_1_2_external_20260716
+STAGE2_ROOT=/data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData
+MERGED_DIR=$STAGE2_ROOT/data_1_2_merged_full_no_1st_human_mouse_$RUN_ID
+FLAT_DIR=$STAGE2_ROOT/data_1_2_flatten_data_full_no_1st_human_mouse_$RUN_ID
+
+bash work_record/step1_data_1_2.sh \
+  STAGE2_ROOT="$STAGE2_ROOT" \
+  INPUT_1ST="$STAGE2_ROOT/1st_pretrain_data_preprocessed_step4_v2" \
+  INPUT_2ND="$STAGE2_ROOT/2nd_pretrain_data_preprocessed_step4_v2" \
+  RUN_ID="$RUN_ID" \
+  MERGED_DIR="$MERGED_DIR" \
+  FLAT_DIR="$FLAT_DIR" \
+  SKIP_MERGE=1 \
+  SKIP_FLATTEN=1 \
+  SKIP_SYNC=0
+```
+
+---
+
 ## 默认流水线参数
 
 | 参数 | 值 | 说明 |
@@ -136,6 +226,7 @@ wrapper 内部调用现有 `work_record/step1_data_1_2_3.sh`，不修改 merge /
 |------|------|
 | `work_record/step1_data_1_2_3_v2_external.sh` | v2 三阶段入口脚本 |
 | `work_record/step1_data_1_2_3.sh` | 底层 merge + flatten + sync |
+| `work_record/step1_data_1_2.sh` | 1st 去人鼠 + 2nd 的 merge + flatten + sync |
 | `work_record/step1_data.md` | v1 流水线总览 |
 | `work_record/step1_verify_shuffle.py` | 打平结果统计验证 |
 | `merge_macrogene_rounds.py` | 多批次物种合并 |

@@ -1,11 +1,12 @@
 # Stage2 Step1 训练数据说明（`step1_data_*.sh`）
 
-本文档对应仓库内两条「合并 → 打乱打平 →（可选）多机同步」流水线脚本，便于在**没有挂载真实数据盘**的开发机上理解：数据从哪来、长什么样、训练入口读什么路径。
+本文档对应仓库内三条「合并 → 打乱打平 →（可选）多机同步」流水线脚本，便于在**没有挂载真实数据盘**的开发机上理解：数据从哪来、长什么样、训练入口读什么路径。
 
 - `work_record/step1_data_1_2_3.sh`：第一轮 **1st + 2nd + 3scbasecount** 三路合并后再打平。
+- `work_record/step1_data_1_2.sh`：第一轮 **1st + 2nd** 两路合并后再打平（**不含 3scbasecount**）。
 - `work_record/step1_data_1_3.sh`：第一轮 **1st + 3scbasecount** 两路合并后再打平（**不含 2nd**）。
 
-二者除合并批次不同外，其余逻辑（过滤物种、打平参数、同步方式）一致。
+三者除合并批次不同外，其余逻辑（过滤物种、打平参数、同步方式）一致。
 
 ---
 
@@ -179,15 +180,15 @@ batch_root/
 
 ---
 
-## 两条脚本差异一览
+## 三条脚本差异一览
 
-| 项目 | `step1_data_1_2_3.sh` | `step1_data_1_3.sh` |
-|------|------------------------|---------------------|
-| 合并批次 | `FIRST_VIEW`（筛过的 1st）+ **2nd** + **3sc** | `FIRST_VIEW`（筛过的 1st）+ **3sc** |
-| `merge_macrogene_rounds.py` 的 `--batch-names` | `1st`, `2nd`, `3scbasecount` | `1st`, `3scbasecount` |
-| 中间视图目录 | `views/1st_no_human_mouse_${RUN_ID}` | `views_1_3/1st_no_human_mouse_${RUN_ID}` |
-| 合并输出目录 | `all_merged_full_no_1st_human_mouse_${RUN_ID}` | `data_1_3_merged_full_no_1st_human_mouse_${RUN_ID}` |
-| 打平输出目录 | `all_flatten_data_full_no_1st_human_mouse_${RUN_ID}` | `data_1_3_flatten_data_full_no_1st_human_mouse_${RUN_ID}` |
+| 项目 | `step1_data_1_2_3.sh` | `step1_data_1_2.sh` | `step1_data_1_3.sh` |
+|------|------------------------|---------------------|---------------------|
+| 合并批次 | `FIRST_VIEW`（筛过的 1st）+ **2nd** + **3sc** | `FIRST_VIEW`（筛过的 1st）+ **2nd** | `FIRST_VIEW`（筛过的 1st）+ **3sc** |
+| `merge_macrogene_rounds.py` 的 `--batch-names` | `1st`, `2nd`, `3scbasecount` | `1st`, `2nd` | `1st`, `3scbasecount` |
+| 中间视图目录 | `views/1st_no_human_mouse_${RUN_ID}` | `views_1_2/1st_no_human_mouse_${RUN_ID}` | `views_1_3/1st_no_human_mouse_${RUN_ID}` |
+| 合并输出目录 | `all_merged_full_no_1st_human_mouse_${RUN_ID}` | `data_1_2_merged_full_no_1st_human_mouse_${RUN_ID}` | `data_1_3_merged_full_no_1st_human_mouse_${RUN_ID}` |
+| 打平输出目录 | `all_flatten_data_full_no_1st_human_mouse_${RUN_ID}` | `data_1_2_flatten_data_full_no_1st_human_mouse_${RUN_ID}` | `data_1_3_flatten_data_full_no_1st_human_mouse_${RUN_ID}` |
 
 `RUN_ID` 默认为执行时刻 `YYYYMMDD_HHMMSS`，因此每次完整跑通会生成**新的一整套**合并目录与打平目录；可通过显式设置 `RUN_ID` 固定命名以便复现。
 
@@ -195,7 +196,7 @@ batch_root/
 
 ## 对 1st 批次的特殊处理（排除人 / 小鼠， 这部分数据暂不加入训练）
 
-两个脚本在构建「视作假的第一批目录」`FIRST_VIEW` 时，对 **`1st_pretrain_data_preprocessed_step4` 下每个物种子目录**做符号链接；但会 **跳过**：
+三个脚本在构建「视作假的第一批目录」`FIRST_VIEW` 时，对 **`1st_pretrain_data_preprocessed_step4` 下每个物种子目录**做符号链接；但会 **跳过**：
 
 - `Homo_sapiens`
 - `Mus_musculus`
@@ -328,5 +329,5 @@ bash work_record/step1_data_1_3.sh BATCH_FILES=2048 WORKERS=32
 1. **真实数据不在仓库里**：大体量在 `/data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData/` 下；本地只需遵守 **目录约定 + Parquet schema** 即可开发与单测。
 2. **物种目录内常有 lookup parquet**：`*_macrogene_lookup.parquet` **不参与** merge / shuffle 的 `macrogene_*.parquet` 匹配；不要认为物种目录下只有 macrogene 分片。
 3. **训练消费的最终形态**：单层目录 + 大量 `all_flatten_part_*.parquet`，snappy 压缩，schema 固定。
-4. **`step1_data_1_2_3.sh` 与 `step1_data_1_3.sh` 的唯一本质区别**：是否并入 **2nd** 批次；产物目录前缀不同，勿混用。
+4. **三条 Step1 脚本的本质区别**：分别合并 1st+2nd+3sc、1st+2nd、1st+3sc；产物目录前缀不同，勿混用。
 5. **体量与行数**随上游与 RUN_ID 变化；精确数以对应目录下 `shuffle_manifest.csv` 汇总为准。
