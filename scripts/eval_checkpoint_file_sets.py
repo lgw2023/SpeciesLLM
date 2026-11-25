@@ -33,7 +33,7 @@ import torch_npu
 
 from nanoBERT.model.nanoBERTmodel_cellmeta2_plusEncode_adbc import BERTForPreTraining
 from nanoBERT.utils import CustomCollate_3GeneEmb
-from nanoBERT.utils import criterion_neg_log_bernoulli, masked_huber_loss, masked_mse_loss
+from nanoBERT.utils import masked_nonzero_bce_with_logits, masked_huber_loss, masked_mse_loss
 from train_MNodes_torchrun_mfu_preindexparquet import (
     apply_config_json,
     apply_runtime_overrides,
@@ -796,16 +796,16 @@ def evaluate_file_set(
                 loss_gepc = None
                 loss_gepc_zero_prob = None
                 if config.explicit_zero_prob:
-                    loss_zero_prob = criterion_neg_log_bernoulli(
-                        outputs["model_zero_prob"],
+                    loss_zero_prob = masked_nonzero_bce_with_logits(
+                        outputs["model_zero_logits"],
                         moved["target_values"],
                         mask_positions,
                     )
                 if "mvc_output" in outputs:
                     loss_gepc = regression_loss(outputs["mvc_output"], moved["target_values"], mask_positions)
                 if "mvc_output" in outputs and config.explicit_zero_prob:
-                    loss_gepc_zero_prob = criterion_neg_log_bernoulli(
-                        outputs["mvc_zero_probs"],
+                    loss_gepc_zero_prob = masked_nonzero_bce_with_logits(
+                        outputs["mvc_zero_logits"],
                         moved["target_values"],
                         mask_positions,
                     )

@@ -42,6 +42,17 @@ def criterion_neg_log_bernoulli(
     masked_log_probs = bernoulli.log_prob((target > 0).float()) * mask
     return -masked_log_probs.sum() / mask.sum()
 
+def masked_nonzero_bce_with_logits(
+    logits: torch.Tensor, target: torch.Tensor, mask: torch.Tensor
+) -> torch.Tensor:
+    """Mean FP32 BCE on masked positions, with positive expression as class 1."""
+    mask = mask.float()
+    loss = F.binary_cross_entropy_with_logits(
+        logits.float(), (target > 0).float(), weight=mask, reduction="sum"
+    )
+    return loss / mask.sum().clamp_min(1)
+
+
 def masked_relative_error(
     input: torch.Tensor, target: torch.Tensor, mask: torch.LongTensor
 ) -> torch.Tensor:

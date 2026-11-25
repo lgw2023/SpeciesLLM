@@ -40,7 +40,7 @@ from torch_npu.npu.amp import GradScaler, autocast
 from nanoBERT.utils import GeneVocab, CustomCollate_3GeneEmb
 from nanoBERT.utils import ParquetDataset, LazyParquetDataset, PreindexedParquetDataset
 from nanoBERT.utils import (
-    criterion_neg_log_bernoulli,
+    masked_nonzero_bce_with_logits,
     masked_huber_loss,
     masked_mse_loss,
     masked_relative_error,
@@ -1728,11 +1728,11 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
 
                 t_temp_7_loss_other = time.time()
                 if config.explicit_zero_prob:
-                    if should_nan_check and torch.isnan(outputs["model_zero_prob"]).any():
-                        raise ValueError("There are nan values in zero prob output!")
-                    loss_zero_prob = criterion_neg_log_bernoulli(outputs["model_zero_prob"],
-                                                                 target_values,
-                                                                 mask_positions)
+                    if should_nan_check and torch.isnan(outputs["model_zero_logits"]).any():
+                        raise ValueError("There are nan values in nonzero prediction logits!")
+                    loss_zero_prob = masked_nonzero_bce_with_logits(
+                        outputs["model_zero_logits"], target_values, mask_positions
+                    )
                     # print(f"rank: {rank} loss_zero_prob done")
                 if "mvc_output" in outputs:
                     loss_gepc = regression_loss(outputs["mvc_output"],
@@ -1740,9 +1740,9 @@ def train_loop(args, model, ddp, rank, local_rank, optimizer, train_data_filelis
                                                 mask_positions)
                     # print(f"rank: {rank} mvc_output done")
                 if "mvc_output" in outputs and config.explicit_zero_prob:
-                    loss_gepc_zero_prob = criterion_neg_log_bernoulli(outputs["mvc_zero_probs"],
-                                                                      target_values,
-                                                                      mask_positions)
+                    loss_gepc_zero_prob = masked_nonzero_bce_with_logits(
+                        outputs["mvc_zero_logits"], target_values, mask_positions
+                    )
                     # print(f"rank: {rank} loss_gepc_zero_prob done")
                 loss = combine_pretraining_losses(
                     loss_gep=loss_gep,

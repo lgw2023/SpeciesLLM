@@ -34,6 +34,27 @@ def _load_adbc_model_module():
     return module
 
 
+@pytest.fixture
+def nonzero_loss():
+    path = Path(__file__).resolve().parents[1] / "nanoBERT" / "utils" / "losses.py"
+    spec = importlib.util.spec_from_file_location("speciesllm_losses", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.masked_nonzero_bce_with_logits
+
+
+def test_nonzero_loss_corrects_saturated_wrong_predictions(nonzero_loss):
+    logits = torch.tensor([12.0, -12.0, 12.0], dtype=torch.float16, requires_grad=True)
+    target = torch.tensor([0.0, 5.0, 0.0])
+    mask = torch.tensor([True, True, False])
+
+    loss = nonzero_loss(logits, target, mask)
+    loss.backward()
+
+    torch.testing.assert_close(loss, torch.tensor(12.000006))
+    torch.testing.assert_close(logits.grad, logits.new_tensor([0.5, -0.5, 0.0]))
+
+
 def test_parse_gene_embedding_modalities_for_two_way_ablation():
     assert parse_gene_embedding_modalities("esm2,dnaseq") == ("esm2", "dnaseq")
     assert gene_embedding_files_for_modalities("esm2,dnaseq") == [
@@ -152,7 +173,7 @@ def test_two_way_ablation_forward_does_not_require_gene_desc_embeddings():
     assert outputs["model_output"].shape == (batch_size, seq_len + 1)
 
 
-def test_two_way_ablation_train_losses_use_all_trainable_parameters():
+def test_two_way_ablation_train_losses_use_all_trainable_parameters(nonzero_loss):
     module = _load_adbc_model_module()
     torch.manual_seed(123)
     seq_len = 3
@@ -198,12 +219,12 @@ def test_two_way_ablation_train_losses_use_all_trainable_parameters():
     mask = values.eq(-1).float()
     outputs = model(values=values, MVC=True)
 
-    zero_prob = outputs["model_zero_prob"].clamp(1e-6, 1 - 1e-6)
-    mvc_zero_prob = outputs["mvc_zero_probs"].clamp(1e-6, 1 - 1e-6)
+    torch.testing.assert_close(outputs["model_zero_prob"], outputs["model_zero_logits"].sigmoid())
+    torch.testing.assert_close(outputs["mvc_zero_probs"], outputs["mvc_zero_logits"].sigmoid())
     loss = ((outputs["model_output"] - target).pow(2) * mask).sum()
-    loss = loss - (zero_prob.log() * mask).sum()
-    loss = loss + ((outputs["mvc_output"] - target).pow(2) * mask).sum()
-    loss = loss - (mvc_zero_prob.log() * mask).sum()
+    loss += nonzero_loss(outputs["model_zero_logits"], target, mask)
+    loss += ((outputs["mvc_output"] - target).pow(2) * mask).sum()
+    loss += nonzero_loss(outputs["mvc_zero_logits"], target, mask)
     loss.backward()
 
     parameter_names = dict(model.named_parameters())

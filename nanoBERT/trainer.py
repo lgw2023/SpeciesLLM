@@ -1,7 +1,7 @@
 import os
 import time
 from . import logger
-from utils import masked_mse_loss, masked_relative_error, criterion_neg_log_bernoulli
+from utils import masked_mse_loss, masked_relative_error, masked_nonzero_bce_with_logits
 import numpy as np
 from scanpy import AnnData
 import torch
@@ -79,9 +79,9 @@ def train(model: nn.Module, data_loader: DataLoader, lr, optimizer, scaler, devi
                 loss += loss_gep
                 loss_to_log.update({"train/GEP": loss_gep.item()})
             if MLM and config.explicit_zero_prob:
-                loss_zero_prob = criterion_neg_log_bernoulli(outputs["model_zero_prob"],
-                                                             target_values,
-                                                             mask_positions)
+                loss_zero_prob = masked_nonzero_bce_with_logits(
+                    outputs["model_zero_logits"], target_values, mask_positions
+                )
                 loss += loss_zero_prob
                 loss_to_log.update({"train/nzlp": loss_zero_prob.item()})
             if "mvc_output" in outputs:
@@ -91,9 +91,9 @@ def train(model: nn.Module, data_loader: DataLoader, lr, optimizer, scaler, devi
                 loss += loss_gepc
                 loss_to_log.update({"train/GEPC": loss_gepc.item()})
             if "mvc_output" in outputs and config.explicit_zero_prob:
-                loss_gepc_zero_prob = criterion_neg_log_bernoulli(outputs["mvc_zero_probs"],
-                                                                  target_values,
-                                                                  mask_positions)
+                loss_gepc_zero_prob = masked_nonzero_bce_with_logits(
+                    outputs["mvc_zero_logits"], target_values, mask_positions
+                )
                 loss += loss_gepc_zero_prob
                 loss_to_log.update({"train/GEPC_nzlp": loss_gepc_zero_prob.item()})
             if config.do_cls:

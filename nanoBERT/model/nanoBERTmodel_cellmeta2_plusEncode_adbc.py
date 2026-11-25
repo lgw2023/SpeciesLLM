@@ -427,7 +427,7 @@ class ExprDecoder(nn.Module):
         zero_logits = self.zero_logit(x).squeeze(-1)
         zero_probs = torch.sigmoid(zero_logits)
         return dict(pred=pred_value,
-                    zero_probs=zero_probs)
+                    zero_probs=zero_probs, zero_logits=zero_logits)
 
 
 class MVCDecoder(nn.Module):
@@ -482,7 +482,7 @@ class MVCDecoder(nn.Module):
                                     cell_emb).squeeze(2)
             zero_probs = torch.sigmoid(zero_logits)
             return dict(pred=pred_value,
-                        zero_probs=zero_probs)
+                        zero_probs=zero_probs, zero_logits=zero_logits)
         elif self.arch_style == "concat query":
             query_vecs = self.query_activation(self.gene2query(gene_emb))
             # expand cell_emb to (batch, seq_len, embsize)
@@ -1092,6 +1092,7 @@ class BERTForPreTraining(nn.Module):
         outputs["model_output"] = model_output["pred"]
         if self.config.explicit_zero_prob:
             outputs["model_zero_prob"] = model_output["zero_probs"]
+            outputs["model_zero_logits"] = model_output["zero_logits"]
 
         if MVC:
             mvc_output = self.mvc_decoder(cell_emb,
@@ -1099,6 +1100,7 @@ class BERTForPreTraining(nn.Module):
             outputs["mvc_output"] = mvc_output["pred"]
             if self.config.explicit_zero_prob:
                 outputs["mvc_zero_probs"] = mvc_output["zero_probs"]
+                outputs["mvc_zero_logits"] = mvc_output["zero_logits"]
 
         if CLS:
             outputs["cls_output"] = self.cls_decoder(cell_emb)
