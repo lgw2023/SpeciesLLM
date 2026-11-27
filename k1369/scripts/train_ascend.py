@@ -30,7 +30,6 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.distributed as dist
 from torch.distributed import init_process_group, destroy_process_group
 from torch.utils.data import DataLoader, IterableDataset, get_worker_info
-from torch.cuda.amp import GradScaler
 from scripts.species_epoch_sampling import (
     SpeciesParquetBatchDataset, prepare_species_data,
     resolve_epoch_cells, build_epoch_plan,
@@ -82,37 +81,19 @@ def str_to_bool(value):
         return False
     raise argparse.ArgumentTypeError(f"invalid boolean value: {value}")
 
-class DataPrefetcher:
+class DeviceBatches:
+    """DataLoader workers prefetch host batches; copy each on the current NPU stream."""
     def __init__(self, loader, device):
         self.loader = iter(loader)
-        self.device = torch.device(device)
-        self.stream = torch.cuda.Stream(device=self.device)
-        self.batch = None
-        self.preload()
-
-    def preload(self):
-        try:
-            cpu_batch = next(self.loader)
-        except StopIteration:
-            self.batch = None
-            return
-        with torch.cuda.stream(self.stream):
-            self.batch = {
-                key: value.to(device=self.device, non_blocking=True)
-                if torch.is_tensor(value) else value
-                for key, value in cpu_batch.items()
-            }
+        self.device = device
 
     def next(self):
-        current_stream = torch.cuda.current_stream(self.device)
-        current_stream.wait_stream(self.stream)
-        batch = self.batch
-        if batch is not None:
-            for value in batch.values():
-                if torch.is_tensor(value) and value.is_cuda:
-                    value.record_stream(current_stream)
-        self.preload()
-        return batch
+        batch = next(self.loader, None)
+        if batch is None:
+            return None
+        return {key: value.to(self.device) if torch.is_tensor(value) else value
+                for key, value in batch.items()}
+
 
 LABEL_COLUMNS = {
     "batch_labels": "tech_sample",
@@ -272,6 +253,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--train_mode", choices=("scratch", "resume", "warm_start"), default="resume",
                         help="scratch: random init; resume: continue existing plan; warm_start: weights only, new plan")
+    parser.add_argument("--device", choices=("npu", "cpu"), default="npu",
+                        help="CPU is available for small fixture runs.")
+    parser.add_argument("--global_accumulation_steps", type=int, default=80,
+                        help="Micro-batches per optimizer update summed across all ranks.")
     parser.add_argument("--checkpoint_path")
     parser.add_argument("--model_config", type=Path, default=Path(__file__).resolve().parents[1] /
                         "configuration/350m_batch1_batch2.json")
@@ -281,7 +266,7 @@ def main():
                         help="New branch warmup in optimizer updates; preserved on branch resume")
     parser.add_argument("--warmup_start_lr", type=float, default=1e-6)
 
-    parser.add_argument("--seq_len", type=int, required=True)
+    parser.add_argument("--seq_len", type=int, default=1369)
 
     parser.add_argument("--data_path", default=None,
                         help="Single-source data root (alias for --batch1_path with the single-source preset)")
@@ -292,7 +277,7 @@ def main():
                         type=float, default=0.75, help="Absolute fraction of draws from batch2")
     parser.add_argument("--batch3_fraction", type=float, default=0.0,
                         help="Absolute fraction from batch3; batch1 receives the remainder")
-    parser.add_argument("--embedding_dir", default="/mnt/data/u/wangj0g/projects/SpeciesLLM/macrogene/2ndrun_K1500",
+    parser.add_argument("--embedding_dir", default="/data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData/2ndrun_K1369",
                         help="Default directory for the three macrogene embedding files")
     for kind in ("esm", "desc", "dna"):
         parser.add_argument(f"--{kind}_embedding_dir", help=f"Override --embedding_dir for {kind}")
@@ -303,13 +288,12 @@ def main():
 
     parser.add_argument("--out_path", type=str, default="out")
 
-    parser.add_argument("--batch_size", type=int, default=32)
+    parser.add_argument("--batch_size", type=int, default=1)
 
     parser.add_argument("--epoch", type=int, default=3)
 
     parser.add_argument("--wanlog", type=str_to_bool, nargs="?", const=True, default=False)
 
-    parser.add_argument("--compile_flag", type=str_to_bool, nargs="?", const=True, default=False)
 
     parser.add_argument("--num_workers", type=int, default=2,
                         help="DataLoader workers per rank; start with 2 and tune using cells/s")
@@ -481,9 +465,11 @@ def main():
 
     grad_clip = 1.0  # clip gradients at this value, or disable if == 0.0
 
-    compile = args.compile_flag  # complie model if pytorch > 2.0
 
-    gradient_accumulation_steps = 10 * 8  # used to simulate larger batch sizes
+    gradient_accumulation_steps = args.global_accumulation_steps
+    world_size = int(os.environ.get("WORLD_SIZE", 1))
+    if gradient_accumulation_steps < 1 or gradient_accumulation_steps % world_size:
+        parser.error("--global_accumulation_steps must be a positive multiple of WORLD_SIZE")
 
     batch_size = args.batch_size  # if gradient_accumulation_steps > 1, this is the mini-batch size
 
@@ -495,11 +481,16 @@ def main():
 
     VALIDATION_INTERVAL_STEPS = 5_000
 
-    dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16'
+    local_rank = int(os.environ.get("LOCAL_RANK", 0))
+    device = args.device
+    if device == "npu":
+        import torch_npu
+        torch_npu.npu.set_device(local_rank)
+        device = f"npu:{local_rank}"
 
-    backend = 'nccl'  # 'nccl', 'gloo', etc.
-
-    device = 'cuda'
+    def synchronize():
+        if args.device == "npu":
+            torch_npu.npu.synchronize()
 
     def get_lr(optimizer_step):
         return stage2_lr(
@@ -521,9 +512,7 @@ def main():
             print(ddp_world_size)
             print("++++++++++++++++++++++++++++++++++++++++++++++")
 
-        init_process_group(backend=backend, rank=ddp_rank, world_size=ddp_world_size)
-        device = f'cuda:{ddp_local_rank}'
-        torch.cuda.set_device(device)
+        init_process_group(backend="hccl" if args.device == "npu" else "gloo", rank=ddp_rank, world_size=ddp_world_size)
         master_process = ddp_rank == 0  # this process will do logging, checkpointing, etc.
         seed_offset = ddp_rank  # each process gets a different seed
         # world_size number of processes will be training simultaneously, so we can scale down
@@ -550,15 +539,7 @@ def main():
 
     torch.manual_seed(1337 + seed_offset)
 
-    torch.backends.cuda.matmul.allow_tf32 = True
-
-    torch.backends.cudnn.allow_tf32 = True
-
-    device_type = 'cuda' if 'cuda' in device else 'cpu'
-
-    ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[dtype]
-
-    ctx = nullcontext() if device_type == 'cpu' else torch.autocast(device_type=device_type, dtype=ptdtype)
+    ctx = nullcontext()  # FP32 throughout on Ascend/CANN 8.2.1.RC1.
 
     t0 = time.time()
 
@@ -646,7 +627,7 @@ def main():
             split_objects[0] = {"error": f"{type(exc).__name__}: {exc}"}
 
     if ddp:
-        dist.broadcast_object_list(split_objects, src=0)
+        dist.broadcast_object_list(split_objects, src=0, device=torch.device(device))
 
     if "error" in split_objects[0]:
         raise ValueError(split_objects[0]["error"])
@@ -782,7 +763,7 @@ def main():
             print(f"Sampling warning: {warning}")
 
     if master_process:
-        print(f"Using device: {device_type}")
+        print(f"Using device: {device} (FP32)")
         print(f"GEP/GEPC reconstruction loss: Huber, delta={args.huber_delta}")
 
     model = BERTForPreTraining(config)
@@ -812,11 +793,10 @@ def main():
     del esm_embeddings_np, desc_embeddings_np, dna_embeddings_np
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate,
-                                  betas=(beta1, beta2), weight_decay=weight_decay)
-    scaler = GradScaler(enabled=(dtype == 'float16'))
+                                  betas=(beta1, beta2), weight_decay=weight_decay, foreach=False)
     if args.train_mode == "resume":
         branch_restore = restore_healthy_branch(
-            model, optimizer, scaler, checkpoint_state, torch.from_numpy(src.copy()),
+            model, optimizer, checkpoint_state, torch.from_numpy(src.copy()),
             cls_id, sampling_manifest["fingerprint"], sampling_config, args.optimizer_state,
         )
     else:
@@ -829,14 +809,8 @@ def main():
         print("Initialization:", json.dumps(branch_restore))
     del checkpoint_state, schedule_state
 
-    if compile:
-        if master_process:
-            print("compiling the model...(take a ~minute)")
-        unoptimized_model = model
-        model = torch.compile(model)  # requires PyTorch 2.0
-
     if ddp:
-        model = DDP(model, device_ids=[ddp_local_rank], find_unused_parameters=False)
+        model = DDP(model, device_ids=[ddp_local_rank] if args.device == "npu" else None, find_unused_parameters=False)
 
     if wandb_log and master_process:
         import wandb
@@ -853,7 +827,6 @@ def main():
     # Counter uses current accumulation; optimizer_step is comparable across GPU counts.
     iter_num = optimizer_step * gradient_accumulation_steps
 
-    running_mfu = -1.0
 
     stop_training = False
 
@@ -944,16 +917,16 @@ def main():
             batch_size=None,
             collate_fn=validation_collator,
             num_workers=0,
-            pin_memory=True,
+            pin_memory=False,
         )
         if len(validation_loader) != validation_batches_per_rank:
             raise RuntimeError("Validation DataLoader length differs from its batch plan")
 
-        validation_prefetcher = DataPrefetcher(validation_loader, device=device)
+        validation_prefetcher = DeviceBatches(validation_loader, device=device)
         validation_batch = validation_prefetcher.next()
         metric_names = ("GEP", "nzlp", "GEPC", "GEPC_nzlp", "total_loss")
         validation_metric_sum = torch.zeros(
-            len(metric_names), dtype=torch.float64, device=device
+            len(metric_names), dtype=torch.float32, device=device
         )
         validation_batch_count = 0
         model.eval()
@@ -1011,7 +984,7 @@ def main():
                         loss_gepc_zero_prob.detach(),
                         total_loss.detach(),
                     )
-                ).to(torch.float64)
+                ).to(torch.float32)
                 validation_batch_count += 1
                 validation_batch = validation_prefetcher.next()
 
@@ -1062,7 +1035,7 @@ def main():
         loss_history["best_validation_loss"] = best_validation_loss
         initial_checkpoint = {
             "model": raw_model.state_dict(), "optimizer": optimizer.state_dict(),
-            "scaler": scaler.state_dict(), "optimizer_step": optimizer_step,
+            "scaler": {}, "optimizer_step": optimizer_step,
             "iter_num": iter_num, "epoch": branch_config["start_epoch_index"] + 1,
             "epoch_complete": False,
             "validation_total_loss": best_validation_loss,
@@ -1121,7 +1094,7 @@ def main():
             "batch_size": None,
             "collate_fn": collator,
             "num_workers": num_workers,
-            "pin_memory": True,
+            "pin_memory": False,
             "generator": torch.Generator().manual_seed(args.sampling_seed + epoch * ddp_world_size + ddp_rank),
         }
         if num_workers > 0:
@@ -1131,16 +1104,16 @@ def main():
         if len(data_loader) != num_batches_per_rank:
             raise RuntimeError("DataLoader length differs from the synchronized batch plan")
 
-        prefetcher = DataPrefetcher(data_loader, device=device)
+        prefetcher = DeviceBatches(data_loader, device=device)
         batch_data = prefetcher.next()
         model.train()
 
         metric_names = ("GEP", "nzlp", "GEPC", "GEPC_nzlp", "total_loss")
-        window_metrics = torch.zeros(len(metric_names), dtype=torch.float64, device=device)
-        epoch_loss_sum = torch.zeros((), dtype=torch.float64, device=device)
+        window_metrics = torch.zeros(len(metric_names), dtype=torch.float32, device=device)
+        epoch_loss_sum = torch.zeros((), dtype=torch.float32, device=device)
         window_steps = 0
         batch_id = 0
-        torch.cuda.synchronize()
+        synchronize()
         window_start = time.perf_counter()
 
         while batch_data is not None:
@@ -1207,7 +1180,7 @@ def main():
                     loss_gepc_zero_prob.detach(),
                     unscaled_loss.detach(),
                 )
-            ).to(torch.float64)
+            ).to(torch.float32)
             if diagnostics is not None:
                 diagnostics.observe_micro(
                     detached_metrics, batch_data, outputs, mask_positions,
@@ -1215,22 +1188,20 @@ def main():
                     sample=should_step and diagnostics.sample_due(optimizer_step + 1),
                 )
 
-            scaler.scale(loss).backward()
+            loss.backward()
             if should_step:
                 if grad_clip != 0.0 or diagnostics is not None:
-                    scaler.unscale_(optimizer)
                     grad_norm_before_clip = torch.nn.utils.clip_grad_norm_(
-                        model.parameters(), grad_clip if grad_clip != 0.0 else float("inf"),
+                        model.parameters(), grad_clip if grad_clip != 0.0 else float("inf"), foreach=False,
                     )
-                scaler.step(optimizer)
-                scaler.update()
+                optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
                 optimizer_step += 1
                 if diagnostics is not None:
                     diagnostics.finish_update(grad_norm_before_clip, optimizer_step, iter_num + 1, lr)
 
             window_metrics += detached_metrics
-            epoch_loss_sum += unscaled_loss.detach().to(torch.float64)
+            epoch_loss_sum += unscaled_loss.detach().to(torch.float32)
             window_steps += 1
             iter_num += 1
             batch_id += 1
@@ -1239,8 +1210,7 @@ def main():
                 should_step and optimizer_step >= max_optimizer_steps
             )
             if not stop_after_step:
-                # Fetch only after backward/optimizer; the next H2D copy was already
-                # launched when the current batch was returned.
+                # Fetch the next host batch after backward/optimizer.
                 batch_data = prefetcher.next()
 
             should_log = (
@@ -1249,7 +1219,7 @@ def main():
                 or stop_after_step
             )
             if should_log:
-                torch.cuda.synchronize()
+                synchronize()
                 reduced_metrics = window_metrics.clone()
                 if ddp:
                     dist.all_reduce(reduced_metrics, op=dist.ReduceOp.SUM)
@@ -1262,11 +1232,6 @@ def main():
                     window_steps * batch_size * ddp_world_size / elapsed
                 )
                 step_time = elapsed / window_steps
-                mfu = raw_model.estimate_mfu(batch_size, step_time)
-                running_mfu = (
-                    mfu if running_mfu < 0 else 0.9 * running_mfu + 0.1 * mfu
-                )
-
                 diagnostic_metrics = diagnostics.flush() if diagnostics is not None else {}
                 if master_process:
                     loss_to_log = {
@@ -1276,7 +1241,6 @@ def main():
                     loss_to_log.update(
                         {
                             "train/cells_per_second": cells_per_second,
-                            "train/mfu": running_mfu,
                             "train/lr": lr,
                         }
                     )
@@ -1286,8 +1250,7 @@ def main():
                         f"epoch_batch={batch_id}/{num_batches_per_rank}] "
                         f"loss={metrics[-1]:.4f}, "
                         f"{cells_per_second:,.1f} cells/s, "
-                        f"{step_time * 1000:.1f} ms/batch, "
-                        f"MFU={running_mfu * 100:.2f}%"
+                        f"{step_time * 1000:.1f} ms/batch"
                     )
                     loss_history["steps"].append(
                         {
@@ -1355,7 +1318,7 @@ def main():
                     validation_checkpoint = {
                         "model": raw_model.state_dict(),
                         "optimizer": optimizer.state_dict(),
-                        "scaler": scaler.state_dict(),
+                        "scaler": {},
                         "epoch": epoch + 1,
                         "iter_num": iter_num,
                         "optimizer_step": optimizer_step,
@@ -1391,7 +1354,7 @@ def main():
 
                 # Do not charge validation I/O and inference time to the next
                 # training-throughput window.
-                torch.cuda.synchronize()
+                synchronize()
                 window_start = time.perf_counter()
 
             if stop_after_step:
@@ -1437,7 +1400,7 @@ def main():
             checkpoint = {
                 "model": raw_model.state_dict(),
                 "optimizer": optimizer.state_dict(),
-                "scaler": scaler.state_dict(),
+                "scaler": {},
                 "epoch": epoch + 1,
                 "iter_num": iter_num,
                 "optimizer_step": optimizer_step,
@@ -1476,7 +1439,7 @@ def main():
         if stop_training:
             break
 
-    torch.cuda.synchronize()
+    synchronize()
 
     t1 = time.time()
 

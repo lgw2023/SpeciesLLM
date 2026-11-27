@@ -77,7 +77,7 @@ def restore_model_weights(model, state, gene_ids, cls_id):
     model.load_state_dict(state['model'], strict=True)
 
 
-def restore_healthy_branch(model, optimizer, scaler, state, gene_ids, cls_id,
+def restore_healthy_branch(model, optimizer, state, gene_ids, cls_id,
                            manifest_fingerprint, current_sampling, mode='auto'):
     """Strict model restore, no category expansion; optimizer reset for old loss.
 
@@ -131,8 +131,6 @@ def restore_healthy_branch(model, optimizer, scaler, state, gene_ids, cls_id,
             for name in ('exp_avg', 'exp_avg_sq', 'max_exp_avg_sq'):
                 if name in values and values[name].shape != parameter.shape:
                     raise ValueError(f'Optimizer moment shape differs: {name}')
-        if state.get('scaler'):
-            scaler.load_state_dict(state['scaler'])
     return {'requested_optimizer_mode': mode, 'effective_optimizer_mode': effective_mode,
             'optimizer_parameters_restored': len(optimizer.state),
             'checkpoint_validation_loss_under_old_or_saved_objective': state.get('validation_total_loss'),

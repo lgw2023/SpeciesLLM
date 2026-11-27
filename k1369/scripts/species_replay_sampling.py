@@ -24,9 +24,9 @@ from scripts.species_epoch_sampling import (
     cell_quotas, build_epoch_plan,
 )
 
-BASE = '/mnt/data/u/wangj0g/projects/SpeciesLLM/datasets/pretrain_datasets/'
-DEFAULT_BATCH1 = BASE + '1st_pretrain_data_preprocessed_step4_K1500_map_then_log1p_shuffle_within_species'
-DEFAULT_BATCH2 = BASE + '2nd_pretrain_data_preprocessed_step4_K1500_map_then_log1p_shuffle_within_species'
+BASE = '/data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData/'
+DEFAULT_BATCH1 = BASE + '1st_pretrain_data_preprocessed_step4_K1369_map_then_log1p_shuffle_within_species'
+DEFAULT_BATCH2 = BASE + '2nd_pretrain_data_preprocessed_step4_K1369_map_then_log1p_shuffle_within_species'
 
 
 def split_new_source(source, root, required_columns, shard_rows, small_species_validation, warnings):

@@ -186,8 +186,8 @@ class LightweightDiagnostics:
         self.log = open(os.path.join(self.directory, 'metrics.jsonl'), 'a', encoding='utf-8')
         self.ring = deque(maxlen=capture_batches)
         self.pending, self.details = [], []
-        self.loss_sum = torch.zeros(5, dtype=torch.float64, device=device)
-        self.loss_max = torch.full((5,), float('-inf'), dtype=torch.float64, device=device)
+        self.loss_sum = torch.zeros(5, dtype=torch.float32, device=device)
+        self.loss_max = torch.full((5,), float('-inf'), dtype=torch.float32, device=device)
         self.micro_count = 0
         self.loss_ema = self.grad_ema = None
         self.snapshots, self.last_snapshot = 0, -cooldown_updates
@@ -205,7 +205,7 @@ class LightweightDiagnostics:
 
     def observe_micro(self, metrics, batch, outputs, mask, micro_step,
                       completed_update, sample=False):
-        values = metrics.detach().to(dtype=torch.float64)
+        values = metrics.detach().to(dtype=torch.float32)
         self.loss_sum.add_(values)
         self.loss_max = torch.maximum(self.loss_max, values)
         self.micro_count += 1
@@ -224,7 +224,7 @@ class LightweightDiagnostics:
         if not self.micro_count:
             raise RuntimeError('No micro-batches recorded for optimizer update')
         row = torch.cat((self.loss_sum / self.micro_count, self.loss_max,
-                         grad_norm.detach().reshape(1).to(dtype=torch.float64)))
+                         grad_norm.detach().reshape(1).to(dtype=torch.float32)))
         self.pending.append((completed_update, micro_step, lr, row))
         self.loss_sum.zero_()
         self.loss_max.fill_(float('-inf'))

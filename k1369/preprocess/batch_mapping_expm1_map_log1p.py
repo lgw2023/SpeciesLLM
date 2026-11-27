@@ -3,7 +3,7 @@
 Input X must be natural-log1p normalized GENE expression (not mapped data).
 Computes log1p(align_and_sum_duplicate_genes(expm1(X)) @ W).
 Normalization is preserved; raw counts are not recovered. No renormalization.
-See batch_mapping_expm1_map_log1p_README.md for usage and assumptions.
+See ../README.md for deployment paths and usage.
 """
 import os
 import glob
@@ -155,6 +155,9 @@ def _load_weight_cache(weight_h5ad_path, target_dtype=np.float32):
             return cached
 
     weight_adata = ad.read_h5ad(weight_h5ad_path)
+    expected_axis = [f"MacroGene-{i}" for i in range(1369)]
+    if list(weight_adata.var_names) != expected_axis:
+        raise ValueError(f"{weight_h5ad_path}: expected ordered K1369 macrogene axis")
     W = weight_adata.X
     if sp is not None and sp.issparse(W):
         W = W.tocsr()

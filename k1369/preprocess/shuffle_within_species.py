@@ -21,7 +21,7 @@ import pyarrow.parquet as pq
 
 from shuffle_species import BucketWriterPool, FixedSizeOutputWriter, log, split_into_buckets
 
-DEFAULT_INPUT = Path(__file__).resolve().parent / '2nd_pretrain_data_preprocessed_step4_K1500_map_then_log1p'
+DEFAULT_INPUT = Path('/data/disk1/SpeciesLLM_obs/Stage2_SpeciesLLMData/2nd_pretrain_data_preprocessed_step4_K1369_map_then_log1p')
 SOURCE_COLUMNS = ['dataset_id', 'tissue', 'tech_sample']
 
 
@@ -103,7 +103,7 @@ def run_species(name, info, args):
             path.unlink()
             if (bucket_id + 1) % 10 == 0 or bucket_id + 1 == buckets:
                 log(f'{name}: stage 2 {bucket_id + 1}/{buckets} buckets')
-        writer.finish('keep')
+        writer.close()
         if writer.rows_written != expected_rows or before != after:
             raise RuntimeError(f'{name}: cells or source-group counts changed')
 
@@ -149,7 +149,7 @@ def run_species(name, info, args):
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--input-path', type=Path, default=DEFAULT_INPUT)
-    parser.add_argument('--output-dir', type=Path, default=DEFAULT_INPUT.with_name(DEFAULT_INPUT.name + '_shuffle_within_species'))
+    parser.add_argument('--output-dir', type=Path, help='Default: sibling of the selected input root')
     parser.add_argument('--species', nargs='+', help='Default: all species subdirectories')
     parser.add_argument('--rows-per-file', type=int, default=16384)
     parser.add_argument('--num-buckets', type=int, default=256, help='Maximum buckets per species; increase to reduce stage-2 memory')
@@ -166,7 +166,8 @@ def parse_args(argv=None):
     if args.seed < 0:
         parser.error('--seed must be nonnegative')
     args.input_path = args.input_path.resolve()
-    args.output_dir = args.output_dir.resolve()
+    args.output_dir = (args.output_dir or args.input_path.with_name(
+        args.input_path.name + '_shuffle_within_species')).resolve()
     if not args.input_path.is_dir():
         parser.error(f'Input directory does not exist: {args.input_path}')
     if (args.output_dir == args.input_path or args.input_path in args.output_dir.parents

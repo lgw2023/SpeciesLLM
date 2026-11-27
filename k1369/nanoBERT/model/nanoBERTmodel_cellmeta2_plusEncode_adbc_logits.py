@@ -187,7 +187,7 @@ class BertSdpaSelfAttention(BERTSelfAttention):
         key_layer = self.transpose_for_scores(self.key(hidden_states))
         value_layer = self.transpose_for_scores(self.value(hidden_states))
 
-        if self.require_contiguous_qkv and query_layer.device.type == "cuda" and attention_mask is not None:
+        if self.require_contiguous_qkv and query_layer.device.type in ("cuda", "npu") and attention_mask is not None:
             query_layer = query_layer.contiguous()
             key_layer = key_layer.contiguous()
             value_layer = value_layer.contiguous()

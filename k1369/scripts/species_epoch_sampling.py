@@ -104,7 +104,7 @@ def _natural_path_key(path):
 
 
 def scan_species_shards(root, required_columns=("X",), shard_rows=16384,
-                        allow_partial=False, exclude_suffixes=()):
+                        allow_partial=False, exclude_suffixes=("_macrogene_lookup.parquet",)):
     """Read footers; optionally allow shorter shards before holdout assignment."""
     root = Path(root).resolve()
     if shard_rows < 1:
@@ -115,7 +115,8 @@ def scan_species_shards(root, required_columns=("X",), shard_rows=16384,
         raise ValueError(f"Put Parquet files inside species subdirectories: {root}")
     result = {}
     seen_paths = set()
-    for folder in sorted(p for p in root.iterdir() if p.is_dir()):
+    for folder in sorted(p for p in root.iterdir() if p.is_dir()
+                         and not p.name.startswith(".") and ".buckets-" not in p.name):
         shards = []
         for path in sorted(folder.rglob("*.parquet"),
                            key=lambda p: _natural_path_key(p.relative_to(folder))):
